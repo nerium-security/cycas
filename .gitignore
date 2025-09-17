@@ -421,6 +421,9 @@ test*
 #.env file
 .env
 
+#MacFile
+.DS_Store
+
 #package files
 sharedlib.egg-info
 sharedlibrary.egg-info
