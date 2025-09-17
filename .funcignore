@@ -1,0 +1,7 @@
+.venv
+test*
+__pycache__/
+logs/*
+sharedlib.egg-info
+sharedlibrary.egg-info
+build/*

@@ -1,0 +1,12 @@
+class Status:
+    NEW = 'new'
+    PROCESSING = 'processing'
+    DOWNLOADED = 'downloaded'
+    DOWNLOADFAILED = 'downloadfailed'
+    EXTRACTED = 'extracted'
+    EXTRACTIONFAILED = 'extractionfailed'
+    FINISHED = 'finished'
+    FAILED = 'failed'
+    UPLOADFAILED = 'uploadfailed'
+    QUEUED = 'queued'
+    UNQUEUED = 'unqueued'
