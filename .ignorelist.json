@@ -11,8 +11,9 @@
     "log.json",
     "hunt_info.json",
     "Windows.KapeFiles.Targets%2FAll File Metadata.json",
-    "Windows.KapeFiles.Targets%2FUploads.json",
-    "*.index",
-    "*.csv"
+    "Windows.KapeFiles.Targets%2FUploads.json"
+  ],
+  "ignorepattern": [
+    "uploads/*"
   ]
 }

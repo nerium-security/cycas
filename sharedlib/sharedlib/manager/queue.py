@@ -1,3 +1,8 @@
+'''
+Module for dealing with messages in the
+message queue of an storage account
+'''
+
 from azure.storage.queue import QueueClient, QueueMessage
 from azure.core.exceptions import AzureError
 from typing import Optional, List

@@ -1,5 +1,8 @@
+'''
+Module for handling data in blob storage account.
+'''
+
 from azure.storage.blob import BlobServiceClient
-from azure.data.tables import TableServiceClient, UpdateMode
 import logging as log
 import os
 
@@ -33,7 +36,8 @@ class BlobManager:
             container_client = self.get_container_client(container_name)
             
             blobs = container_client.list_blobs()
-            log.info(f"Listing blobs in the container: '{container_name}'")
+            details = self.account_url + '/' + container_name
+            log.info(f'Listing blobs in: {details}')
             blob_names = []
             for blob in blobs:
                 blob_names.append(blob.name)

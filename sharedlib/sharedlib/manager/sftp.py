@@ -1,3 +1,7 @@
+'''
+Module for handling data in an SFTP server.
+'''
+
 import logging as log
 import paramiko
 import io
@@ -47,10 +51,14 @@ class SftpManager:
 
     def list_files_recursive(self, remote_path: str = '.') -> list:
         '''Recursively list all files in the given remote directory.'''
+
         if not self.sftp:
             raise Exception('SFTP connection not established. Call authenticate() first.')
 
         file_list = []
+        
+        details = self.username + '@' + self.host + ':' + self.port
+        log.info(f'Listing files in: {details}')
 
         def walk(path):
             try:

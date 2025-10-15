@@ -1,3 +1,7 @@
+'''
+Module for reading secrets from Azure Keyvault.
+'''
+
 from azure.keyvault.secrets import SecretClient
 import logging as log
 

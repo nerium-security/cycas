@@ -50,16 +50,29 @@ def is_ignored(file_in_zip, ignorelist):
         log.debug(f'Ignoring directory: {file_in_zip.filename}')
         return True
 
+    if not file_in_zip.filename.endswith('.json'):
+        log.debug(f'Ignoring non json file: {file_in_zip.filename}')
+        return True
+    
+    if not file_in_zip.filename.endswith('.jsonl'):
+        log.debug(f'Ignoring non jsonl file: {file_in_zip.filename}')
+        return True
+
     if file_in_zip.file_size == 0:
         log.debug(f'Ignoring empty file: {file_in_zip.filename}')
         return True
 
-    for pattern in ignorelist:
+    for pattern in ignorelist['ignorelist']:
         filename_only = os.path.basename(file_in_zip.filename)
         if fnmatch.fnmatch(filename_only, pattern):
             log.debug(f'Ignoring file: {file_in_zip}')
             return True
 
+    for pattern in ignorelist['ignorepattern']:
+        if fnmatch.fnmatch(file_in_zip.filename, pattern):
+            log.debug(f'Ignoring file: {file_in_zip.filename}')
+            return True
+        
     return False
 
 def load_ignore_list(ignorelist_path):
@@ -68,7 +81,7 @@ def load_ignore_list(ignorelist_path):
         with open(ignorelist_path, 'r') as f:
             config = json.load(f)
             log.debug(f'Loaded ignore list from {ignorelist_path}', )
-            return config['ignorelist']
+            return config
     except Exception as e:
         log.error(f'Could not load {ignorelist_path}. Error: {str(e)}')
         return []
@@ -87,6 +100,7 @@ def list_files_in_zip(zip_path, password=None):
 
             file_list = zf.infolist()
             log.debug(f'Files in {zip_path}: {file_list}')
+
             return file_list
 
     except pyzipper.BadZipFile as e:

@@ -1,13 +1,20 @@
-from ..pipeline.helpers import init, list_zipfiles, run_zip_processor, send_to_queue, get_message_in_queue, write_logentry_if_new, update_status_unqueued, determine_if_needs_processing, should_unqueue
+import uuid
+import logging as log
+from ..pipeline.helpers import (init, 
+                                list_zipfiles, 
+                                run_zip_processor, 
+                                send_to_queue, 
+                                get_message_in_queue, 
+                                write_logentry_if_new, 
+                                update_status_unqueued, 
+                                determine_if_needs_processing)
 from ..utils.status import Status
 from datetime import datetime
 from typing import Optional
-import uuid
-import logging as log
 
 log = log.getLogger(__name__)
 
-def run_azurefunction_watcher(triagepackage_source: str):
+def run_azurefunction_watcher(triagepackage_source: str) -> None:
 
     sessionid = str(uuid.uuid4())
     managers = init(triagepackage_source, sessionid)
@@ -30,7 +37,7 @@ def run_azurefunction_watcher(triagepackage_source: str):
         #if send_to_queue:
         #    send_to_queue(managers, triagepackage_source, zipfile, sessionid, start)
 
-def run_azurefunction_processor(triagepackage_source: str, mode: str, messagequeue: Optional[object] = None):
+def run_azurefunction_processor(triagepackage_source: str, mode: str, messagequeue: Optional[object] = None) -> None:
     
     sessionid = str(uuid.uuid4())
     managers = init(triagepackage_source, sessionid)
@@ -61,7 +68,7 @@ def run_azurefunction_processor(triagepackage_source: str, mode: str, messageque
         #    run_zip_processor(managers, source_name, zipfile, sessionid, start)
 
 
-def run_localdevice(triagepackage_source: str):
+def run_localdevice(triagepackage_source: str) -> None:
 
     sessionid = str(uuid.uuid4())
     managers = init(triagepackage_source, sessionid)
@@ -74,4 +81,3 @@ def run_localdevice(triagepackage_source: str):
         write_logentry_if_new(managers, triagepackage_source, zipfile, sessionid, Status.NEW)
 
         run_zip_processor(managers, triagepackage_source, zipfile, sessionid, start)
-

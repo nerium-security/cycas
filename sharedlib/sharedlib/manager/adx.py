@@ -1,13 +1,17 @@
-from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
-from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel, ReportMethod
-from azure.kusto.ingest.status import KustoIngestStatusQueues
-from datetime import timedelta
-import pandas as pd
-import logging as log
+'''
+Module for ingesting data into ADx.
+'''
+
 import re
 import json
 import time
 import os
+import logging as log
+import pandas as pd
+from datetime import timedelta
+from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
+from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel
+from azure.kusto.ingest.status import KustoIngestStatusQueues
 
 log = log.getLogger(__name__)
 
@@ -39,9 +43,10 @@ class AdxManager:
 
         except Exception as e:
             log.error(f'Authentication failed. Error: {e}')
-            return False            
+            return False
 
     def query_db_test(self):
+
         log.info(f'Running a test query against the database: {self.adx_database_name}')
         try:
 
@@ -75,9 +80,6 @@ class AdxManager:
 
     def find_dynamic_int_columns(self, df, var_sample_size):
 
-        if not self.kusto_client:
-            raise ValueError('Not authenticated with ADX. Call authenticate() first.')
-
         log.debug('Entered function that finds dynamic and integer columns.')
         dict_columns = []
         int_columns = []
@@ -92,7 +94,7 @@ class AdxManager:
                         int_columns.append(column)
 
         return dict_columns, int_columns
-  
+
     def convert_dict_to_json(self, df, dyn_columns):
         log.debug('Entered function to convert dictionaries in the dataframe to json.')
 
@@ -102,7 +104,7 @@ class AdxManager:
                     df[dyn_column] = df[dyn_column].apply(lambda x: json.dumps(x) if isinstance(x, dict) else x)
                 except Exception as e:
                     log.error(f'Could not convert column {dyn_column} of dataframe to json. Error: {e}')
-   
+
     def get_tablename(self, filename):
         tablename = re.sub('%2F', '_', filename.replace('.json', '').replace('.csv', '').replace('.CSV', '').replace('.JSON', ''))
         tablename = re.sub('[^0-9a-zA-Z_-]', '_', tablename)
@@ -120,7 +122,7 @@ class AdxManager:
         for columname in columnames:
             columname = columname.replace('>', '').replace('<', '')
             stringbuilder += f"[\'{columname}\']:"
-            
+
             if any(item in columname.lower() for item in time_columns):
                 stringbuilder += 'date, '
             elif columname in dyn_columns:
@@ -129,7 +131,7 @@ class AdxManager:
                 stringbuilder += 'int, '
             else:
                 stringbuilder += 'string, '
-        
+
         create = f'.create-merge table {tablename} ({stringbuilder[:-2]})'
         return create
 
@@ -146,12 +148,12 @@ class AdxManager:
         '''Uploads a file to adx'''
 
         ingestion_props = self.read_ingestion_properties(tablename)
-        
+
         try:
             basename = os.path.basename(fullpath)
 
             #if isinstance(dataframe, pd.DataFrame):
-            #    self.kusto_queued.ingest_from_dataframe(dataframe, ingestion_properties=ingestion_props) 
+            #    self.kusto_queued.ingest_from_dataframe(dataframe, ingestion_properties=ingestion_props)
             #else:
             self.kusto_queued.ingest_from_file(fullpath, ingestion_properties=ingestion_props)
             log.info(f'Successfully initiated the data upload request of file {basename}')
@@ -162,6 +164,7 @@ class AdxManager:
             return False
 
     def check_if_table_exists(self, tablename):
+
         query = f'{tablename} | limit 0'
         try:
             response_query = self.kusto_client.execute_query(self.adx_database_name, query)
@@ -186,7 +189,7 @@ class AdxManager:
                     column_name, column_type = cmd_createmergetable_field.split(':')
                     if column_name not in columns_current:
                         new_columns.append(cmd_createmergetable_field)
-                
+
             if new_columns:
                 cmd_createmergetable = cmd_createmergetable.replace(')', '') + ', ' + ', '.join(new_columns) + ')'
 
@@ -198,7 +201,7 @@ class AdxManager:
             except Exception as e:
                 log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
                 return False
-            
+
     def check_ingestion_status(self, max_wait_seconds=180) -> bool:
         '''
         Monitors the ingestion status queue to verify whether ingestion succeeded.
@@ -208,6 +211,7 @@ class AdxManager:
             True if success message is received
             False if failure message is received or timeout
         '''
+
         if not self.kusto_queued:
             log.error('No Kusto queued ingest client available.')
             return False

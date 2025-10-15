@@ -1,0 +1,12 @@
+name: Custom.Windows.Registry.Interfaces
+description: |
+   This custom artifact extracts network info from the registry.
+
+parameters:
+   - name: KeyGlob
+     default: HKEY_LOCAL_MACHINE/SYSTEM/ControlSet*/Services/Tcpip/Parameters/Interfaces/*/*
+
+sources:
+   - query: |
+      SELECT Name, Data.value, OSPath[-2] as Interface FROM glob(globs=KeyGlob, accessor='registry') 
+      WHERE Name in ('EnableDHCP', 'DhcpIPAddress', 'Domain', 'NameServer', 'DhcpServer', 'DefaultGateway', 'SubnetMask','IPAddress')

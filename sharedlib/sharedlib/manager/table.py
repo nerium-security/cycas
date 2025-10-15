@@ -1,3 +1,7 @@
+'''
+Module for updating the storage account table.
+'''
+
 from azure.data.tables import TableServiceClient
 from datetime import datetime
 import pandas as pd
@@ -45,6 +49,7 @@ class TablestorageManager:
         }
 
     def calculate_duration(self, starttime):
+
         end = datetime.now()
         duration = end - starttime
 
@@ -56,7 +61,7 @@ class TablestorageManager:
         return f'{hrs}h {mins}m {secs}s'
 
     def failed_files(self, failed):
-        
+
         failed_files = []
 
         for entry in self.table_client.query_entities(f"Status eq '{failed}'"):
@@ -72,6 +77,7 @@ class TablestorageManager:
         return status
 
     def retrieve_log_entry(self, zip):
+
         try:
             results = self.table_client.query_entities(f"Fullpath eq '{zip}'")
             for result in results:
@@ -84,29 +90,24 @@ class TablestorageManager:
         '''Determines if a triagepackage is already retrieved from queue and update log status'''
 
     def writes_log_entry_if_not_exists(self, zipfile: str, source: str, sessionid: str, status: str):
+
         zipfile = os.path.basename(zipfile)
         existing_entry = self.retrieve_log_entry(zipfile)
         entity = self.build_log_entity(status, zipfile, source, sessionid, None)
 
         if not existing_entry:
             log.info(f'No log entry found for {zipfile}. Writing new one.')
-
             self.table_client.create_entity(entity)
             return True
 
     def determine_if_need_for_processing(self, zipfile: str, source: str, sessionid: str, status: str, Config):
-        '''Determines if a fitriagepackage should be processed by this script instance and writes log entries'''
+        '''Determines if a triagepackage should be processed by this script instance and writes log entries'''
 
-        test_run = Config.var_test_run
         retry = Config.var_retryfailed
 
         zipfile = os.path.basename(zipfile)
         existing_entry = self.retrieve_log_entry(zipfile)
         entity = self.build_log_entity(status, zipfile, source, sessionid, None)
-
-        if test_run:
-            log.info(f'Test run variable set to: {test_run}')
-            return True
 
         if not existing_entry:
             log.info(f'No log entry found for {zipfile}. Writing new one.')
@@ -167,7 +168,7 @@ class TablestorageManager:
 
     def update_log_entry(self, entity):
         '''Creates an entry to the storage blob log table.'''
-   
+
         try:
             self.table_client.update_entity(entity)
             return True

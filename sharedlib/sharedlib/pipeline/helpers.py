@@ -1,11 +1,11 @@
-
 from ..utils.config import load_config
 from ..utils.files import list_files_in_directory, list_files_in_directory, delete_file, filter_triage_packages
 from ..utils.zip import load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored
-from ..utils.config import load_config
+from ..utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
 from ..utils.log import LogManager
 from ..utils.auth import Authenticator
 from ..utils.status import Status
+import time
 import json
 import os
 import logging as log
@@ -29,22 +29,26 @@ def get_message_in_queue(message_str):
 
 def write_logentry_if_new(managers, source_name, zipfile, sessionid, status):
 
-    managers.table.writes_log_entry_if_not_exists(zipfile, source_name, sessionid, status)
+    if Config.blob_logtable_enabled:
+
+        managers.table.writes_log_entry_if_not_exists(zipfile, source_name, sessionid, status)
     
 def should_send_to_queue(managers, zipfile):
 
-    status = managers.table.get_status_zipfile(zipfile)
+    if Config.blob_logtable_enabled:
 
-    if status in [Status.FAILED, Status.NEW, Status.UNQUEUED]:
-        log.info(f'Sending to queue. Status is: {status}')
-        return True
-    else:
-        log.info('Is processed or processing.')
-    return False
+        status = managers.table.get_status_zipfile(zipfile)
+
+        if status in [Status.FAILED, Status.NEW, Status.UNQUEUED]:
+            log.info(f'Sending to queue. Status is: {status}')
+            return True
+        else:
+            log.info('Is processed or processing.')
+        return False
 
 def is_message_not_yet_processing(managers, zipfile) -> bool:
     '''Returns True if the message is currently being processed.'''
-    
+
     status_all = managers.table.get_status_zipfile(zipfile)
 
     status = status_all.get('Status')
@@ -70,9 +74,16 @@ def update_status_unqueued(managers, source_name, zipfile, sessionid, start):
 
 def run_zip_processor(managers, source_name, zipfile, sessionid, start):
 
-    should_process = determine_if_needs_processing(managers, zipfile)
+    log.info(f'Updating table on storage account is set to: {Config.blob_logtable_enabled}')
+    log.info(f'Uploading files to ADX is set to: {Config.adx_cluster_enabled}')
 
-    managers.table.update_status_in_log(Status.PROCESSING, zipfile, source_name, sessionid, start)
+    should_process = True
+
+    if Config.blob_logtable_enabled:
+        
+        should_process = determine_if_needs_processing(managers, zipfile)
+
+        managers.table.update_status_in_log(Status.PROCESSING, zipfile, source_name, sessionid, start)
 
     if should_process:
 
@@ -96,6 +107,8 @@ def unzip_and_upload(managers, zipfile, source_name, sessionid, start):
     extracted_zip = zipfile
     upload_results = {}
 
+
+    '''Extract zip file if it is encrypted with a password.'''
     for file_in_zip in zipfilecontent:
         
         if 'data.zip' in file_in_zip.filename:
@@ -104,33 +117,54 @@ def unzip_and_upload(managers, zipfile, source_name, sessionid, start):
             delete_file(zipfile)
             continue
 
+    ''' Post-processing with Velociraptor and upload json file output to adx.'''
+    log.info(f'Post-processing is set to: {Config.velociraptor_enabled}')
+    if Config.velociraptor_enabled:
+        download_velociraptor()
+        build_remap(zipfile)
+        hostname = find_hostname()
+        artifacts_json = load_artifacts()
+        artifacts = select_artifacts(artifacts_json)
+
+        start_postprocessing = time.time()
+
+        for artifact in artifacts:
+            postprocessed_json = postprocess(hostname, artifact, zipfile)
+            upload_results[postprocessed_json] = upload_file_to_adx(managers, postprocessed_json)
+            delete_file(postprocessed_json)
+
+        
+        end = time.time()
+        duration = end - start_postprocessing
+        minutes, seconds = divmod(duration, 60)
+
+        log.info(f'Processing all artifacts took {int(minutes)}m {int(seconds)}s..')
+
+    '''Extract and upload json files to ADX'''
     for file_in_zip in zipfilecontent:
 
         ignored = is_ignored(file_in_zip, ignorelist)
 
         if ignored:
             continue
-        
+
         extracted_file = extract_single_file(extracted_zip, file_in_zip, extract_path, zip_password)
         if not extracted_file:
             continue
 
-        upload_results[file_in_zip.filename] = upload_file_to_adx(managers, extracted_file, Config.var_test_run)
+        upload_results[file_in_zip.filename] = upload_file_to_adx(managers, extracted_file)
+        delete_file(extracted_file)
 
-        deleted = delete_file(extracted_file)
+    if Config.blob_logtable_enabled:
 
-        if not deleted:
-            continue
-    
-    verified = verify_if_all_uploads_are_initiated(upload_results)
+        verified = verify_if_all_uploads_are_initiated(upload_results)
 
-    if verified:
-        status = Status.FINISHED
-    else:
-        status = Status.UPLOADFAILED
+        if verified:
+            status = Status.FINISHED
+        else:
+            status = Status.UPLOADFAILED
 
-    if not Config.var_test_run:
-        managers.table.update_status_in_log(status, zipfile, source_name, sessionid, start)
+            managers.table.update_status_in_log(status, zipfile, source_name, sessionid, start)
 
 def verify_if_all_uploads_are_initiated(results):
 
@@ -150,9 +184,9 @@ def verify_if_all_uploads_are_initiated(results):
 
     return all_success
 
-def upload_file_to_adx(managers, file, test_run):
+def upload_file_to_adx(managers, file):
 
-    if not test_run:
+    if Config.adx_cluster_enabled:
 
         df = managers.adx.convert_to_dataframe(file, Config.var_sample_size)
 
@@ -161,16 +195,13 @@ def upload_file_to_adx(managers, file, test_run):
         tablename = managers.adx.get_tablename(os.path.basename(file))
         cmd_createmergetable = managers.adx.get_table_createcommand(df.columns, tablename, dyn_columns, int_columns)
         managers.adx.launch_createmerge_table(tablename, cmd_createmergetable)
- 
+
         result = managers.adx.launch_upload_file(tablename, file, df)
 
         if result:
             return True
         else:
             return False
-        
-    if test_run:
-        log.info(f'Test run. Upload of {os.path.basename(file)} not initiated.')
 
 def should_unqueue():
     None
@@ -231,13 +262,17 @@ def list_zipfiles(managers, source_name):
 
         all_files = managers.blob.list_blobs(Config.blob_container_input)
 
+    if source_name == 'sas':
+
+        all_files = managers.sas.list_blobs_from_sas()
+
     if source_name == 'sftp':
 
         all_files = managers.sftp.list_files_recursive('/')
 
     if source_name == 'localfolder':
-        
-        all_files = list_files_in_directory(Config.var_zip_directory)
+
+        all_files = list_files_in_directory(Config.var_localfolder_directory)
 
     filtered_files = filter_triage_packages(all_files, Config.var_zipfile_prefix, Config.var_zipfile_suffix)
 
@@ -247,18 +282,24 @@ def download_zip(managers, source_name, zip, sessionid, start):
 
     if source_name == 'blob':
 
-            zip = managers.blob.download(Config.blob_container_input, zip, Config.var_zip_directory)
+            zip = managers.blob.download(Config.blob_container_input, zip, Config.var_download_directory)
 
     if source_name == 'sftp':
 
-            zip = managers.sftp.download(Config.var_zip_directory, zip)
+            zip = managers.sftp.download(Config.var_download_directory, zip)
+
+    if source_name == 'sas':
+
+            zip = managers.sas.download(Config.var_download_directory)
 
     if zip:
         status = Status.DOWNLOADED
     else:
         status = Status.DOWNLOADFAILED
 
-    if not Config.var_test_run:
+    
+    if Config.blob_logtable_enabled:
+
         managers.table.update_status_in_log(status, zip, source_name, sessionid, start)
 
     if zip:
@@ -268,9 +309,13 @@ def download_zip(managers, source_name, zip, sessionid, start):
 
 def init(source_name, sessionid):
 
-    os.makedirs(Config.var_loglocation, exist_ok=True)
-    os.makedirs(Config.var_zip_directory, exist_ok=True)
-    os.makedirs(Config.var_unzip_directory, exist_ok=True)
+    try:
+        os.makedirs(Config.var_loglocation, exist_ok=True)
+        os.makedirs(Config.var_localfolder_directory, exist_ok=True)
+        os.makedirs(Config.var_unzip_directory, exist_ok=True)
+    except Exception as e:
+        log.error(f'Could not create directory: {e}')
+
     logging_manager = LogManager(Config.var_loglocation, Config.var_loglevel)
 
     log = logging_manager.get_logger(__name__)

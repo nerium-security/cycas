@@ -1,0 +1,252 @@
+name: Custom.Generic.Utils.ZipRemap
+description: |
+  Create a remapping YAML from a Velociraptor collection ZIP (or any ZIP
+  containing a Windows C: tree). This auto-mounts HKLM hives and all user
+  NTUSER.DAT files so registry artifacts can run over the ZIP contents.
+
+  ./velociraptor-v0.75.1-linux-amd64 --remap remapping.yaml -v artifacts collect Windows.EventLogs.EvtxHunter --format json
+
+  ./velociraptor-v0.75.1-linux-amd64 --definitions=definitions query "SELECT * FROM Artifact.Custom.Generic.Utils.ZipRemap(ImagePath='/home/user/github/velociraptor/testdata/data_most/data_most.zip',  Upload='Y')" --dump_dir . -v
+  
+  ./velociraptor-v0.75.1-linux-amd64 --remap remapping.yaml query "SELECT * FROM glob(globs='HKEY_USERS/*', accessor='registry')"
+
+parameters:
+  - name: ImagePath
+    default: /tmp/Collection-DESKTOP-761HKJH_edge_local-2025-09-18T13_46_46.zip
+    description: Path to the zip file to inspect.
+
+  - name: CommonRemapping
+    description: Common clauses for all remapping in YAML
+    default: |
+      remappings:
+      - type: permissions
+        permissions:
+        - COLLECT_CLIENT
+        - FILESYSTEM_READ
+        - FILESYSTEM_WRITE
+        - READ_RESULTS
+        - MACHINE_STATE
+        - SERVER_ADMIN
+        - COLLECT_SERVER
+        - EXECVE
+      - type: impersonation
+        os: windows
+        hostname: Virtual
+        env:
+        - key: SystemRoot
+          value: C:\Windows
+        - key: WinDir
+          value: C:\Windows
+        disabled_functions:
+        - amsi
+        - lookupSID
+        - token
+        disabled_plugins:
+        - execve
+        - http_client
+        - users
+        - certificates
+        - handles
+        - pslist
+        - interfaces
+        - modules
+        - netstat
+        - partitions
+        - proc_dump
+        - proc_yara
+        - vad
+        - winobj
+        - wmi
+      - type: shadow
+        from:
+          accessor: zip
+        "on":
+          accessor: zip
+      - type: shadow
+        from:
+          accessor: raw_reg
+        "on":
+          accessor: raw_reg
+      - type: shadow
+        from:
+          accessor: mscfb
+        "on":
+          accessor: mscfb
+      - type: shadow
+        from:
+          accessor: data
+        "on":
+          accessor: data
+
+  - name: Upload
+    type: bool
+    default: "Y"
+    description: If specified we upload the generated YAML
+
+export:
+
+    LET Accessors_registry <= ("raw_reg", "registry")
+    LET Accessors_files <= ("file", "auto")
+
+
+    LET _FindUserHives(ImagePath) = 
+        SELECT * FROM foreach(row=Accessors_registry, query= {
+          SELECT 
+            GenerateUserHivesMappings(
+              Hive=OSPath,
+              Key="HKEY_USERS\\" + OSPath[4],
+              Accessor=_value,
+              Filename=OSPath[-1]
+            ) as map
+          FROM glob(globs='**/Users/*/NTUser.DAT',
+            accessor="zip",
+            root=pathspec(DelegateAccessor="file", DelegatePath=ImagePath, Path="/"))
+          }
+        )
+
+    LET _FindWindowsHives(ImagePath) =  
+        SELECT * FROM foreach(row=Accessors_registry, query= {
+          SELECT
+            GenerateHiveMappings(
+              Name=Name,
+              Path=OSPath[-2],
+              Accessor=_value,
+              Prefix="HKEY_LOCAL_MACHINE/" + if(condition=Name="SAM", then="", else=Name)
+            ) as map
+          FROM glob(globs='**/Windows/System32/config/{DEFAULT,SAM,SECURITY,SOFTWARE,SYSTEM}',
+            accessor="zip",
+            root=pathspec(DelegateAccessor="file", DelegatePath=ImagePath, Path="/"))
+          }
+        )
+
+    LET _FindWindowsMFT(ImagePath) =
+          SELECT 
+            GenerateDriveMappings(
+              Accessor=OSPath[1],
+              Prefix="\\\\" + ".\\" + parse_string_with_regex(string=OSPath.Path, regex="/uploads/ntfs/%5C%5C.%5C(C)%3A").g1 + ":",
+              Mftlocation=OSPath.Dirname.Path,
+              Type="ntfs"
+            ) as map
+          FROM glob(globs='**/%5C%5C.%5C[A-Z]%3A/$MFT',
+            accessor="zip",
+            root=pathspec(DelegateAccessor="file", DelegatePath=ImagePath, Path="/"))
+
+
+    LET _FindFilesAutoAccessor(ImagePath) =
+        SELECT * FROM foreach(row=Accessors_files, query= {
+          SELECT 
+            GenerateDriveMappings(
+              Accessor=_value,
+              Prefix=parse_string_with_regex(string=OSPath.Path, regex="/uploads/auto/(C)%3A").g1 + ":",
+              Mftlocation=OSPath.Path,
+              Type="Windows"
+            ) as map
+          FROM glob(globs='**/uploads/auto/C%3A/',
+            accessor="zip",
+            root=pathspec(DelegateAccessor="file", DelegatePath=ImagePath, Path="/"))    
+      })
+
+    LET _FindAmcache(Imagepath) = 
+        SELECT 
+            GenerateHiveMappings(
+              Name=Name,
+              Path=OSPath[-2],
+              Accessor="raw_reg",
+              Prefix="/amcachemount/"
+            ) as map       
+        FROM glob(globs='**/appcompat/Programs/Amcache.hve',
+          accessor="zip",
+          root=pathspec(DelegateAccessor="file", DelegatePath=ImagePath, Path="/"))          
+
+    LET _FindUsrClass(Imagepath) = 
+        SELECT * FROM foreach(row=Accessors_registry, query= {
+          SELECT 
+            GenerateUserHivesMappings(
+              Hive=OSPath,
+              Key="HKEY_USERS\\" + OSPath[4] + "\\UsrClass",
+              Accessor=_value,
+              Filename=OSPath[-1]
+            ) as map
+          FROM glob(globs='**/Users/*/**/UsrClass.dat',
+            accessor="zip",
+            root=pathspec(DelegateAccessor="file", DelegatePath=ImagePath, Path="/"))
+          }
+        )
+
+    LET GenerateDriveMappings(Accessor, Prefix, Mftlocation, Type) = (
+          dict(
+              type="mount", 
+              description="Mount the partition " + Mftlocation + " with accessor type " + Accessor,
+              `from`=dict(
+                accessor="collector",
+                prefix=pathspec(
+                  Path=Mftlocation,
+                  DelegatePath=ImagePath
+                  )),
+              on=dict(
+                accessor=Accessor, 
+                prefix=Prefix, 
+                path_type=Type)
+          )
+    )
+
+    LET GenerateHiveMappings(Name, Path, Accessor, Prefix) = (
+          dict(
+              type="mount", 
+              description="Mount the registry hive " + Name + " with accessor type " + Accessor,
+              `from`=dict(
+                accessor="raw_reg",
+                path_type="registry",
+                prefix=pathspec(
+                  Path="//",
+                  DelegateAccessor="zip", 
+                  Delegate=pathspec(
+                    DelegateAccessor="file",
+                    DelegatePath=ImagePath,
+                    Path=OSPath.Path))),
+              on=dict(
+                accessor=Accessor, 
+                prefix=Prefix, 
+                path_type="registry")
+          )
+    )
+
+    LET GenerateUserHivesMappings(Hive, Key, Accessor, Filename) = 
+        dict(
+          type="mount",
+          description="Map " + Filename + " to " + Key + " with accessor type " + Accessor,
+          `from`=dict(
+            accessor="raw_reg",
+            path_type="registry",
+            prefix=pathspec(
+              Path="//",
+              DelegateAccessor="zip", 
+              Delegate=pathspec(
+                DelegateAccessor="file",
+                DelegatePath=ImagePath,
+                Path=Hive.Path))),
+          on=dict(accessor=Accessor, prefix=Key, path_type="registry"))
+
+sources:
+- query: |
+
+    LET Remappings <= parse_yaml(
+      filename=CommonRemapping,
+      accessor="data")
+
+    LET CalculateMappings =
+       ( stat(filename=ImagePath).IsDir)
+
+    LET YamlText = serialize(format="yaml",
+         item=dict(remappings=  Remappings.remappings + 
+                                _FindFilesAutoAccessor.map +
+                                _FindWindowsMFT.map +
+                                _FindWindowsHives.map + 
+                                _FindUserHives.map + 
+                                _FindAmcache.map +
+                                _FindUsrClass.map))
+
+    SELECT if(condition=Upload,
+             then=upload(accessor="data", file=YamlText, name="remapping.yaml"),
+             else=YamlText) AS Remapping
+    FROM scope()

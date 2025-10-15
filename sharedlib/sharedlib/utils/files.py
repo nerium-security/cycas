@@ -5,6 +5,9 @@ log = log.getLogger(__name__)
 
 def list_files_in_directory(directory):
     '''Lists all the root files in the provided directory path'''
+
+    log.info(f'Listing files in: {directory}')
+
     file_list = []
     for subdir, dirs, files in os.walk(directory):
         for file in files:
