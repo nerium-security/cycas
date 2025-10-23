@@ -1,6 +1,6 @@
 # Azure Data Explorer Ingestor
 
-The **Azure Data Explorer Ingestor (ADX Ingestor)** is a Python-based tool designed for automating the ingestion of Velociraptor data (either raw forensic artifacts collected via kapefile artifact or json files) into Explorer (ADX)**. It supports reading zip files (either password encrypted or not) from Blob storage, SFTP storage and localfolders. 
+The **Azure Data Explorer Ingestor (ADX Ingestor)** is a Python-based tool designed for automating the ingestion of Velociraptor data into Azure Data Explorer (ADX)**. It supports reading zip files (either password encrypted or not) from Blob storage, SFTP storage and localfolders. This can either be raw forensic artifacts collected via kapefile artifact or json files.
 
 ## Supported inputsources
 
