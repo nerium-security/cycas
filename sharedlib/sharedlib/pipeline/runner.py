@@ -9,8 +9,10 @@ from ..pipeline.helpers import (init,
                                 update_status_unqueued, 
                                 determine_if_needs_processing)
 from ..utils.status import Status
-from datetime import datetime
+from ..utils.config import load_config
 from typing import Optional
+
+Config = load_config()
 
 log = log.getLogger(__name__)
 
@@ -22,13 +24,12 @@ def run_azurefunction_watcher(triagepackage_source: str) -> None:
 
     for zipfile in zipfiles:
 
-        start = datetime.now()
         write_logentry_if_new(managers, triagepackage_source, zipfile, sessionid, Status.NEW)
 
         needs_processing = determine_if_needs_processing(managers, zipfile)
 
         if needs_processing:
-            send_to_queue(managers, triagepackage_source, zipfile, sessionid, start)
+            send_to_queue(managers, triagepackage_source, zipfile, sessionid)
 
 
         #send_to_queue = is_already_processing(managers, zipfile, triagepackage_source)
@@ -52,12 +53,9 @@ def run_azurefunction_processor(triagepackage_source: str, mode: str, messageque
     for message in messagequeue:
         source_name, zipfile = get_message_in_queue(message)
 
-        start = datetime.now()
-
-        update_status_unqueued(managers, source_name, zipfile, sessionid, start)
+        update_status_unqueued(managers, source_name, zipfile, sessionid)
     
-        run_zip_processor(managers, source_name, zipfile, sessionid, start)
-
+        run_zip_processor(managers, source_name, zipfile, sessionid)
 
         #process_from_queue = should_process_from_queue()
 
@@ -69,15 +67,19 @@ def run_azurefunction_processor(triagepackage_source: str, mode: str, messageque
 
 
 def run_localdevice(triagepackage_source: str) -> None:
-
+    
     sessionid = str(uuid.uuid4())
     managers = init(triagepackage_source, sessionid)
     zipfiles = list_zipfiles(managers, triagepackage_source)
+    
+    from concurrent.futures import ThreadPoolExecutor
+    futures = []
 
-    for zipfile in zipfiles:
+    concurrency = Config.var_localdevice_concurrency
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
 
-        start = datetime.now()
+        for zipfile in zipfiles:
 
-        write_logentry_if_new(managers, triagepackage_source, zipfile, sessionid, Status.NEW)
+            futures.append(executor.submit(run_zip_processor, managers, triagepackage_source, zipfile, sessionid))
 
-        run_zip_processor(managers, triagepackage_source, zipfile, sessionid, start)
+            #run_zip_processor(managers, triagepackage_source, zipfile, sessionid)

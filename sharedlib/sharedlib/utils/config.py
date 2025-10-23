@@ -7,6 +7,7 @@ log = log.getLogger(__name__)
 
 @dataclass
 class Config:
+    blob_storageaccount_enabled: bool
     blob_storageaccount_uri: str
     blob_storageaccount_sas: str
     blob_container_input: str
@@ -20,8 +21,10 @@ class Config:
     adx_database_name: str
     adx_cluster_uri: str
     adx_cluster_ingestion_uri: str
+    keyvault_enabled: bool
     keyvault_url: str
     keyvault_passwordlocation: str
+    sftp_enabled: bool
     sftp_keyvaultsecretname: str
     sftp_username: str
     sftp_url: str
@@ -41,6 +44,8 @@ class Config:
     var_verifyuploads: str
     var_loglevel: str
     var_delete_processedzipfiles: str
+    var_localdevice_concurrency: int
+    var_add_hostname: bool
     velociraptor_enabled: bool
     velociraptor_url: str
     velociraptor_remappingdir: str
@@ -94,9 +99,13 @@ def load_config() -> Config:
         velociraptor_definitions        = os.getenv('VELOCIRAPTOR_DEFINITIONS'),
         velociraptor_outputformat       = os.getenv('VELOCIRAPTOR_OUTPUTFORMAT'),
         velociraptor_postprocess        = os.getenv('VELOCIRAPTOR_POSTPROCESS'),
+        var_localdevice_concurrency     = int(os.getenv('VAR_LOCALDEVICE_CONCURRENCY')),
         sftp_port			 		    = int(os.getenv('SFTP_PORT')),
         var_sample_size			 	    = int(os.getenv('VAR_SAMPLE_SIZE')),
         var_df_chunksize			    = int(os.getenv('VAR_DF_CHUNKSIZE')),
+        blob_storageaccount_enabled     = str_to_bool(os.getenv('BLOB_STORAGEACCOUNT_ENABLED')),
+        sftp_enabled                    = str_to_bool(os.getenv('SFTP_ENABLED')),
+        keyvault_enabled                = str_to_bool(os.getenv('KEYVAULT_ENABLED')),
         blob_queue_enabled              = str_to_bool(os.getenv('BLOB_QUEUE_ENABLED')),
         blob_logtable_enabled           = str_to_bool(os.getenv('BLOB_LOGTABLE_ENABLED')),
         var_removezip			 	    = str_to_bool(os.getenv('VAR_REMOVEZIP')),
@@ -104,5 +113,6 @@ def load_config() -> Config:
         var_verifyuploads			    = str_to_bool(os.getenv('VAR_VERIFYUPLOADS')),
         var_delete_processedzipfiles    = str_to_bool(os.getenv('VAR_DELETE_PROCESSEDZIPFILES')),
         velociraptor_enabled            = str_to_bool(os.getenv('VELOCIRAPTOR_ENABLED')),
-        adx_cluster_enabled             = str_to_bool(os.getenv('ADX_CLUSTER_ENABLED'))
+        adx_cluster_enabled             = str_to_bool(os.getenv('ADX_CLUSTER_ENABLED')),
+        var_add_hostname                = str_to_bool(os.getenv('VAR_ADD_HOSTNAME'))
     )

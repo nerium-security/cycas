@@ -49,14 +49,26 @@ class Authenticator:
   
     def authenticate_all(self) -> AuthManagers:
 
+        if not Config.adx_cluster_enabled:
+            log.info(f'Skipping authentication to adx cluster: {Config.adx_cluster_uri}.')
+
+        if not Config.blob_logtable_enabled:
+            log.info(f'Skipping authentication to storage account table: {Config.blob_logtable_uri}.')
+
+        if not Config.blob_queue_enabled:
+            log.info(f'Skipping authentication to storage account queue: {Config.blob_queue_url}.')
+
+        if not Config.keyvault_enabled:
+            log.info(f'Skipping authentication to keyvault: {Config.keyvault_url}.')
+
         return AuthManagers(
             azure=self.authenticate_azure(),
-            keyvault=self.authenticate_keyvault(),
+            keyvault=self.authenticate_keyvault() if Config.keyvault_enabled else False,
             table=self.authenticate_tablestorage() if Config.blob_logtable_enabled else False,
-            queue=self.authenticate_queue() if Config.blob_logtable_enabled else False,
+            queue=self.authenticate_queue() if Config.blob_queue_enabled else False,
             adx=self.authenticate_adx() if Config.adx_cluster_enabled else False,
-            sftp=self.authenticate_sftp() if self.source == 'sftp' else False,
-            blob=self.authenticate_blob() if self.source == 'blob' else False,
+            sftp=self.authenticate_sftp() if Config.sftp_enabled else False,
+            blob=self.authenticate_blob() if Config.blob_storageaccount_enabled else False,
             sas=self.authenticate_blob_sas() if self.source == 'sas' else False
         )
 

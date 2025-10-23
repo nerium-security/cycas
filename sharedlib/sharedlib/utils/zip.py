@@ -49,13 +49,9 @@ def is_ignored(file_in_zip, ignorelist):
     if file_in_zip.filename.endswith('/'):
         log.debug(f'Ignoring directory: {file_in_zip.filename}')
         return True
-
-    if not file_in_zip.filename.endswith('.json'):
-        log.debug(f'Ignoring non json file: {file_in_zip.filename}')
-        return True
     
-    if not file_in_zip.filename.endswith('.jsonl'):
-        log.debug(f'Ignoring non jsonl file: {file_in_zip.filename}')
+    if not file_in_zip.filename.endswith(('.jsonl', 'json')):
+        log.debug(f'Ignoring non json(l) file: {file_in_zip.filename}')
         return True
 
     if file_in_zip.file_size == 0:

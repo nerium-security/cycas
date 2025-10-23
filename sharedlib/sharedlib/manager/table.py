@@ -115,19 +115,6 @@ class TablestorageManager:
             self.table_client.create_entity(entity)
             return True
 
-        '''
-        if self.check_if_failed(status, existing_entry):
-            log.info(f'{zipfile} previously failed.')
-            
-            if retry:
-                self.update_log_entry(entity)
-                log.info(f'Retrying {zipfile} (retry enabled).')
-                return True
-            if retry:
-                log.info(f'Skipping {zipfile} (retry disabled).')
-                return False
-        '''
-
         if self.check_if_processing_by_this_instance(zipfile, sessionid):
             log.info(f'{zipfile} is already being processed by this instance.')
             return True
@@ -173,6 +160,7 @@ class TablestorageManager:
             self.table_client.update_entity(entity)
             return True
         except Exception as e:
+            breakpoint()
             log.error(f'Could not update table. Error: {e}')
 
     def output_logtable(self):
@@ -185,10 +173,10 @@ class TablestorageManager:
     def get_computername(self):
         '''Returns the computername of the device running the script.'''
 
-        log.info('Attempting to retrieve hostname.')
+        log.debug('Attempting to retrieve hostname.')
         try:
             hostname = socket.gethostname()
-            log.info(f'Found hostname: {hostname}')
+            log.info(f'Script is running on: {hostname}')
             return hostname
         except Exception as e:
             log.error('Failed to retrieve hostname.')

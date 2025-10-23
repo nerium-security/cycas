@@ -14,6 +14,7 @@ def list_files_in_directory(directory):
             fullpath = os.path.join(subdir, file)
             file_list.append(fullpath)
             log.debug('Found file %s' %file)
+    log.info(f'Found {len(file_list)} file(s).')
     return file_list
 
 def filter_triage_packages(files, prefix, suffix):

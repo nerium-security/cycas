@@ -1,18 +1,13 @@
 name: Custom.Generic.Utils.ZipRemap
+author: dfirjos
 description: |
   Create a remapping YAML from a Velociraptor collection ZIP (or any ZIP
   containing a Windows C: tree). This auto-mounts HKLM hives and all user
   NTUSER.DAT files so registry artifacts can run over the ZIP contents.
 
-  ./velociraptor-v0.75.1-linux-amd64 --remap remapping.yaml -v artifacts collect Windows.EventLogs.EvtxHunter --format json
-
-  ./velociraptor-v0.75.1-linux-amd64 --definitions=definitions query "SELECT * FROM Artifact.Custom.Generic.Utils.ZipRemap(ImagePath='/home/user/github/velociraptor/testdata/data_most/data_most.zip',  Upload='Y')" --dump_dir . -v
-  
-  ./velociraptor-v0.75.1-linux-amd64 --remap remapping.yaml query "SELECT * FROM glob(globs='HKEY_USERS/*', accessor='registry')"
-
 parameters:
   - name: ImagePath
-    default: /tmp/Collection-DESKTOP-761HKJH_edge_local-2025-09-18T13_46_46.zip
+    default: .
     description: Path to the zip file to inspect.
 
   - name: CommonRemapping
@@ -83,6 +78,10 @@ parameters:
     default: "Y"
     description: If specified we upload the generated YAML
 
+  - name: Remappingfilename
+    default: remapping.yaml
+    description: Filename of yaml file that will be explored if Upload is set to Y
+
 export:
 
     LET Accessors_registry <= ("raw_reg", "registry")
@@ -123,7 +122,7 @@ export:
           SELECT 
             GenerateDriveMappings(
               Accessor=OSPath[1],
-              Prefix="\\\\" + ".\\" + parse_string_with_regex(string=OSPath.Path, regex="/uploads/ntfs/%5C%5C.%5C(C)%3A").g1 + ":",
+              Prefix="\\\\" + ".\\" + parse_string_with_regex(string=OSPath.Path, regex="/uploads/ntfs/%5C%5C.%5C([A-Z])%3A").g1 + ":",
               Mftlocation=OSPath.Dirname.Path,
               Type="ntfs"
             ) as map
@@ -137,7 +136,7 @@ export:
           SELECT 
             GenerateDriveMappings(
               Accessor=_value,
-              Prefix=parse_string_with_regex(string=OSPath.Path, regex="/uploads/auto/(C)%3A").g1 + ":",
+              Prefix=parse_string_with_regex(string=OSPath.Path, regex="/uploads/auto/([A-Z])%3A").g1 + ":",
               Mftlocation=OSPath.Path,
               Type="Windows"
             ) as map
@@ -247,6 +246,6 @@ sources:
                                 _FindUsrClass.map))
 
     SELECT if(condition=Upload,
-             then=upload(accessor="data", file=YamlText, name="remapping.yaml"),
+             then=upload(accessor="data", file=YamlText, name=Remappingfilename),
              else=YamlText) AS Remapping
     FROM scope()

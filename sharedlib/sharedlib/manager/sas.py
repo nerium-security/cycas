@@ -51,8 +51,6 @@ class SasManager:
         log.info(f'Listing blobs from domain: {self.parsed_url.netloc}')
 
         try:
-            if not self._container_client:
-                raise ValueError('SAS not initialized. Provide sas_url at init or call _initialize_clients().')
 
             blobs = [blob.name for blob in self._container_client.list_blobs()]
             log.info(f'Found {len(blobs)} blobs.')
@@ -63,7 +61,7 @@ class SasManager:
             return []
         
 
-    def download(self, download_path: str) -> None:
+    def download_all(self, download_path: str) -> None:
         '''
         Download all blobs from the container represented by a SAS URL.
 
@@ -72,9 +70,6 @@ class SasManager:
         '''
 
         try:
-            if not self._container_client:
-                raise ValueError('SAS not initialized. Provide sas_url at init or call _initialize_clients().')
-
             os.makedirs(download_path, exist_ok=True)
             log.info(f'Downloading blobs to {download_path}')
 
@@ -90,3 +85,28 @@ class SasManager:
                 return blob_path
         except Exception as e:
             log.error(f'Error downloading blobs: {e}')
+
+    def download(self, download_path: str, zip: str) -> None:
+        '''
+        Download blob from the container represented by a SAS URL.
+
+        Args:
+            download_path (str): Local directory to save blobs.
+        '''
+        try:
+            os.makedirs(download_path, exist_ok=True)
+
+            log.info(f'Downloading blob {zip} to {download_path}')
+
+            blob_path = os.path.join(download_path, zip)
+            blob_client = self._container_client.get_blob_client(zip)
+
+            with open(blob_path, 'wb') as file:
+                stream = blob_client.download_blob()
+                file.write(stream.readall())
+            
+            log.info(f'Downloaded blob: {blob_path}')
+
+            return blob_path
+        except Exception as e:
+            log.error(f'Error downloading blob: {e}')

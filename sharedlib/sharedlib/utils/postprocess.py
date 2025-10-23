@@ -6,6 +6,7 @@ import stat
 import json
 import re
 import time
+from pathlib import Path
 from ..utils.config import load_config
 
 Config = load_config()
@@ -51,11 +52,15 @@ def run_command(cmd, store_output=False):
             "capture_output": False,
             "text": False
         }
-
+    
     try:
         log.info(f'Running command: {" ".join(cmd)}')
+        start = time.time()
+
         cp = subprocess.run(cmd, check=True, **run_opts)
-        log.info(f'Command executed successfully.')
+        end = time.time()
+        duration = end - start
+        log.info(f'Command executed successfully in {duration:.2f} seconds.')
         return cp
     except subprocess.CalledProcessError as e:
         log.info(f'Command failed to execute. Error: {e.returncode}')
@@ -94,29 +99,36 @@ def build_remap(zipfile):
 
     create_directory_if_not_exists(remapfolder)
 
-   
+    unzip_dir_fullpath = get_zipfiledir(zipfile)
+    
+    remappingfilename = 'remapping.yaml'
+
     cmd = [
         binary,
         f'--definitions={definitions}',
         'query',
-        f"SELECT * FROM Artifact.Custom.Generic.Utils.ZipRemap(ImagePath=\'{zipfile}\', Upload=\'Y\')",
-        "--dump_dir",f"{remapfolder}"
+        f"SELECT * FROM Artifact.Custom.Generic.Utils.ZipRemap(ImagePath=\'{zipfile}\', Upload=\'Y\', Remappingfilename=\'{remappingfilename}\')",
+        "--dump_dir",f"{unzip_dir_fullpath}"
     ]
 
-    log.info(f'Creating remapping file: {remapfolder}/remapping.yaml')
+    remappingfile = os.path.join(unzip_dir_fullpath, remappingfilename)
+
+    log.info(f'Creating remapping file: {remappingfile}')
     run_command(cmd, store_output=True)
 
+    return remappingfile
 
-def find_hostname():
+def find_hostname(remappingfile):
     '''
     Outputs the hostname by using the generate remapping file to read the zip-file
     containg the SYSTEM registry hive with the ComputerName value.
     '''
 
     registrykey = "HKEY_LOCAL_MACHINE//SYSTEM//ControlSet001//Control//ComputerName//ComputerName//ComputerName"
+
     cmd = [
         binary,
-        '--remap', f'{remapfolder}/remapping.yaml',
+        '--remap', f'{remappingfile}',
         '--nobanner',
         '--definitions', f'{definitions}',
         'query', 
@@ -169,19 +181,46 @@ def select_artifacts(artifacts):
 
     return result
 
+def get_zipfilename(zipfile):
+    '''Gets the zip file basename '''
+
+    if zipfile.startswith(unzip_dir):
+        zipfile_basename = zipfile.removeprefix(unzip_dir)
+    else:
+        zipfile_basename = os.path.basename(zipfile)
+
+    
+
+    return zipfile_basename
+
+def get_zipfiledir(zipfile):
+    '''Gets the zipfile directory'''
+
+    if zipfile.startswith(unzip_dir):
+        unzip_dir_fullpath = os.path.splitext(zipfile)[0]
+    else:
+        zipfile_noext = Path(zipfile).stem
+        unzip_dir_fullpath = os.path.join(unzip_dir, zipfile_noext)
+
+    os.makedirs(unzip_dir_fullpath, exist_ok=True)
+
+    return unzip_dir_fullpath
+
 def postprocess(hostname, artifact, zipfile):
     '''Prepares the Velociraptor command and runs it to post-process zip file.'''
 
     artifact_name = re.sub(r'\(.*', '', artifact)
 
-    outputfile = os.path.join(unzip_dir, artifact_name + '.' + outputformat)
-    logfile = os.path.join(unzip_dir, artifact_name + '.log')
+    zipfile_basename = get_zipfilename(zipfile)
 
-    zipfile_basename = os.path.basename(zipfile)
+    unzip_dir_fullpath = get_zipfiledir(zipfile)
+
+    outputfile = os.path.join(unzip_dir_fullpath, artifact_name + '.' + outputformat)
+    logfile = os.path.join(unzip_dir_fullpath, artifact_name + '.log')
 
     cmd = [
         binary,
-        '--remap', f'{remapfolder}/remapping.yaml',
+        '--remap', f'{unzip_dir_fullpath}/remapping.yaml',
         '--nobanner',
         '--definitions', f'{definitions}',
         'query', 
@@ -191,13 +230,9 @@ def postprocess(hostname, artifact, zipfile):
         '--logfile', f'{logfile}'
     ]
 
-    start = time.time()
-
     run_command(cmd)
 
-    end = time.time()
-    duration = end - start
-
-    log.info(f'Command took {duration:.2f} seconds.')
-
-    return outputfile
+    if os.path.exists(outputfile) and os.path.getsize(outputfile) == 0:
+        log.debug(f'Empty file: {outputfile}')
+    else:
+        return outputfile

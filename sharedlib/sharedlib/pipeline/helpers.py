@@ -5,7 +5,7 @@ from ..utils.postprocess import download_velociraptor, build_remap, find_hostnam
 from ..utils.log import LogManager
 from ..utils.auth import Authenticator
 from ..utils.status import Status
-import time
+from datetime import datetime
 import json
 import os
 import logging as log
@@ -26,6 +26,12 @@ def get_message_in_queue(message_str):
     except Exception as e:
         log.error(f'Could not load message from queue: {e}')
         return None, None
+
+def should_download(source_name):
+    if source_name == 'localfolder':
+        return False
+    else:
+        return True
 
 def write_logentry_if_new(managers, source_name, zipfile, sessionid, status):
 
@@ -64,156 +70,272 @@ def is_message_not_yet_processing(managers, zipfile) -> bool:
         log.info('Message is already processed or processing')
         return False
 
-def update_status_unqueued(managers, source_name, zipfile, sessionid, start):
+def update_status_unqueued(managers, source_name, zipfile, sessionid):
+
+    start = datetime.now()
 
     message_not_yet_processed = is_message_not_yet_processing(managers, zipfile)
 
     if message_not_yet_processed:
-        managers.table.update_status_in_log(Status.UNQUEUED, zipfile, source_name, sessionid, start)
+        update_status_in_log(managers, Status.UNQUEUED, zip, source_name, sessionid, start)
 
+def run_zip_processor(managers, source_name, zipfile, sessionid):
 
-def run_zip_processor(managers, source_name, zipfile, sessionid, start):
+    start = datetime.now()
 
-    log.info(f'Updating table on storage account is set to: {Config.blob_logtable_enabled}')
-    log.info(f'Uploading files to ADX is set to: {Config.adx_cluster_enabled}')
+    write_logentry_if_new(managers, source_name, zipfile, sessionid, Status.NEW)
+    
+    should_process = determine_if_needs_processing(managers, zipfile)
 
-    should_process = True
-
-    if Config.blob_logtable_enabled:
-        
-        should_process = determine_if_needs_processing(managers, zipfile)
-
-        managers.table.update_status_in_log(Status.PROCESSING, zipfile, source_name, sessionid, start)
-
-    if should_process:
-
-        zipfile_downloaded = download_zip(managers, source_name, zipfile, sessionid, start)
-
-        if not zipfile_downloaded:
-            return
-    else:
+    if not should_process:
         return
 
-    unzip_and_upload(managers, zipfile_downloaded, source_name, sessionid, start)
+    update_status_in_log(managers, Status.PROCESSING, zipfile, source_name, sessionid, start)
+
+    if should_download(source_name):
+
+        zipfile = download_zip(managers, source_name, zipfile, sessionid, start)
+
+    unzip_and_upload(managers, zipfile, source_name, sessionid, start)
+
+
+def extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password):
+    '''Extract zip file if it is encrypted with a password.'''
+
+    zipfilecontent = list_files_in_zip(zipfile, zip_password)
+
+    for file_in_zip in zipfilecontent:
+        
+        if 'data.zip' in file_in_zip.filename:
+
+            extracted_zip = extract_single_file(zipfile, file_in_zip, extract_path, zip_password)
+
+            if not extracted_zip:
+                return
+
+            zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
+
+            if Config.var_removezip:
+                delete_file(zipfile)
+            
+            return extracted_zip
+        
+        else:
+            return zipfile
+
+def zip_contains_raw_artifacts(content):
+    
+    for file_in_zip in content:
+
+        if file_in_zip.filename.startswith('uploads/'):
+            log.info('Starts post-processing as zipfile seems to contain raw artifacts in \'uploads\' folder')
+            
+            return True
+    
+    log.info('Skipping post-processing as zipfile does not '
+             'seem to contain raw artifacts typically stored in \'uploads\' folder')
+    return False
+
+def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent):
+    ''' Post-processing with Velociraptor and upload json file output to adx.'''
+
+    upload_results = {}
+    
+    log.info(f'Post-processing is set to: {Config.velociraptor_enabled}')
+    if Config.velociraptor_enabled:
+
+        if not zip_contains_raw_artifacts(zipfilecontent):
+            return upload_results
+
+        download_velociraptor()
+        remampingfile = build_remap(zipfile)
+        hostname = find_hostname(remampingfile)
+        artifacts_json = load_artifacts()
+        artifacts = select_artifacts(artifacts_json)
+
+        start_postprocessing = datetime.time()
+
+        for artifact in artifacts:
+
+            postprocessed_json = postprocess(hostname, artifact, zipfile)
+
+            if postprocessed_json:
+
+                upload_results[postprocessed_json] = upload_file_to_adx(managers, postprocessed_json)
+                delete_file(postprocessed_json)
+
+        if Config.adx_cluster_enabled:
+
+            duration = get_duration_from_timespan(start_postprocessing)
+
+            log.info(f'Processing and uploading all post-processed artifacts took {duration}..')
+
+        else:
+            log.info(f'Post-processing all artifacts took {duration}..')
+
+    return upload_results
+
+def get_duration_from_timespan(start):
+    ''' 
+    Used to calculate the duration to output it in a human-friendly manner.
+    
+    Args:
+        start = datetime.now()
+    '''
+
+    end = datetime.now()
+    duration_seconds = (end - start).total_seconds()
+    minutes, seconds = divmod(duration_seconds, 60)
+
+    return f'{int(minutes)}m {int(seconds)}s'
+
+
+def extract_all_json_from_zip_and_upload(managers, 
+                                         extracted_zip, 
+                                         extract_path, 
+                                         zip_password, 
+                                         zipfilecontent, 
+                                         upload_results):
+    '''Extract and upload json files to ADX'''
+
+    ignorelist = load_ignore_list(Config.var_location_ignorelist)
+
+    if Config.adx_cluster_enabled:
+        
+        hostname = managers.adx.get_hostname_from_filename(extracted_zip)
+
+
+    for file_in_zip in zipfilecontent:
+        
+        ignored = is_ignored(file_in_zip, ignorelist)
+        
+        if ignored:
+            continue
+
+        extracted_file = extract_single_file(extracted_zip, file_in_zip, extract_path, zip_password)
+
+        if not extracted_file:
+            continue
+        
+        if Config.var_add_hostname:
+
+            if Config.adx_cluster_enabled:
+                managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip)
+
+        upload_results[file_in_zip.filename] = upload_file_to_adx(managers, extracted_file)
+
+        delete_file(extracted_file)
+
+    return upload_results
+
+def get_zip_password_from_keyvault(managers):
+
+    if Config.keyvault_enabled:
+        zip_password = managers.keyvault.read_creds(Config.keyvault_passwordlocation)
+    else:
+        zip_password = ''
+
+    return zip_password
 
 def unzip_and_upload(managers, zipfile, source_name, sessionid, start):
 
     log.info(f'Processing {os.path.basename(zipfile)}')
 
-    ignorelist = load_ignore_list(Config.var_location_ignorelist)
-    zip_password = managers.keyvault.read_creds(Config.keyvault_passwordlocation)
-    zipfilecontent = list_files_in_zip(zipfile, zip_password)
+    zip_password = get_zip_password_from_keyvault(managers)
+
     extract_path = get_extract_path(zipfile, Config.var_unzip_directory)
-    extracted_zip = zipfile
-    upload_results = {}
+
+    extracted_zip = extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password)
+
+    zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
+
+    upload_results = postprocess_velociraptor_and_upload(managers, 
+                                                         extracted_zip, 
+                                                         zipfilecontent)
+
+    upload_results = extract_all_json_from_zip_and_upload(managers, 
+                                                          extracted_zip, 
+                                                          extract_path, 
+                                                          zip_password, 
+                                                          zipfilecontent, 
+                                                          upload_results)
+
+    verify_if_all_uploads_are_initiated(managers, 
+                                        upload_results, 
+                                        zipfile, 
+                                        source_name, 
+                                        sessionid, 
+                                        start)
 
 
-    '''Extract zip file if it is encrypted with a password.'''
-    for file_in_zip in zipfilecontent:
+def verify_if_all_uploads_are_initiated(managers, results, zipfile, source_name, sessionid, start):
+    
+    duration = get_duration_from_timespan(start)
+    log.info(f'Script finished in: {duration}')
+
+    if Config.adx_cluster_enabled:
+
+        if not results:
+            log.warning('No files were uploaded.')
+            return False
         
-        if 'data.zip' in file_in_zip.filename:
-            extracted_zip = extract_single_file(zipfile, file_in_zip, extract_path, zip_password)
-            zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
-            delete_file(zipfile)
-            continue
+        all_success = True
 
-    ''' Post-processing with Velociraptor and upload json file output to adx.'''
-    log.info(f'Post-processing is set to: {Config.velociraptor_enabled}')
-    if Config.velociraptor_enabled:
-        download_velociraptor()
-        build_remap(zipfile)
-        hostname = find_hostname()
-        artifacts_json = load_artifacts()
-        artifacts = select_artifacts(artifacts_json)
+        for file, success in results.items():
+            if not success:
+                log.warning(f'Upload failed for file: {file}')
+                all_success = False
 
-        start_postprocessing = time.time()
+        if all_success:
+            log.info('Initiated upload of files in zip successfully.')
 
-        for artifact in artifacts:
-            postprocessed_json = postprocess(hostname, artifact, zipfile)
-            upload_results[postprocessed_json] = upload_file_to_adx(managers, postprocessed_json)
-            delete_file(postprocessed_json)
-
-        
-        end = time.time()
-        duration = end - start_postprocessing
-        minutes, seconds = divmod(duration, 60)
-
-        log.info(f'Processing all artifacts took {int(minutes)}m {int(seconds)}s..')
-
-    '''Extract and upload json files to ADX'''
-    for file_in_zip in zipfilecontent:
-
-        ignored = is_ignored(file_in_zip, ignorelist)
-
-        if ignored:
-            continue
-
-        extracted_file = extract_single_file(extracted_zip, file_in_zip, extract_path, zip_password)
-        if not extracted_file:
-            continue
-
-        upload_results[file_in_zip.filename] = upload_file_to_adx(managers, extracted_file)
-        delete_file(extracted_file)
-
-    if Config.blob_logtable_enabled:
-
-        verified = verify_if_all_uploads_are_initiated(upload_results)
-
-        if verified:
+        if all_success:
             status = Status.FINISHED
         else:
             status = Status.UPLOADFAILED
 
-            managers.table.update_status_in_log(status, zipfile, source_name, sessionid, start)
+    if not Config.adx_cluster_enabled:
+        status = Status.UPLOADDISABLED
 
-def verify_if_all_uploads_are_initiated(results):
-
-    if not results:
-        log.warning('No files were uploaded.')
-        return False
-    
-    all_success = True
-
-    for file, success in results.items():
-        if not success:
-            log.warning(f'Upload failed for file: {file}')
-            all_success = False
-
-    if all_success:
-        log.info('Initiated upload of all files in zip successfully.')
+    update_status_in_log(managers, status, zipfile, source_name, sessionid, start)
 
     return all_success
 
+
+def update_status_in_log(managers, status, zipfile, source_name, sessionid, start):
+
+    if Config.blob_logtable_enabled:
+
+        managers.table.update_status_in_log(status, zipfile, source_name, sessionid, start)
+
+
 def upload_file_to_adx(managers, file):
+    '''Prepares the adx table and uploads the file'''
 
     if Config.adx_cluster_enabled:
-
-        df = managers.adx.convert_to_dataframe(file, Config.var_sample_size)
-
-        dyn_columns, int_columns = managers.adx.find_dynamic_int_columns(df, Config.var_sample_size)
-        managers.adx.convert_dict_to_json(df, dyn_columns)
         tablename = managers.adx.get_tablename(os.path.basename(file))
-        cmd_createmergetable = managers.adx.get_table_createcommand(df.columns, tablename, dyn_columns, int_columns)
+        cmd_createmergetable = managers.adx.get_table_createcommand(file, Config, tablename)
         managers.adx.launch_createmerge_table(tablename, cmd_createmergetable)
-
-        result = managers.adx.launch_upload_file(tablename, file, df)
+        result = managers.adx.launch_upload_file(tablename, file)
 
         if result:
             return True
         else:
             return False
+        
+    else:
+        return False
 
 def should_unqueue():
     None
 
 def determine_if_needs_processing(managers, zipfile):
-    '''
-    should_process = managers.table.determine_if_need_for_processing(zipfile, triagepackage_source, session_id, Status.QUEUED, Config)
-    if should_process:
+
+    if not Config.blob_logtable_enabled:
+        log.debug('Variable "blob_logtable_enabled" is set to "false". '
+                   'Skipping check if it was already processed.')
         return True
-    else:
-        return False
-    '''
+    
     zip_basename = os.path.basename(zipfile)
     status_all = managers.table.get_status_zipfile(zip_basename)
     
@@ -230,10 +352,13 @@ def determine_if_needs_processing(managers, zipfile):
         log.debug('Is already processed or processing.')
         return False
 
-def send_to_queue(managers, source_name, zipfile, sessionid, start):
+def send_to_queue(managers, source_name, zipfile, sessionid):
+
+    start = datetime.now()
 
     managers.queue.send_message(zipfile, source_name)
-    managers.table.update_status_in_log(Status.QUEUED, zipfile, source_name, sessionid, start)
+
+    update_status_in_log(managers, Status.QUEUED, zipfile, source_name, sessionid, start)
 
 def remove_zip(managers, source_name, zipfile_downloaded, zip):
 
@@ -280,27 +405,26 @@ def list_zipfiles(managers, source_name):
 
 def download_zip(managers, source_name, zip, sessionid, start):
 
+    update_status_in_log(managers, Status.DOWNLOADING, zip, source_name, sessionid, start)
+
     if source_name == 'blob':
 
-            zip = managers.blob.download(Config.blob_container_input, zip, Config.var_download_directory)
+        zip = managers.blob.download(Config.blob_container_input, zip, Config.var_download_directory)
 
     if source_name == 'sftp':
 
-            zip = managers.sftp.download(Config.var_download_directory, zip)
+        zip = managers.sftp.download(Config.var_download_directory, zip)
 
     if source_name == 'sas':
 
-            zip = managers.sas.download(Config.var_download_directory)
+        zip = managers.sas.download(Config.var_download_directory, zip)
 
     if zip:
         status = Status.DOWNLOADED
     else:
         status = Status.DOWNLOADFAILED
 
-    
-    if Config.blob_logtable_enabled:
-
-        managers.table.update_status_in_log(status, zip, source_name, sessionid, start)
+    update_status_in_log(managers, status, zip, source_name, sessionid, start)
 
     if zip:
         return zip
@@ -323,12 +447,6 @@ def init(source_name, sessionid):
     log.info(f'Session id: {sessionid}')
 
     auth = Authenticator(Config, source_name)
-
-    #if arg.print_tablestoragelog:
-    #    temp = auth.authenticate_azure()
-    #    temp = auth.authenticate_tablestorage()
-    #    temp.output_logtable()
-    #    exit()
 
     managers = auth.authenticate_all()
 
