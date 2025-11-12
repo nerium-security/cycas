@@ -1,10 +1,20 @@
 # Azure Data Explorer Ingestor
 
-The **Azure Data Explorer Ingestor (ADX Ingestor)** is a Python-based tool designed for automating the ingestion of Velociraptor data into Azure Data Explorer (ADX)**. It supports reading zip files (either password encrypted or not) from Blob storage, SFTP storage and localfolders. This can either be raw forensic artifacts collected via kapefile artifact or json files.
+This Python-based solution that uploads forensic artefacts to Azure Data Explorer (ADX). It supports artefacts collected with Velociraptor, wether these are raw artefacts that require post-postprocessing or that are already post-processed to JSON format. 
+
+## Use cases
+
+When forensic artefacts are collected using Velociraptor
+
+- Run on Windows/Linux device for post-process raw forensic artefacts to json(l) and csv using Velociraptor
+- Pipeline for ingesting forensic artefacts at scale to automatically ingest zip files with forensic artefacts from Blob or SFTP storage using Azure Functions
+
+
+## drawing 
+
 
 ## Supported inputsources
 
-Supported sources for zip files:
 - Blob storage using azure authentication
 - Blob storage using SAS tokens
 - SFTP storage

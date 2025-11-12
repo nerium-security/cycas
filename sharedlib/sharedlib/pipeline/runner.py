@@ -1,6 +1,7 @@
 import uuid
-import logging as log
-from ..pipeline.helpers import (init, 
+import logging
+from sharedlib.utils.log import setup_logging
+from sharedlib.pipeline.helpers import (init, 
                                 list_zipfiles, 
                                 run_zip_processor, 
                                 send_to_queue, 
@@ -8,13 +9,13 @@ from ..pipeline.helpers import (init,
                                 write_logentry_if_new, 
                                 update_status_unqueued, 
                                 determine_if_needs_processing)
-from ..utils.status import Status
-from ..utils.config import load_config
+from sharedlib.utils.status import Status
+from sharedlib.utils.config import load_config
 from typing import Optional
 
 Config = load_config()
 
-log = log.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 def run_azurefunction_watcher(triagepackage_source: str) -> None:
 
@@ -47,7 +48,7 @@ def run_azurefunction_processor(triagepackage_source: str, mode: str, messageque
         messagequeue = managers.queue.receive_messages()
 
     if not messagequeue:
-        log.info('No messages in queue found.')
+        #log.info('No messages in queue found.')
         return
 
     for message in messagequeue:
@@ -67,11 +68,15 @@ def run_azurefunction_processor(triagepackage_source: str, mode: str, messageque
 
 
 def run_localdevice(triagepackage_source: str) -> None:
+
+    setup_logging(Config.var_loglocation, Config.var_loglevel)
     
     sessionid = str(uuid.uuid4())
     managers = init(triagepackage_source, sessionid)
     zipfiles = list_zipfiles(managers, triagepackage_source)
     
+
+
     from concurrent.futures import ThreadPoolExecutor
     futures = []
 

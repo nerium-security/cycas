@@ -7,17 +7,9 @@ import json
 import re
 import time
 from pathlib import Path
-from ..utils.config import load_config
+from sharedlib.utils.files import create_directory_if_not_exists
 
-Config = load_config()
-binary = Config.velociraptor_binary
-remapfolder = Config.velociraptor_remappingdir
-definitions = Config.velociraptor_definitions
-outputformat = Config.velociraptor_outputformat
-artifactslist = Config.velociraptor_artifactslist
-url = Config.velociraptor_url
-postprocess_var = Config.velociraptor_postprocess
-unzip_dir = Config.var_unzip_directory
+log = log.getLogger(__name__)
 
 def set_executepermissions(dest_path):
     '''Sets the execution permissions for the Velocriaptor binary.'''
@@ -27,17 +19,6 @@ def set_executepermissions(dest_path):
         log.debug(f'Set execute permission for {dest_path}')
     except Exception as e:
         log.error(f'Could not set execute permission for {dest_path}. Error: {e}')
-
-def create_directory_if_not_exists(dest_path):
-    '''Creates the directory for Velociraptor binary if it does not exists.'''
-
-    folder = os.path.dirname(dest_path)
-    try:
-        if not os.path.isfile(folder):
-            os.makedirs(folder, exist_ok=True)
-            log.debug(f'Created directory {folder}')
-    except Exception as e:
-        log.error(f'Could not create directory: {folder} Error: {e}')
 
 def run_command(cmd, store_output=False):
     '''Runs the Velociraptor command to post-process zip file.'''
@@ -54,7 +35,7 @@ def run_command(cmd, store_output=False):
         }
     
     try:
-        log.info(f'Running command: {" ".join(cmd)}')
+        log.debug(f'Running command: {" ".join(cmd)}')
         start = time.time()
 
         cp = subprocess.run(cmd, check=True, **run_opts)
@@ -66,10 +47,10 @@ def run_command(cmd, store_output=False):
         log.info(f'Command failed to execute. Error: {e.returncode}')
         return None
 
-def download_velociraptor():
+def download_velociraptor(binary, url):
     '''This function downloads the velociraptor binary if it does not exist on disk yet.'''
 
-    create_directory_if_not_exists(binary)
+    #create_directory_if_not_exists(binary)
 
     if os.path.exists(binary):
         log.info(f'Download is not required of {url} as {binary} already exists.')
@@ -91,7 +72,7 @@ def download_velociraptor():
         log.error(f'Could not download {url} to {binary}. Error: {e}')
 
 
-def build_remap(zipfile):
+def build_remap(zipfile, remapfolder, binary, definitions, unzipdir):
     '''
     This function builds the Velociraptor remapping file to be able to
     easily post-process the results of the Windows.KapeFiles.Targets artifact
@@ -99,8 +80,8 @@ def build_remap(zipfile):
 
     create_directory_if_not_exists(remapfolder)
 
-    unzip_dir_fullpath = get_zipfiledir(zipfile)
-    
+    unzip_dir_fullpath = get_zipfiledir(zipfile, unzipdir)
+
     remappingfilename = 'remapping.yaml'
 
     cmd = [
@@ -114,11 +95,12 @@ def build_remap(zipfile):
     remappingfile = os.path.join(unzip_dir_fullpath, remappingfilename)
 
     log.info(f'Creating remapping file: {remappingfile}')
-    run_command(cmd, store_output=True)
 
+    run_command(cmd, store_output=True)
+    
     return remappingfile
 
-def find_hostname(remappingfile):
+def find_hostname(remappingfile, binary, definitions):
     '''
     Outputs the hostname by using the generate remapping file to read the zip-file
     containg the SYSTEM registry hive with the ComputerName value.
@@ -143,9 +125,10 @@ def find_hostname(remappingfile):
         return hostname
     except:
         log.info(f'Could not extract hostname from registry key.')
+        return ''
 
 
-def load_artifacts():
+def load_artifacts(artifactslist):
     ''' Loads the Velociraptor artefacts from the inputfile.'''
 
     try:
@@ -158,7 +141,7 @@ def load_artifacts():
 
         return None
 
-def select_artifacts(artifacts):
+def select_artifacts(artifacts, postprocess_var):
     '''Selects the Velociraptor artifacts that need to be launched'''
 
     essentials = artifacts['essential']
@@ -181,7 +164,7 @@ def select_artifacts(artifacts):
 
     return result
 
-def get_zipfilename(zipfile):
+def get_zipfilename(zipfile, unzip_dir):
     '''Gets the zip file basename '''
 
     if zipfile.startswith(unzip_dir):
@@ -189,38 +172,42 @@ def get_zipfilename(zipfile):
     else:
         zipfile_basename = os.path.basename(zipfile)
 
-    
-
     return zipfile_basename
 
-def get_zipfiledir(zipfile):
+def get_zipfiledir(zipfile, unzip_dir):
     '''Gets the zipfile directory'''
 
     if zipfile.startswith(unzip_dir):
         unzip_dir_fullpath = os.path.splitext(zipfile)[0]
     else:
         zipfile_noext = Path(zipfile).stem
-        unzip_dir_fullpath = os.path.join(unzip_dir, zipfile_noext)
+        unzip_dir_temp = os.path.join(unzip_dir, zipfile_noext)
+        if unzip_dir_temp.endswith(zipfile_noext):
+            unzip_dir_fullpath = unzip_dir
+        else:
+            unzip_dir_fullpath = unzip_dir_temp
+
+    unzip_dir_fullpath = unzip_dir_fullpath.removesuffix("/data")
 
     os.makedirs(unzip_dir_fullpath, exist_ok=True)
 
     return unzip_dir_fullpath
 
-def postprocess(hostname, artifact, zipfile):
+def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outputformat, remappingfile):
     '''Prepares the Velociraptor command and runs it to post-process zip file.'''
-
+    
     artifact_name = re.sub(r'\(.*', '', artifact)
 
-    zipfile_basename = get_zipfilename(zipfile)
+    zipfile_basename = get_zipfilename(zipfile, unzipdir)
 
-    unzip_dir_fullpath = get_zipfiledir(zipfile)
+    unzip_dir_fullpath = get_zipfiledir(zipfile, unzipdir)
 
     outputfile = os.path.join(unzip_dir_fullpath, artifact_name + '.' + outputformat)
     logfile = os.path.join(unzip_dir_fullpath, artifact_name + '.log')
 
     cmd = [
         binary,
-        '--remap', f'{unzip_dir_fullpath}/remapping.yaml',
+        '--remap', f'{remappingfile}',
         '--nobanner',
         '--definitions', f'{definitions}',
         'query', 
@@ -230,6 +217,7 @@ def postprocess(hostname, artifact, zipfile):
         '--logfile', f'{logfile}'
     ]
 
+    log.info(f'Running artifact: {artifact}')
     run_command(cmd)
 
     if os.path.exists(outputfile) and os.path.getsize(outputfile) == 0:

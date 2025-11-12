@@ -7,6 +7,50 @@ import fnmatch
 
 log = log.getLogger(__name__)
 
+def is_zip_encrypted(zipfile):
+    ''' Checks if a zip file is encrypted'''
+
+    with pyzipper.AESZipFile(zipfile) as zf:
+        for info in zf.infolist():
+
+            if info.flag_bits & 0x1 or getattr(info, 'is_encrypted', False):
+                return True
+            else:
+                return False
+
+def verify_if_password_works(zipfile, zip_password):
+    try:
+        with pyzipper.AESZipFile(zipfile) as zf:
+            for info in zf.infolist():
+                # Check only encrypted entries
+
+                with zf.open(info, pwd=zip_password.encode()) as f:
+                    f.read(1)  # Attempt to read just a byte
+                    return True  # Successfully decrypted → password works
+    except Exception:
+        return False
+
+def extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password):
+    '''Extract zip file if it is encrypted with a password.'''
+
+    zipfilecontent = list_files_in_zip(zipfile, zip_password)
+
+    for file_in_zip in zipfilecontent:
+        
+        if 'data.zip' in file_in_zip.filename:
+
+            extracted_zip = extract_single_file(zipfile, file_in_zip, extract_path, zip_password)
+
+            if not extracted_zip:
+                return
+
+            zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
+            
+            return extracted_zip
+        
+        else:
+            return zipfile
+
 def get_extract_path(zip_path, base_extract_dir):
     '''Builds a clean extraction path based on the zip filename.'''
     # Get the filename without .zip
