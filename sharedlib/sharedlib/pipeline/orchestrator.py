@@ -1,13 +1,12 @@
 from sharedlib.utils.config import load_config
-from sharedlib.utils.files import list_files_in_directory, list_files_in_directory, delete_file, filter_triage_packages
-from sharedlib.utils.zip import load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles
+from sharedlib.utils.files import split_jsonl_by_size, list_files_in_directory, list_files_in_directory, delete_file, filter_triage_packages, get_filesize_bytes
+from sharedlib.utils.zip import get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename
 from sharedlib.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
 from sharedlib.utils.log import get_duration_from_timespan
 from sharedlib.utils.misc import send_webhook
 from sharedlib.utils.auth import Authenticator
-from sharedlib.utils.status import Status
+from sharedlib.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing
 from datetime import datetime
-import json
 import os
 import logging as log
 
@@ -20,7 +19,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid):
     start = datetime.now()
 
     write_logentry_if_new(managers, source_name, zipfile, sessionid, Status.NEW)
-    
+
     should_process = determine_if_needs_processing(managers, zipfile)
 
     if not should_process:
@@ -32,18 +31,21 @@ def run_zip_processor(managers, source_name, zipfile, sessionid):
 
         zipfile = download_zip(managers, source_name, zipfile, sessionid, start)
 
-    unzip_and_upload(managers, zipfile, source_name, sessionid, start)
-
-
-def unzip_and_upload(managers, zipfile, source_name, sessionid, start):
-
     log.info(f'Processing {os.path.basename(zipfile)}')
 
     zip_password = get_zip_password_from_keyvault(managers)
 
     extract_path = get_extract_path(zipfile, Config.var_unzip_directory)
 
-    extracted_zip = extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password)
+    extracted_zip, unextracted_zip = extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password)
+
+    if unextracted_zip:
+
+        zip_password, extracted_zip = get_password_from_env_or_prompt(source_name, unextracted_zip)
+
+        if not zip_password:
+            log.info('Password false. Skipping zip.')
+            return
 
     zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
 
@@ -66,72 +68,11 @@ def unzip_and_upload(managers, zipfile, source_name, sessionid, start):
                                         sessionid, 
                                         start)
 
-def get_message_in_queue(message_str):
-    
-    try:
-
-        decoded_message = json.loads(message_str)
-
-        triagepackage = decoded_message.get('triagepackage')
-        source_name = decoded_message.get('source_name')
-
-        return source_name, triagepackage
-    
-    except Exception as e:
-        log.error(f'Could not load message from queue: {e}')
-        return None, None
-
 def should_download(source_name):
     if source_name == 'localfolder':
         return False
     else:
         return True
-
-def write_logentry_if_new(managers, source_name, zipfile, sessionid, status):
-
-    if Config.blob_logtable_enabled:
-
-        managers.table.writes_log_entry_if_not_exists(zipfile, source_name, sessionid, status)
-    
-def should_send_to_queue(managers, zipfile):
-
-    if Config.blob_logtable_enabled:
-
-        status = managers.table.get_status_zipfile(zipfile)
-
-        if status in [Status.FAILED, Status.NEW, Status.UNQUEUED]:
-            log.info(f'Sending to queue. Status is: {status}')
-            return True
-        else:
-            log.info('Is processed or processing.')
-        return False
-
-def is_message_not_yet_processing(managers, zipfile) -> bool:
-    '''Returns True if the message is currently being processed.'''
-
-    status_all = managers.table.get_status_zipfile(zipfile)
-
-    status = status_all.get('Status')
-
-    if status == Status.QUEUED:
-        log.info('Message is not yet processed')
-        return True
-    
-    elif status == Status.FAILED:
-        log.info('Message was failed.')
-
-    else:
-        log.info('Message is already processed or processing')
-        return False
-
-def update_status_unqueued(managers, source_name, zipfile, sessionid):
-
-    start = datetime.now()
-
-    message_not_yet_processed = is_message_not_yet_processing(managers, zipfile)
-
-    if message_not_yet_processed:
-        update_status_in_log(managers, Status.UNQUEUED, zip, source_name, sessionid, start)
 
 def zip_contains_raw_artifacts(content):
     
@@ -222,10 +163,10 @@ def extract_all_json_from_zip_and_upload(managers,
     '''Extract and upload json files to ADX'''
 
     ignorelist = load_ignore_list(Config.var_location_ignorelist)
-
+    
     if Config.adx_cluster_enabled:
         if not hostname:
-            hostname = managers.adx.get_hostname_from_filename(extracted_zip)
+            hostname = get_hostname_from_filename(extracted_zip)
 
     for file_in_zip in zipfilecontent:
         
@@ -244,9 +185,22 @@ def extract_all_json_from_zip_and_upload(managers,
             if Config.adx_cluster_enabled:
                 managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip)
 
-        upload_results[file_in_zip.filename] = upload_file_to_adx(managers, extracted_file)
+        if get_filesize_bytes(extracted_file) >= 6442450944:
 
-        delete_file(extracted_file)
+            extracted_file_list = split_jsonl_by_size(extracted_file)
+
+            delete_file(extracted_file)
+
+        else:
+
+            extracted_file_list = []
+            extracted_file_list.append(extracted_file)
+
+        for extracted_file in extracted_file_list:
+
+            upload_results[file_in_zip.filename] = upload_file_to_adx(managers, extracted_file)
+
+            delete_file(extracted_file)
 
     return upload_results
 
@@ -263,7 +217,7 @@ def get_zip_password_from_keyvault(managers):
 def verify_if_all_uploads_are_initiated(managers, results, zipfile, source_name, sessionid, start):
     
     duration = get_duration_from_timespan(start)
-    log.info(f'Script finished in: {duration}')
+    log.info(f'ZIP processing finished in: {duration}')
 
     if Config.adx_cluster_enabled:
 
@@ -297,14 +251,6 @@ def verify_if_all_uploads_are_initiated(managers, results, zipfile, source_name,
 
     return all_success
 
-
-def update_status_in_log(managers, status, zipfile, source_name, sessionid, start):
-
-    if Config.blob_logtable_enabled:
-
-        managers.table.update_status_in_log(status, zipfile, source_name, sessionid, start)
-
-
 def upload_file_to_adx(managers, file):
     '''Prepares the adx table and uploads the file'''
 
@@ -321,37 +267,6 @@ def upload_file_to_adx(managers, file):
         
     else:
         return False
-
-def determine_if_needs_processing(managers, zipfile):
-
-    if not Config.blob_logtable_enabled:
-        log.debug('Variable "blob_logtable_enabled" is set to "false". '
-                   'Skipping check if it was already processed.')
-        return True
-    
-    zip_basename = os.path.basename(zipfile)
-    status_all = managers.table.get_status_zipfile(zip_basename)
-    
-    if not status_all:
-        log.info(f'No status available of {zip_basename} in statustable')
-        return False
-    
-    status = status_all.get('Status')
-
-    if status in [Status.FAILED, Status.NEW, Status.UNQUEUED]:
-        log.info(f'Should process. Status is: {status}')
-        return True
-    else:
-        log.debug('Is already processed or processing.')
-        return False
-
-def send_to_queue(managers, source_name, zipfile, sessionid):
-
-    start = datetime.now()
-
-    managers.queue.send_message(zipfile, source_name)
-
-    update_status_in_log(managers, Status.QUEUED, zipfile, source_name, sessionid, start)
 
 def remove_zip(managers, source_name, zipfile_downloaded, zip):
 
@@ -376,21 +291,27 @@ def list_zipfiles(managers, source_name):
 
     log.info(f'Attempting to find zip files in datasource: {source_name}')
 
-    if source_name == 'blob':
+    try:
 
-        all_files = managers.blob.list_blobs(Config.blob_container_input)
+        if source_name == 'blob':
 
-    if source_name == 'sas':
+            all_files = managers.blob.list_blobs(Config.blob_container_input)
 
-        all_files = managers.sas.list_blobs_from_sas()
+        if source_name == 'sas':
 
-    if source_name == 'sftp':
+            all_files = managers.sas.list_blobs_from_sas()
 
-        all_files = managers.sftp.list_files_recursive('/')
+        if source_name == 'sftp':
 
-    if source_name == 'localfolder':
+            all_files = managers.sftp.list_files_recursive('/')
 
-        all_files = list_files_in_directory(Config.var_localfolder_directory)
+        if source_name == 'localfolder':
+
+            all_files = list_files_in_directory(Config.var_localfolder_directory)
+
+    except:
+        log.error(f'Could not list files in: {source_name}. Was this source enabled in .env file?')
+        return []
 
     filtered_files = filter_triage_packages(all_files, Config.var_zipfile_prefix, Config.var_zipfile_suffix)
 
@@ -433,9 +354,6 @@ def init(source_name, sessionid):
     except Exception as e:
         log.error(f'Could not create directory: {e}')
 
-    #logging_manager = LogManager(Config.var_loglocation, Config.var_loglevel)
-
-    #log = logging_manager.get_logger(__name__)
     log.info(f'Starting {source_name}2adx pipeline...')
     log.info(f'Session id: {sessionid}')
 

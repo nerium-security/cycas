@@ -193,8 +193,6 @@ class AdxManager:
 
         columnstring = self.prepare_string_with_columnames(columnames, dyn_columns, int_columns)
 
-        #convert_dict_to_json(df, dyn_columns)
-
         return f'.create-merge table {tablename} ({columnstring})', columnames
 
 
@@ -205,10 +203,6 @@ class AdxManager:
             table=tablename,
             data_format=DataFormat.JSON,
             report_level=ReportLevel.FailuresAndSuccesses)
-
-            #if isinstance(dataframe, pd.DataFrame):
-            #    self.kusto_queued.ingest_from_dataframe(dataframe, ingestion_properties=ingestion_props)
-            #else:
 
     def launch_upload_file(self, tablename: str, fullpath: str) -> bool:
         '''Uploads a file to adx'''
@@ -238,32 +232,6 @@ class AdxManager:
             if line.endswith("}"):
                 line = line[:-1] + replacement
             print(line)
-
-    def get_hostname_from_filename(self, fullpath):
-        ''' 
-        Extracts the hostname from filename using regex. 
-        
-        Examples of hostnames that are extracted:
-        
-        - Collection-HOSTNAME-2024-03-01T16_10_46Z.zip
-        - HOSTNAME-2025-03-01T16_10_46Z.zip
-        '''
-
-        pattern = re.compile(
-            r'(?:collection-)?'                                               # optional prefix
-            r'([A-Z0-9-]+?)'                                                  # hostname
-            r'(?=_|-[A-Z]\.[0-9a-f]{6,}|-202[0-9]-[0-9]{2}-[0-9]{2}T|\.|$)',  # stop here (lookahead)
-            re.IGNORECASE
-        )
-
-        if fullpath:
-            match = pattern.search(fullpath)
-            if match:
-                match = match.group(1)
-                log.info(f'Extracted hostname from zipfilename: {match}')
-                return match
-            else:
-                return ''
 
     def check_if_table_exists(self, tablename):
 

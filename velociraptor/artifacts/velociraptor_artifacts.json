@@ -2,9 +2,10 @@
   "essential": [
   ],
   "full": [
-    "Windows.Sys.Users()"
+    "Custom.Windows.Sys.Users"
   ],
   "skip":[
+    "Windows.Registry.NTUser(KeyGlob='HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\**')",
     "Windows.System.Powershell.PSReadline()",
     "Windows.System.TaskScheduler()",
     "Windows.Forensics.RecycleBin()",
@@ -16,7 +17,7 @@
     "Custom.Windows.Forensics.SAM()",
     "Custom.Windows.Registry.Interfaces()",
     "Windows.Registry.RDP(KeyGlob='HKEY_USERS\\*\\Software\\Microsoft\\Terminal Server Client\\{Default,Servers\\}\\**')",
-    "Windows.Registry.NTUser(KeyGlob='HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\**')",
+    "Windows.Sys.Users()",    
     "Windows.Sys.AppcompatShims()",
     "Windows.Registry.AppCompatCache()",
     "Windows.Forensics.Prefetch()",

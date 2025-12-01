@@ -187,7 +187,7 @@ def get_zipfiledir(zipfile, unzip_dir):
         else:
             unzip_dir_fullpath = unzip_dir_temp
 
-    unzip_dir_fullpath = unzip_dir_fullpath.removesuffix("/data")
+    unzip_dir_fullpath = unzip_dir_fullpath.removesuffix('/data')
 
     os.makedirs(unzip_dir_fullpath, exist_ok=True)
 
