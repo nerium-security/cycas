@@ -52,7 +52,7 @@ def run_azurefunction_processor(triagepackage_source: str, mode: str, messageque
 
         update_status_unqueued(managers, source_name, zipfile, sessionid)
 
-        run_zip_processor(managers, source_name, zipfile, sessionid)
+        run_zip_processor(managers, source_name, zipfile, sessionid, message)
 
         #process_from_queue = should_process_from_queue()
 

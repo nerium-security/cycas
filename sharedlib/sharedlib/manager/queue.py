@@ -49,34 +49,40 @@ class QueueManager:
 
         messages = self.queue_client.receive_messages(messages_per_page=max_messages)
 
-        decoded_messages = []
+        undecoded_messages = []
         for message in messages:
 
-            message_content = message.get('content')
-            message_content_decoded = base64.b64decode(message_content)
-            message_content_decoded_ascii = message_content_decoded.decode('ascii')
-            decoded_messages.append(message_content_decoded_ascii)      
-        return decoded_messages
+            undecoded_messages.append(message)
 
-    def delete_message(self, message: QueueMessage):
+        return undecoded_messages
+
+    def delete_message(self, message):
         '''
         Delete a message from the queue.
         '''
+
         if not self.queue_client:
             raise ValueError('Queue client not authenticated. Call authenticate() first.')
 
         self.queue_client.delete_message(message)
 
-    def send_message(self, zipfile: str, source_name) -> bool:
+    def encode_messsage(self, zipfile: str, source_name: str):
+        '''Encodes the message for sending or deleting it to queue'''
+
+        content = json.dumps({'triagepackage': zipfile, 'source_name' : source_name})
+        message_bytes = content.encode('utf-8')
+        base64_bytes = base64.b64encode(message_bytes)
+        message_output = base64_bytes.decode('utf-8')
+
+        return message_output, content
+
+    def send_message(self, zipfile: str, source_name: str) -> bool:
         '''Send a message to the queue. Message content (must be <= 64KB)'''
         if not self.queue_client:
             raise ValueError('Queue client not authenticated. Call authenticate() first.')
 
         try:
-            content = json.dumps({'triagepackage': zipfile, 'source_name' : source_name})
-            message_bytes = content.encode('utf-8')
-            base64_bytes = base64.b64encode(message_bytes)
-            base64_message = base64_bytes.decode('utf-8')
+            base64_message, content = self.encode_messsage(zipfile, source_name)
             self.queue_client.send_message(base64_message)
             log.info(f'Sent to queue: {self.queue_name}.')
 
@@ -85,3 +91,12 @@ class QueueManager:
         except AzureError as e:
             log.info(f'Failed to send message to queue: {e}')
             return False
+        
+def decode_message(message):
+    ''' Decodes a message '''
+
+    message_content = message.get('content')
+    message_content_decoded = base64.b64decode(message_content)
+    message_content_decoded_ascii = message_content_decoded.decode('ascii')
+
+    return message_content_decoded_ascii

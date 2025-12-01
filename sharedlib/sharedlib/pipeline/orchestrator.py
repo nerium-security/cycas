@@ -14,7 +14,7 @@ log = log.getLogger(__name__)
 
 Config = load_config()
 
-def run_zip_processor(managers, source_name, zipfile, sessionid):
+def run_zip_processor(managers, source_name, zipfile, sessionid, message):
 
     start = datetime.now()
 
@@ -66,7 +66,8 @@ def run_zip_processor(managers, source_name, zipfile, sessionid):
                                         zipfile, 
                                         source_name, 
                                         sessionid, 
-                                        start)
+                                        start,
+                                        message)
 
 def should_download(source_name):
     if source_name == 'localfolder':
@@ -141,9 +142,9 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent):
                 upload_results[postprocessed_json] = upload_file_to_adx(managers, postprocessed_json)
                 delete_file(postprocessed_json)
 
-        if Config.adx_cluster_enabled:
+        duration = get_duration_from_timespan(start_postprocessing)
 
-            duration = get_duration_from_timespan(start_postprocessing)
+        if Config.adx_cluster_enabled:
 
             log.info(f'Processing and uploading all post-processed artifacts took {duration}..')
 
@@ -214,10 +215,15 @@ def get_zip_password_from_keyvault(managers):
     return zip_password
 
 
-def verify_if_all_uploads_are_initiated(managers, results, zipfile, source_name, sessionid, start):
+def verify_if_all_uploads_are_initiated(managers, results, zipfile, source_name, sessionid, start, message):
     
     duration = get_duration_from_timespan(start)
+    
     log.info(f'ZIP processing finished in: {duration}')
+    if Config.blob_queue_enabled:
+        managers.queue.delete_message(message)
+
+    all_success = []
 
     if Config.adx_cluster_enabled:
 

@@ -1,5 +1,6 @@
 from sharedlib.utils.config import load_config
 from sharedlib.utils.status import Status, update_status_in_log
+from sharedlib.manager.queue import decode_message
 from datetime import datetime
 import logging as log
 import json
@@ -31,11 +32,10 @@ def send_to_queue(managers, source_name, zipfile, sessionid):
 
     return send_to_queue
 
-def get_message_in_queue(message_str):
+def get_message_in_queue(message):
     
     try:
-
-        decoded_message = json.loads(message_str)
+        decoded_message = json.loads(decode_message(message))
 
         triagepackage = decoded_message.get('triagepackage')
         source_name = decoded_message.get('source_name')
@@ -53,7 +53,7 @@ def update_status_unqueued(managers, source_name, zipfile, sessionid):
     message_not_yet_processed = is_message_not_yet_processing(managers, zipfile)
 
     if message_not_yet_processed:
-        update_status_in_log(managers, Status.UNQUEUED, zip, source_name, sessionid, start)
+        update_status_in_log(managers, Status.UNQUEUED, zipfile, source_name, sessionid, start)
 
 def is_message_not_yet_processing(managers, zipfile) -> bool:
     '''Returns True if the message is currently being processed.'''
