@@ -8,4 +8,4 @@ git switch -c "$PREFIX/$SUFFIX"
 # push to main
 git add .
 git commit -m "Fix: $SUFFIX"
-git push -u origin "$BUGFIXPREFIX/$BUGFIXNAME"
+git push -u origin "$PREFIX/FIXNAME"
