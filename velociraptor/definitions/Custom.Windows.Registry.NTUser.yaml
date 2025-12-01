@@ -1,0 +1,42 @@
+name: Custom.Windows.Registry.NTUser
+description: |
+  This artifact searches for keys or values within the user's
+  NTUser.dat registry hives.
+  This artifact has been modified so it works on deaddisks
+
+precondition: SELECT OS From info() where OS = 'windows'
+
+parameters:
+ - name: KeyGlob
+   default: HKEY_USERS\*\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\**
+ - name: userRegex
+   default: .
+   type: regex
+
+sources:
+ - query: |
+       LET UserProfiles = SELECT Uid,
+            Gid,
+            Name || "" as Username,
+            Description,
+            UUID,
+            {
+                SELECT OSPath FROM glob(
+                   root=expand(path=Directory),
+                   globs="/NTUSER.DAT",
+                   accessor="auto")
+            } as OSPath,
+            expand(path=Directory) as Directory
+       FROM Artifact.Custom.Windows.Sys.Users()
+       WHERE Directory and OSPath AND Username =~ userRegex
+
+       SELECT * FROM foreach(
+            row={
+                SELECT * FROM UserProfiles
+            },
+            query={
+                SELECT OSPath, OSPath, Data, Mtime AS Mtime,
+                       Username, Description, Uid, Gid, UUID, Directory
+                FROM glob(
+                    globs=KeyGlob, accessor="registry")
+            })

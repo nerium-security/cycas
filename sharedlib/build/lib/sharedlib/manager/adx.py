@@ -1,13 +1,19 @@
-from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
-from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel, ReportMethod
-from azure.kusto.ingest.status import KustoIngestStatusQueues
-from datetime import timedelta
-import pandas as pd
-import logging as log
+'''
+Module for ingesting data into ADx.
+'''
+
 import re
 import json
 import time
 import os
+import logging as log
+import pandas as pd
+import fileinput
+from pathlib import Path
+from datetime import timedelta
+from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
+from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel
+from azure.kusto.ingest.status import KustoIngestStatusQueues
 
 log = log.getLogger(__name__)
 
@@ -39,9 +45,10 @@ class AdxManager:
 
         except Exception as e:
             log.error(f'Authentication failed. Error: {e}')
-            return False            
+            return False
 
     def query_db_test(self):
+
         log.info(f'Running a test query against the database: {self.adx_database_name}')
         try:
 
@@ -55,12 +62,12 @@ class AdxManager:
             log.error(f'Running test-query failed. Error: {e}')
             return False
 
-    def convert_to_dataframe(self, f, nrows):
+    def convert_to_dataframe(self, f, nrows, chunksize):
         '''Convert a file or in-memory data to a Pandas DataFrame.'''
 
         try:
 
-            df = pd.read_json(f, lines=True, nrows=nrows)
+            df = pd.read_json(f, lines=True, nrows=nrows, chunksize=chunksize)
             log.debug(f'Loaded chunk of file into Pandas dataframe: {f}')
 
             if isinstance(df, pd.DataFrame):
@@ -74,10 +81,7 @@ class AdxManager:
             return pd.DataFrame()
 
     def find_dynamic_int_columns(self, df, var_sample_size):
-
-        if not self.kusto_client:
-            raise ValueError('Not authenticated with ADX. Call authenticate() first.')
-
+        
         log.debug('Entered function that finds dynamic and integer columns.')
         dict_columns = []
         int_columns = []
@@ -92,7 +96,7 @@ class AdxManager:
                         int_columns.append(column)
 
         return dict_columns, int_columns
-  
+
     def convert_dict_to_json(self, df, dyn_columns):
         log.debug('Entered function to convert dictionaries in the dataframe to json.')
 
@@ -102,98 +106,188 @@ class AdxManager:
                     df[dyn_column] = df[dyn_column].apply(lambda x: json.dumps(x) if isinstance(x, dict) else x)
                 except Exception as e:
                     log.error(f'Could not convert column {dyn_column} of dataframe to json. Error: {e}')
-   
+
     def get_tablename(self, filename):
-        tablename = re.sub('%2F', '_', filename.replace('.json', '').replace('.csv', '').replace('.CSV', '').replace('.JSON', ''))
+        
+        tablename = Path(filename).stem
+        tablename = re.sub('%2F', '_', tablename)
         tablename = re.sub('[^0-9a-zA-Z_-]', '_', tablename)
         log.debug(f'Extracted the following name which will be used to create the table: {tablename}.')
         return tablename
 
-    def get_table_createcommand(self, columnames, tablename, dyn_columns, int_columns):
+    def remove_columnames_with_special_characters(self, colums):
+        
+        return colums[~colums.str.contains(r'\(.*\)')]
+
+    def prepare_string_with_columnames(self, columns, dyn_columns, int_columns):
+        ''' 
+        Prepares the string with columnames and determines columntypes.
+        Expected output: ['CreationTime']:date, ['PhysicalProcessorCount']:string, etc
+        '''
+
         if not any([dyn_columns, int_columns]):
             dyn_columns = []
             int_columns = []
 
-        time_columns = ['time', '0x30', '0x10', 'date']
-        stringbuilder = ''
+        time_columns = ['time', '0x30', '0x10', 'date', 'LastSeen', 'LastAccess']
 
-        for columname in columnames:
+        parts = []
+        for columname in dict.fromkeys(columns):
             columname = columname.replace('>', '').replace('<', '')
-            stringbuilder += f"[\'{columname}\']:"
-            
+
             if any(item in columname.lower() for item in time_columns):
-                stringbuilder += 'date, '
+                dtype = 'date'
             elif columname in dyn_columns:
-                stringbuilder += 'dynamic, '
+                dtype = 'dynamic'
             elif columname in int_columns:
-                stringbuilder += 'int, '
+                dtype = 'int'
             else:
-                stringbuilder += 'string, '
+                dtype = 'string'
+
+            parts.append(f"['{columname}']:{dtype}")
+
+        # Adding columns Hostname and Sourcefile
+        #parts.append("['Hostname']:string")
+        #parts.append("['Sourcefile']:string")
+
+        return ', '.join(parts)
+
+    def create_new_table_if_required(self, Config, file):
+        ''' Creates a new table when there is isn't one or when a new column needs to be added to the table '''
+
+        tablename = self.get_tablename(os.path.basename(file))
+
+        table_exists, existing_columns = self.check_if_table_exists(tablename)
+
+        cmd_createmergetable, new_columns = self.get_table_createcommand(file, Config, tablename)
+               
+        new_columns_exists = self.checking_if_new_columns_exists(existing_columns, new_columns)
+
+        if not table_exists or new_columns_exists:
+
+            self.launch_createmerge_table(cmd_createmergetable)
+
+        return tablename
         
-        create = f'.create-merge table {tablename} ({stringbuilder[:-2]})'
-        return create
 
-    def launch_upload_data(self, tablename: str, fullpath: str) -> bool:
-        '''Uploads a file to adx'''
+    def checking_if_new_columns_exists(self, existing_columns, new_columns):
+        ''' Returns True if a new column is observed that needs to be added to the table in ADX. '''
 
-        if not self.kusto_client or not self.kusto_queued:
-            log.error('Clients are not authenticated. Please run the authenticate method first.')
-            return False
+        existing_columns_clean = [col.get('ColumnName') for col in existing_columns]
 
-        ingestion_properties = IngestionProperties(
+        for new_column in new_columns:
+            if not new_column in existing_columns_clean:
+                log.debug(f'Column does not exist yet: {new_column}')
+                return True
+
+        return False
+
+    def get_table_createcommand(self, file, Config, tablename):
+        ''' Prepares the command for creating a table in ADX'''
+
+        df = self.convert_to_dataframe(file, Config.var_sample_size, chunksize=None)
+
+        columnames = self.remove_columnames_with_special_characters(df.columns)
+
+        dyn_columns, int_columns = self.find_dynamic_int_columns(df, Config.var_sample_size)
+
+        columnstring = self.prepare_string_with_columnames(columnames, dyn_columns, int_columns)
+
+        #convert_dict_to_json(df, dyn_columns)
+
+        return f'.create-merge table {tablename} ({columnstring})', columnames
+
+
+    def read_ingestion_properties(self, tablename):
+
+        return IngestionProperties(
             database=self.adx_database_name,
             table=tablename,
             data_format=DataFormat.JSON,
-            report_level=ReportLevel.FailuresAndSuccesses
-        )
-        basename = os.path.basename(fullpath)
+            report_level=ReportLevel.FailuresAndSuccesses)
+
+            #if isinstance(dataframe, pd.DataFrame):
+            #    self.kusto_queued.ingest_from_dataframe(dataframe, ingestion_properties=ingestion_props)
+            #else:
+
+    def launch_upload_file(self, tablename: str, fullpath: str) -> bool:
+        '''Uploads a file to adx'''
+
+        ingestion_props = self.read_ingestion_properties(tablename)
+
         try:
-            self.kusto_queued.ingest_from_file(fullpath, ingestion_properties=ingestion_properties)
-            log.info(f'Successfully initiated the data upload request of file {basename}')
+            basename = os.path.basename(fullpath)
+
+            self.kusto_queued.ingest_from_file(fullpath, ingestion_properties=ingestion_props)
+
+            log.info(f'Successfully initiated upload request of {basename} to table {tablename}')
 
             return True
         except Exception as e:
-            log.error(f'Failed to initiate the data upload request of file {basename}. Error: {e}' )
+            log.error(f'Failed to initiate the data upload request of {basename} to table {tablename}. Error: {e}' )
             return False
 
+    def add_hostname_to_file(self, fullpath, hostname, zipfile):
+        ''' Adds hostname and sourcefilename inline to file'''
+
+        columns = f',"Sourcefilename":"{zipfile}","Hostname":"{hostname}"'
+        replacement = columns + '}'
+
+        for line in fileinput.input(fullpath, inplace=True):
+            line = line.rstrip("\n")
+            if line.endswith("}"):
+                line = line[:-1] + replacement
+            print(line)
+
+    def get_hostname_from_filename(self, fullpath):
+        ''' 
+        Extracts the hostname from filename using regex. 
+        
+        Examples of hostnames that are extracted:
+        
+        - Collection-HOSTNAME-2024-03-01T16_10_46Z.zip
+        - HOSTNAME-2025-03-01T16_10_46Z.zip
+        '''
+
+        pattern = re.compile(
+            r'(?:collection-)?'                                               # optional prefix
+            r'([A-Z0-9-]+?)'                                                  # hostname
+            r'(?=_|-[A-Z]\.[0-9a-f]{6,}|-202[0-9]-[0-9]{2}-[0-9]{2}T|\.|$)',  # stop here (lookahead)
+            re.IGNORECASE
+        )
+
+        if fullpath:
+            match = pattern.search(fullpath)
+            if match:
+                match = match.group(1)
+                log.info(f'Extracted hostname from zipfilename: {match}')
+                return match
+            else:
+                return ''
+
     def check_if_table_exists(self, tablename):
+
         query = f'{tablename} | limit 0'
         try:
             response_query = self.kusto_client.execute_query(self.adx_database_name, query)
             raw_columns = response_query.primary_results[0].raw_columns
             if raw_columns:
                 return True, raw_columns
+        except:
+            log.info(f'Table {tablename} does not exist.')
+            return False, ''
+
+    def launch_createmerge_table(self, cmd_createmergetable):
+        ''' Creates the table in ADX. '''
+
+        try:
+            self.kusto_client.execute_mgmt(self.adx_database_name, cmd_createmergetable)
+            log.info(f'Successfully launched command: {cmd_createmergetable}')
+            return True
         except Exception as e:
-            log.info('Table %s does not exist.' %tablename)
-            return False, None
+            log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
+            return False
 
-    def launch_createmerge_table(self, tablename, cmd_createmergetable):
-        table_exists, columns_current = self.check_if_table_exists(tablename)
-
-        new_columns = []
-        if table_exists:
-            columns_current = ', '.join([f"['{column['ColumnName']}']:{column['ColumnType']}" for column in columns_current])
-            cmd_createmergetable_columns = re.search(r'\((.*?)\)', cmd_createmergetable).group(1)
-            cmd_createmergetable_fields = [field.strip() for field in cmd_createmergetable_columns.split(',')]
-
-            if columns_current != cmd_createmergetable_columns:
-                for cmd_createmergetable_field in cmd_createmergetable_fields:
-                    column_name, column_type = cmd_createmergetable_field.split(':')
-                    if column_name not in columns_current:
-                        new_columns.append(cmd_createmergetable_field)
-                
-            if new_columns:
-                cmd_createmergetable = cmd_createmergetable.replace(')', '') + ', ' + ', '.join(new_columns) + ')'
-
-        if new_columns or not table_exists:
-            try:
-                self.kusto_client.execute_mgmt(self.adx_database_name, cmd_createmergetable)
-                log.info(f'Successfully launched command: {cmd_createmergetable}')
-                return True
-            except Exception as e:
-                log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
-                return False
-            
     def check_ingestion_status(self, max_wait_seconds=180) -> bool:
         '''
         Monitors the ingestion status queue to verify whether ingestion succeeded.
@@ -203,6 +297,7 @@ class AdxManager:
             True if success message is received
             False if failure message is received or timeout
         '''
+
         if not self.kusto_queued:
             log.error('No Kusto queued ingest client available.')
             return False

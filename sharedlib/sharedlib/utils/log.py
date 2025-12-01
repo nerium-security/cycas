@@ -2,7 +2,7 @@ import logging as log
 import os
 from datetime import datetime
 from pathlib import Path
-from sharedlib.utils.files import create_directory_if_not_exists
+from sharedlib.sharedlib.utils.files import create_directory_if_not_exists
 
 def set_loglevel(level):
     if level == 'DEBUG':

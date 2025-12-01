@@ -7,19 +7,19 @@ import logging as log
 import glob
 from datetime import datetime
 from pathlib import Path
-from sharedlib.utils.postprocess import (download_velociraptor, 
+from sharedlib.sharedlib.utils.postprocess import (download_velociraptor,
                                          build_remap, 
                                          find_hostname, 
                                          load_artifacts, 
                                          select_artifacts, 
                                          postprocess)
 
-from sharedlib.utils.zip import (get_extract_path, 
+from sharedlib.sharedlib.utils.zip import (get_extract_path,
                                  extract_encrypted_and_non_encrypted_zipfiles, 
                                  verify_if_password_works,
                                  is_zip_encrypted)
 
-from sharedlib.utils.log import setup_logging, get_duration_from_timespan
+from sharedlib.sharedlib.utils.log import setup_logging, get_duration_from_timespan
 
 script_path = sys.argv[0]
 scriptname = os.path.basename(script_path)

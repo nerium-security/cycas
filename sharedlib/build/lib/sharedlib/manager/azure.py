@@ -1,3 +1,7 @@
+'''
+Module for handling Azure.
+'''
+
 from azure.identity import DefaultAzureCredential
 from azure.mgmt.resource import SubscriptionClient
 from azure.mgmt.kusto import KustoManagementClient
@@ -17,7 +21,6 @@ class AzureManager:
         try:
             self.credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
             self.sub_client = SubscriptionClient(self.credential)
-            #self.token = self.credential.get_token('https://management.azure.com/.default', process_timeout=5)
             log.info('Successfully authenticated.')
             return self.credential
         except Exception as e:

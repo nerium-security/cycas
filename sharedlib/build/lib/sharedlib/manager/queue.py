@@ -1,3 +1,8 @@
+'''
+Module for dealing with messages in the
+message queue of an storage account
+'''
+
 from azure.storage.queue import QueueClient, QueueMessage
 from azure.core.exceptions import AzureError
 from typing import Optional, List
@@ -29,6 +34,14 @@ class QueueManager:
             log.info(f'Authentication failed: {e}')
             return False
 
+    def peek_messages(self, max_messages: int = 1):
+        '''Peek at messages without dequeuing.'''
+        if not self.queue_client:
+            raise ValueError('Queue client not authenticated. Call authenticate() first.')
+        
+        messages = self.queue_client.peek_messages(max_messages=max_messages)
+        return messages
+
     def receive_messages(self, max_messages: int = 1) -> List[QueueMessage]:
         '''Retrieve messages from the queue.'''
         if not self.queue_client:
@@ -41,8 +54,8 @@ class QueueManager:
 
             message_content = message.get('content')
             message_content_decoded = base64.b64decode(message_content)
-            decoded_messages.append(message_content_decoded)
-        
+            message_content_decoded_ascii = message_content_decoded.decode('ascii')
+            decoded_messages.append(message_content_decoded_ascii)      
         return decoded_messages
 
     def delete_message(self, message: QueueMessage):
@@ -65,7 +78,7 @@ class QueueManager:
             base64_bytes = base64.b64encode(message_bytes)
             base64_message = base64_bytes.decode('utf-8')
             self.queue_client.send_message(base64_message)
-            log.info(f'Sent message about new triagepackage to queue: {self.queue_name}.')
+            log.info(f'Sent to queue: {self.queue_name}.')
 
             log.debug(f'Sent message to queue: {content}')
             return True

@@ -72,7 +72,17 @@ parameters:
           accessor: data
         "on":
           accessor: data
-
+      - type: shadow
+        from:
+          accessor: scope
+        "on":
+          accessor: scope
+      - type: shadow
+        from:
+          accessor: gzip
+        "on":
+          accessor: gzip
+  
   - name: Upload
     type: bool
     default: "Y"
@@ -84,7 +94,7 @@ parameters:
 
 export:
 
-    LET Accessors_registry <= ("raw_reg", "registry")
+    LET Accessors_registry <= ("raw_reg")
     LET Accessors_files <= ("file", "auto")
 
 
@@ -94,7 +104,7 @@ export:
             GenerateUserHivesMappings(
               Hive=OSPath,
               Key="HKEY_USERS\\" + OSPath[4],
-              Accessor=_value,
+              Accessor= _value,
               Filename=OSPath[-1]
             ) as map
           FROM glob(globs='**/Users/*/NTUser.DAT',
@@ -110,7 +120,7 @@ export:
               Name=Name,
               Path=OSPath[-2],
               Accessor=_value,
-              Prefix="HKEY_LOCAL_MACHINE/" + if(condition=Name="SAM", then="", else=Name)
+              Prefix= + if(condition=Name="SAM", then="", else="HKEY_LOCAL_MACHINE/") + Name
             ) as map
           FROM glob(globs='**/Windows/System32/config/{DEFAULT,SAM,SECURITY,SOFTWARE,SYSTEM}',
             accessor="zip",
@@ -162,7 +172,7 @@ export:
           SELECT 
             GenerateUserHivesMappings(
               Hive=OSPath,
-              Key="HKEY_USERS\\" + OSPath[4] + "\\UsrClass",
+              Key="HKEY_USERS\\" + OSPath[4] + "\\AppData\\Local\\Microsoft\\Windows",
               Accessor=_value,
               Filename=OSPath[-1]
             ) as map
@@ -188,7 +198,7 @@ export:
                 path_type=Type)
           )
     )
-
+    
     LET GenerateHiveMappings(Name, Path, Accessor, Prefix) = (
           dict(
               type="mount", 
@@ -204,7 +214,7 @@ export:
                     DelegatePath=ImagePath,
                     Path=OSPath.Path))),
               on=dict(
-                accessor=Accessor, 
+                accessor="registry", 
                 prefix=Prefix, 
                 path_type="registry")
           )
@@ -224,7 +234,7 @@ export:
                 DelegateAccessor="file",
                 DelegatePath=ImagePath,
                 Path=Hive.Path))),
-          on=dict(accessor=Accessor, prefix=Key, path_type="registry"))
+          on=dict(accessor="registry", prefix=Key, path_type="registry"))
 
 sources:
 - query: |
@@ -240,12 +250,14 @@ sources:
          item=dict(remappings=  Remappings.remappings + 
                                 _FindFilesAutoAccessor.map +
                                 _FindWindowsMFT.map +
-                                _FindWindowsHives.map + 
-                                _FindUserHives.map + 
+                                _FindWindowsHives.map +
+                                _FindUserHives.map +
                                 _FindAmcache.map +
-                                _FindUsrClass.map))
+                                _FindUsrClass.map
+                                ))
 
     SELECT if(condition=Upload,
              then=upload(accessor="data", file=YamlText, name=Remappingfilename),
              else=YamlText) AS Remapping
     FROM scope()
+   
