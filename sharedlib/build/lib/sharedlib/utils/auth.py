@@ -1,13 +1,13 @@
-from ..manager.adx import AdxManager
-from ..manager.azure import AzureManager
-from ..manager.blob import BlobManager
-from ..manager.sas import SasManager
-from ..manager.sftp import SftpManager
-from ..manager.table import TablestorageManager
-from ..manager.keyvault import KeyvaultManager
-from ..manager.queue import QueueManager
+from sharedlib.manager.adx import AdxManager
+from sharedlib.manager.azure import AzureManager
+from sharedlib.manager.blob import BlobManager
+from sharedlib.manager.sas import SasManager
+from sharedlib.manager.sftp import SftpManager
+from sharedlib.manager.table import TablestorageManager
+from sharedlib.manager.keyvault import KeyvaultManager
+from sharedlib.manager.queue import QueueManager
 from dataclasses import dataclass
-from ..utils.config import load_config
+from sharedlib.utils.config import load_config
 import logging as log
 
 Config = load_config()
