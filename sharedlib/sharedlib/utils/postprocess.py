@@ -7,7 +7,7 @@ import json
 import re
 import time
 from pathlib import Path
-from sharedlib.sharedlib.utils.files import create_directory_if_not_exists
+from sharedlib.utils.files import create_directory_if_not_exists
 
 log = log.getLogger(__name__)
 

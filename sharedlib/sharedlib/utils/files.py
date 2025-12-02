@@ -18,6 +18,57 @@ def list_files_in_directory(directory):
     log.info(f'Found {len(file_list)} zip file(s).')
     return file_list
 
+def split_jsonl_by_size(path, target_bytes=1_000_000_000, encoding='utf-8'):
+    '''
+    Split a line-delimited JSON (JSONL/NDJSON) file into ~target_bytes chunks,
+    without ever splitting a line (so JSON stays valid).
+    '''
+
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f'File not found: {path}')
+
+    base = os.path.basename(path)
+    folder = os.path.dirname(path) or '.'
+    part_num = 1
+    part_paths = []
+
+    def _open_new_part(num):
+        part_path = os.path.join(folder, f'{base}.part{num}')
+        f = open(part_path, 'w', encoding=encoding, newline='\n')
+        part_paths.append(part_path)
+        return f, part_path
+
+    current_size = 0
+    out_f, current_part_path = _open_new_part(part_num)
+
+    with open(path, 'r', encoding=encoding) as src:
+        for line in src:
+            # Size in bytes, not characters
+            line_size = len(line.encode(encoding))
+
+            # If this line would push us over the target, start a new file
+            if current_size > 0 and current_size + line_size > target_bytes:
+                out_f.close()
+                part_num += 1
+                out_f, current_part_path = _open_new_part(part_num)
+                current_size = 0
+
+            out_f.write(line)
+            current_size += line_size
+
+    out_f.close()
+    return part_paths
+
+def get_filesize_bytes(path):
+    '''
+    Returns the size of a file in bytes.
+    Raises FileNotFoundError if the file does not exist.
+    '''
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"File not found: {path}")
+
+    return os.path.getsize(path)
+
 def create_directory_if_not_exists(dest_path):
     '''Creates a directory when it does not exist'''
 

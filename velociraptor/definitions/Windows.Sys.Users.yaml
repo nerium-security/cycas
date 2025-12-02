@@ -1,0 +1,29 @@
+name: Windows.Sys.Users
+description: |
+  List User accounts by inspecting registry keys. This method is a
+  reliable indicator for users who have physically logged into the
+  system and thereby created local profiles.
+
+  This will not include domain users or the output from `NetUserEnum`
+  - you should collect the `Windows.Sys.AllUsers` artifact to get all
+  possible users on the system.
+
+parameters:
+  - name: remoteRegKey
+    default: HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*
+
+imports:
+  - Windows.Sys.AllUsers
+
+sources:
+  - precondition:
+      SELECT OS From info() where OS = 'windows'
+
+    query: |
+        LET GetTimestamp(High, Low) = if(condition=High,
+                then=timestamp(winfiletime=High * 4294967296 + Low))
+        LET S = scope()
+
+        -- lookupSID() may not be available on deaddisk analysis
+        SELECT test as 'test'
+        FROM scope()
