@@ -1,0 +1,19 @@
+{
+  "ignorelist": [
+    "uploads.json",
+    "log.json",
+    "client_info.json", 
+    "logs.json",
+    "custom_artifacts.json", 
+    "collection_context.json", 
+    "requests.json", 
+    "Custom.Windows.Nerium.Collection%2Finfo.json",
+    "log.json",
+    "hunt_info.json",
+    "Windows.KapeFiles.Targets%2FAll File Metadata.json",
+    "Windows.KapeFiles.Targets%2FUploads.json"
+  ],
+  "ignorepattern": [
+    "uploads/*"
+  ]
+}
