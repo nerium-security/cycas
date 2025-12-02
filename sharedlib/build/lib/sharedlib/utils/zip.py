@@ -4,6 +4,8 @@ import os
 import re
 import json
 import fnmatch
+import getpass
+import glob
 
 log = log.getLogger(__name__)
 
@@ -17,6 +19,39 @@ def is_zip_encrypted(zipfile):
                 return True
             else:
                 return False
+
+def get_hostname_from_filename(fullpath):
+    ''' 
+    Extracts the hostname from filename using regex. 
+    
+    Examples of hostnames that are extracted:
+    
+    - Collection-HOSTNAME-2024-03-01T16_10_46Z.zip
+    - HOSTNAME-2025-03-01T16_10_46Z.zip
+    - LAPTOP-DC-C.65e548a6aa01faa1-F.D3DN1LABPD0OA
+    '''
+
+    if fullpath:
+        if fullpath.upper().startswith("H."):
+            return ''
+        elif fullpath.upper().startswith("Hunt H."):
+            return ''
+
+    pattern = re.compile(
+        r'(?:collection-)?'                                                     # optional prefix
+        r'([A-Z0-9-]+?)'                                                        # hostname
+        r'(?=_|-[A-Z]\.[0-9a-f]{6,}|-C\.|-202[0-9]-[0-9]{2}-[0-9]{2}T|\.|$)',   # stop here (lookahead)
+        re.IGNORECASE
+    )
+
+    if fullpath:
+        match = pattern.search(fullpath)
+        if match:
+            match = match.group(1)
+            log.info(f'Extracted hostname from zipfilename: {match}')
+            return match
+        else:
+            return ''
 
 def verify_if_password_works(zipfile, zip_password):
     try:
@@ -34,22 +69,27 @@ def extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_pass
     '''Extract zip file if it is encrypted with a password.'''
 
     zipfilecontent = list_files_in_zip(zipfile, zip_password)
+    
+
+    if not zipfilecontent:
+        return None, zipfile
 
     for file_in_zip in zipfilecontent:
         
         if 'data.zip' in file_in_zip.filename:
 
             extracted_zip = extract_single_file(zipfile, file_in_zip, extract_path, zip_password)
-
+            
             if not extracted_zip:
-                return
-
+                
+                return None, zipfile
+            
             zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
             
-            return extracted_zip
+            return extracted_zip, None
         
         else:
-            return zipfile
+            return zipfile, None
 
 def get_extract_path(zip_path, base_extract_dir):
     '''Builds a clean extraction path based on the zip filename.'''
@@ -128,13 +168,14 @@ def load_ignore_list(ignorelist_path):
 
 def list_files_in_zip(zip_path, password=None):
     '''Returns a list of file names contained in the zip archive.'''
+
     try:
         with pyzipper.AESZipFile(zip_path, 'r') as zf:
             # Set password if encrypted
             encrypted = any(info.flag_bits & 0x1 for info in zf.infolist())
             if encrypted:
                 if not password:
-                    log.info(f'Password required to list files in encrypted zip: {zip_path}')
+                    log.info(f'Cannot extract as password is required: {zip_path}')
                     return []
                 zf.pwd = password.encode()
 
@@ -163,3 +204,65 @@ def find_computername(filename):
     else:
         log.warning('Computer name not found.')
         return 'ComputernameNotFound'
+
+def get_password(zipfile, passwords):
+    password_ok = False
+    working_password = None
+    incorrect_pw = False
+    if is_zip_encrypted(zipfile):
+        for password in passwords:
+            password_ok = verify_if_password_works(zipfile, password)
+
+            if password_ok:
+                working_password = password
+                break
+
+
+        if not password_ok:
+
+            user_pw = getpass.getpass(f'\nEnter password for {zipfile} (press Enter to skip): ').strip()
+
+            if user_pw and verify_if_password_works(zipfile, user_pw):
+                print('password okay')
+                passwords.append(user_pw)
+                working_password = user_pw
+
+            else:
+                print('password not okay')
+                incorrect_pw = True
+
+            print('\nTip: store passwords in ENV to not have to repeat this: export ZIP_PASSWORDS=\'[\"mypass1\", \"mypass2\"]\'\n')
+
+    else:
+        print('Not encrypted: ' + zipfile)
+    
+    return passwords, working_password, incorrect_pw
+
+def load_from_env_variable():
+    
+    passwords_json = os.getenv('ZIP_PASSWORDS', '[]')
+    passwords = json.loads(passwords_json)
+
+    return passwords
+
+def find_zip_files(zip_patterns):
+    files = []
+    for pattern in zip_patterns:
+        # Expand wildcards recursively
+        expanded = glob.glob(pattern, recursive=True)
+        files.extend(expanded)
+    # Filter ZIPs and remove duplicates
+    files = [f for f in set(files) if f.lower().endswith('.zip')]
+    return sorted(files)
+
+def get_password_from_env_or_prompt(source_name, unextracted_zip):
+    if source_name == 'localfolder':
+        passwords = load_from_env_variable()
+        passwords, zip_password, incorrect_pw = get_password(unextracted_zip, passwords)
+        if not incorrect_pw:
+            return zip_password, unextracted_zip
+
+        if incorrect_pw:
+            return None, None
+
+    return None, None
