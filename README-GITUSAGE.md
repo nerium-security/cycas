@@ -1,6 +1,6 @@
 # Create future branch
 PREFIX='feature'
-SUFFIX='azurefunctions'
+SUFFIX='customartifacts'
 git switch -c "$PREFIX/$SUFFIX"
 
 < Do the actual work >
