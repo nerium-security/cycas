@@ -2,33 +2,33 @@
   "essential": [
   ],
   "full": [
-    "Custom.Windows.Sys.Users"
-  ],
-  "skip":[
-    "Windows.Registry.NTUser(KeyGlob='HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\**')",
+    "Custom.Windows.Registry.UserAssist()",
+    "Custom.Windows.Sys.Users()",
+    "Windows.Sys.AppcompatShims()",
+    "Custom.Windows.Forensics.Bam()",
+    "Windows.Forensics.RecentApps(RecentAppsKey='HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\**')",
+    "Windows.Forensics.UserAccessLogs()",
+    "Custom.Windows.Registry.NTUser()",
+    "Custom.Windows.Registry.RDP()",
+    "Custom.Windows.Registry.RecentDocs()",
+    "Windows.Forensics.Shellbags()",
+    "Windows.Detection.Amcache()",
+    "Custom.Windows.Forensics.SAM()",
     "Windows.System.Powershell.PSReadline()",
     "Windows.System.TaskScheduler()",
     "Windows.Forensics.RecycleBin()",
     "Windows.EventLogs.Evtx()",
-    "Windows.Forensics.Bam(bamKeys='KeyGlob\\nHKEY_LOCAL_MACHINE\\SYSTEM\\ControlSet*\\Services\\bam\\**\\nHKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\*\\*')",
-    "Windows.Detection.Amcache(KeyPathGlob='/amcachemount/Root/{Inventory, File}*/**')",
-    "Windows.Forensics.UserAccessLogs()",
     "Generic.Forensic.SQLiteHunter()",
-    "Custom.Windows.Forensics.SAM()",
     "Custom.Windows.Registry.Interfaces()",
-    "Windows.Registry.RDP(KeyGlob='HKEY_USERS\\*\\Software\\Microsoft\\Terminal Server Client\\{Default,Servers\\}\\**')",
-    "Windows.Sys.Users()",    
-    "Windows.Sys.AppcompatShims()",
     "Windows.Registry.AppCompatCache()",
     "Windows.Forensics.Prefetch()",
     "Windows.Sys.Programs()",
     "Windows.NTFS.MFT()",
     "Windows.Forensics.Usn(USNFile='C:\\\\$Extend\\\\$UsnJrnl%3A$J', MFTFile='C:\\\\$MFT', Accessor='ntfs')",
-    "Windows.Registry.RecentDocs(KeyGlob='HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\**')",
-    "Windows.Registry.UserAssist(UserAssistKey='HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\*\\Count\\*')",
-    "Windows.Forensics.RecentApps(RecentAppsKey='HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\RecentApps\\*')",
     "Windows.Forensics.JumpLists()",
     "Windows.Forensics.SRUM()",
     "Windows.Forensics.Timeline()"
+  ],
+  "skip":[
   ]
 }
