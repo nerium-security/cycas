@@ -23,9 +23,14 @@ class QueueManager:
     def authenticate(self) -> bool:
         ''' Authenticate and create the QueueClient.'''
         try:
+
             queue_endpoint = f'{self.queue_url}/{self.queue_name}'
             log.info(f'Authenticating with storage queue: {queue_endpoint}')
             self.queue_client = QueueClient(self.queue_url, self.queue_name, self.credential)
+            
+            # create the queue
+            self.create_queue_if_not_exists(self.queue_name)
+
             # Test the connection
             self.queue_client.get_queue_properties()
             log.info(f'Successfully authenticated.')
@@ -33,6 +38,20 @@ class QueueManager:
         except AzureError as e:
             log.info(f'Authentication failed: {e}')
             return False
+
+    def create_queue_if_not_exists(self, queue_name: str):
+        '''
+        Creates a queue only if it does not already exist.
+        '''
+
+        try:
+            self.queue_client.create_queue()
+            log.info(f'Queue \'{queue_name}\' created.')
+
+        except:
+            log.info(f'Queue \'{queue_name}\' already exists.')
+
+        return
 
     def peek_messages(self, max_messages: int = 1):
         '''Peek at messages without dequeuing.'''
@@ -66,23 +85,13 @@ class QueueManager:
 
         self.queue_client.delete_message(message)
 
-    def encode_messsage(self, zipfile: str, source_name: str):
-        '''Encodes the message for sending or deleting it to queue'''
-
-        content = json.dumps({'triagepackage': zipfile, 'source_name' : source_name})
-        message_bytes = content.encode('utf-8')
-        base64_bytes = base64.b64encode(message_bytes)
-        message_output = base64_bytes.decode('utf-8')
-
-        return message_output, content
-
     def send_message(self, zipfile: str, source_name: str) -> bool:
         '''Send a message to the queue. Message content (must be <= 64KB)'''
         if not self.queue_client:
             raise ValueError('Queue client not authenticated. Call authenticate() first.')
 
         try:
-            base64_message, content = self.encode_messsage(zipfile, source_name)
+            base64_message, content = encode_messsage(zipfile, source_name)
             self.queue_client.send_message(base64_message)
             log.info(f'Sent to queue: {self.queue_name}.')
 
@@ -100,3 +109,13 @@ def decode_message(message):
     message_content_decoded_ascii = message_content_decoded.decode('ascii')
 
     return message_content_decoded_ascii
+
+def encode_messsage(zipfile: str, source_name: str):
+    '''Encodes the message for sending or deleting it to queue'''
+
+    content = json.dumps({'triagepackage': zipfile, 'source_name' : source_name})
+    message_bytes = content.encode('utf-8')
+    base64_bytes = base64.b64encode(message_bytes)
+    message_output = base64_bytes.decode('utf-8')
+
+    return message_output, content
