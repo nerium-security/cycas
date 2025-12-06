@@ -44,17 +44,3 @@ def setup_logging(loglocation, loglevel):
         log.getLogger(logger_name).setLevel(log.WARNING)
 
     return sessionid
-    
-def get_duration_from_timespan(start):
-    ''' 
-    Used to calculate the duration to output it in a human-friendly manner.
-    
-    Args:
-        start = datetime.now()
-    '''
-
-    end = datetime.now()
-    duration_seconds = (end - start).total_seconds()
-    minutes, seconds = divmod(duration_seconds, 60)
-
-    return f'{int(minutes)}m {int(seconds)}s'
