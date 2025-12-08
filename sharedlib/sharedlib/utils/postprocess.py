@@ -54,7 +54,7 @@ def run_command(cmd, store_output=False):
     return cp, duration
 
 def collecting_data_for_summary(duration):
-    ''' Returns value with only 2 decimals after comma  '''
+    ''' Returns value with only 2 decimals after comma '''
 
     return round(duration, 2)
 
