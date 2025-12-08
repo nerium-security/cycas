@@ -1,9 +1,8 @@
 from sharedlib.utils.config import load_config
 from sharedlib.utils.files import split_jsonl_by_size, list_files_in_directory, list_files_in_directory, delete_file, filter_triage_packages, get_filesize_bytes
 from sharedlib.utils.zip import get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename
-from sharedlib.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
-from sharedlib.utils.log import get_duration_from_timespan
-from sharedlib.utils.misc import send_webhook
+from sharedlib.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess, collecting_data_for_summary, generate_summary_postprocessing
+from sharedlib.utils.misc import send_webhook, get_duration_from_timespan
 from sharedlib.utils.auth import Authenticator
 from sharedlib.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing
 from datetime import datetime
@@ -125,10 +124,12 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent):
         artifacts = select_artifacts(artifacts_json, postprocess_var)
 
         start_postprocessing = datetime.now()
-        
-        for artifact in artifacts:
 
-            postprocessed_json = postprocess(hostname, 
+        summary = {}
+        summary[zipfile] = {}
+        for artifact in artifacts:
+            
+            postprocessed_json, duration = postprocess(hostname, 
                                              artifact, 
                                              zipfile, 
                                              definitions, 
@@ -137,11 +138,15 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent):
                                              outputformat,
                                              remappingfile)
 
+            summary[zipfile][artifact] = collecting_data_for_summary(duration)
+
             if postprocessed_json:
 
                 upload_results[postprocessed_json] = upload_file_to_adx(managers, postprocessed_json)
                 delete_file(postprocessed_json)
 
+        generate_summary_postprocessing(summary, zipfile, unzip_dir, '_summary.json')
+        
         duration = get_duration_from_timespan(start_postprocessing)
 
         if Config.adx_cluster_enabled:

@@ -1,5 +1,6 @@
 import requests
 import logging as log
+from datetime import datetime
 
 log = log.getLogger(__name__)
 
@@ -24,3 +25,33 @@ def send_webhook(url: str, message: str) -> bool:
         log.exception(f"Unexpected error: {err}")
 
     return False
+
+def adding_seconds(summary):
+    '''
+    Adds the unit "seconds" to be able to pretty print the results
+    of artifact post-processing.
+    '''
+
+    return {k: f"{v:.2f} seconds" for k, v in summary.items()}
+
+def calculate_total(summary):
+    ''' 
+    Sums the total of post-processing time and returns it with two
+    decimals after the comma
+    '''
+
+    return round(sum(v for v in summary.values() if v is not None), 2)
+
+def get_duration_from_timespan(start):
+    ''' 
+    Used to calculate the duration to output it in a human-friendly manner.
+    
+    Args:
+        start = datetime.now()
+    '''
+
+    end = datetime.now()
+    duration_seconds = (end - start).total_seconds()
+    minutes, seconds = divmod(duration_seconds, 60)
+
+    return f'{int(minutes)}m {int(seconds)}s'

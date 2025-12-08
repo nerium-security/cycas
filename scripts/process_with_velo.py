@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import logging as log
+import json
 from datetime import datetime
 from pathlib import Path
 from sharedlib.utils.postprocess import (download_velociraptor, 
@@ -9,14 +10,17 @@ from sharedlib.utils.postprocess import (download_velociraptor,
                                          find_hostname, 
                                          load_artifacts, 
                                          select_artifacts, 
-                                         postprocess)
+                                         postprocess,
+                                         generate_summary_postprocessing,
+                                         collecting_data_for_summary)
 
 from sharedlib.utils.zip import (extract_encrypted_and_non_encrypted_zipfiles, 
                                  get_password,
                                  load_from_env_variable,
                                  find_zip_files)
 
-from sharedlib.utils.log import setup_logging, get_duration_from_timespan
+from sharedlib.utils.log import setup_logging
+from sharedlib.utils.misc import get_duration_from_timespan
 
 script_path = sys.argv[0]
 scriptname = os.path.basename(script_path)
@@ -73,9 +77,11 @@ def main():
     artifacts_fullpath = os.path.join(scriptlocation, artifacts)
     artifacts_json = load_artifacts(artifacts_fullpath)
     artifacts_selected = select_artifacts(artifacts_json, essentials_or_full)
+    summary = {}
 
     for zipfile in zipfiles:
         zipfile = str(zipfile)
+        summary[zipfile] = {}
 
         if outputfolder:
             p = Path(zipfile)
@@ -89,7 +95,7 @@ def main():
         if incorrect_pw:
             continue
         
-        extracted_zip, unextracted_zip = extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password)
+        extracted_zip, _ = extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password)
 
         remappingfile = build_remap(extracted_zip, 
                                     extract_path,
@@ -103,7 +109,7 @@ def main():
 
         for artifact in artifacts_selected:
 
-            postprocessed = postprocess(hostname, 
+            postprocessed, duration = postprocess(hostname, 
                                         artifact, 
                                         zipfile, 
                                         definitions, 
@@ -112,11 +118,18 @@ def main():
                                         outputtype,
                                         remappingfile)
 
+            summary[zipfile][artifact] = collecting_data_for_summary(duration)
+
             if postprocessed:
                 log.info(f'Output written to: {postprocessed}')
-            
+
+        generate_summary_postprocessing(summary, zipfile, extract_path, '_summary.json')
+
         duration = get_duration_from_timespan(start)
-        log.info(f'Script finished in: {duration}')
+        log.info(f'Post-processing of zip finished in: {duration}')
+
+    duration = get_duration_from_timespan(start)
+    log.info(f'Script finished in: {duration}')
 
 if __name__ == '__main__':
     main()

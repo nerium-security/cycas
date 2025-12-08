@@ -8,6 +8,7 @@ import re
 import time
 from pathlib import Path
 from sharedlib.utils.files import create_directory_if_not_exists
+from sharedlib.utils.misc import calculate_total, adding_seconds
 
 log = log.getLogger(__name__)
 
@@ -40,12 +41,38 @@ def run_command(cmd, store_output=False):
 
         cp = subprocess.run(cmd, check=True, **run_opts)
         end = time.time()
+
         duration = end - start
+        
         log.info(f'Command executed successfully in {duration:.2f} seconds.')
-        return cp
+
     except subprocess.CalledProcessError as e:
         log.info(f'Command failed to execute. Error: {e.returncode}')
-        return None
+        cp = None
+        duration = None
+    
+    return cp, duration
+
+def collecting_data_for_summary(duration):
+    ''' Returns value with only 2 decimals after comma '''
+
+    return round(duration, 2)
+
+def generate_summary_postprocessing(summary, zipfile, extracted_zip, filename):
+    ''' Generates a summary of post-processing time and dumps it to stdout and a file '''
+
+    summary[zipfile]['total'] = calculate_total(summary[zipfile])
+    summary[zipfile] = adding_seconds(summary[zipfile])
+    summary_json = json.dumps(summary, indent=4)
+
+    log.info('Printing summary:')
+    print('\n', summary_json, '\n')
+
+    fullpath = os.path.join(extracted_zip, filename)
+    log.info(f'Outputting summary to: {fullpath}')
+    with open(fullpath, 'w') as f:
+        f.write(summary_json)
+
 
 def download_velociraptor(binary, url):
     '''This function downloads the velociraptor binary if it does not exist on disk yet.'''
@@ -82,7 +109,7 @@ def build_remap(zipfile, remapfolder, binary, definitions, unzipdir):
 
     unzip_dir_fullpath = get_zipfiledir(zipfile, unzipdir)
 
-    remappingfilename = 'remapping.yaml'
+    remappingfilename = '_remapping.yaml'
 
     cmd = [
         binary,
@@ -118,7 +145,7 @@ def find_hostname(remappingfile, binary, definitions):
     ]
 
     log.info(f'Extracting hostname in {registrykey}')
-    result = run_command(cmd, store_output=True)
+    result, _ = run_command(cmd, store_output=True)
     try:
         hostname = json.loads(result.stdout)[0]['Hostname']
         log.info(f'Successfully extracted hostname: {hostname}')
@@ -218,9 +245,9 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
     ]
 
     log.info(f'Running artifact: {artifact}')
-    run_command(cmd)
+    _, duration = run_command(cmd)
 
     if os.path.exists(outputfile) and os.path.getsize(outputfile) == 0:
         log.debug(f'Empty file: {outputfile}')
-    else:
-        return outputfile
+
+    return outputfile, duration
