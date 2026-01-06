@@ -24,17 +24,17 @@ class Status:
     FINISHED = 'finished'
     UPLOADDISABLED = 'uploaddisabled'
 
-def update_status_in_log(managers, status, zipfile, source_name, sessionid, start):
+def update_status_in_log(managers, processing_status, start, status_data):
 
     if Config.blob_logtable_enabled:
 
-        managers.table.update_status_in_log(status, zipfile, source_name, sessionid, start)
+        managers.table.update_status_in_log(processing_status, start, status_data)
 
-def write_logentry_if_new(managers, source_name, zipfile, sessionid, status):
+def write_logentry_if_new(managers, processing_status, status_data):
 
     if Config.blob_logtable_enabled:
 
-        managers.table.writes_log_entry_if_not_exists(zipfile, source_name, sessionid, status)
+        managers.table.writes_log_entry_if_not_exists(processing_status, status_data)
 
 def determine_if_needs_processing(managers, zipfile):
 

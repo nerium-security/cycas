@@ -34,18 +34,21 @@ class TablestorageManager:
     def hash_filename(self, filename):
         return hashlib.md5(filename.encode()).hexdigest()[:8]          
 
-    def build_log_entity(self, status, zipfile, source, sessionid, duration) -> dict:
+    def build_log_entity(self, status, duration, status_data) -> dict:
 
         return {
             'PartitionKey': self.partitionkey,
-            'RowKey': self.hash_filename(zipfile),
-            'Fullpath': zipfile,
+            'RowKey': self.hash_filename(status_data.get('zipfile_basename')),
+            'ZipfileBasename': status_data.get('zipfile_basename'),
             'Status': status,
-            'Sessionid': sessionid,
+            'Sessionid': status_data.get('sessionid'),
             'ScriptLocation': self.computername,
-            'Source': source,
+            'Source': status_data.get('source_name'),
             'Duration': duration,
             'StartTime': f'{datetime.utcnow():%Y-%m-%dT%H:%M:%SZ}',
+            'Hostname': status_data.get('hostname'),
+            'Size': status_data.get('zipfile_size'),
+            'Artifacts_succes': None
         }
 
     def calculate_duration(self, starttime):
@@ -79,7 +82,7 @@ class TablestorageManager:
     def retrieve_log_entry(self, zip):
 
         try:
-            results = self.table_client.query_entities(f"Fullpath eq '{zip}'")
+            results = self.table_client.query_entities(f"ZipfileBasename eq '{zip}'")
             for result in results:
                 return result
             
@@ -89,46 +92,26 @@ class TablestorageManager:
     def determine_if_already_retrieved_from_queue(self, zipfile: str, source: str, status, Config):
         '''Determines if a triagepackage is already retrieved from queue and update log status'''
 
-    def writes_log_entry_if_not_exists(self, zipfile: str, source: str, sessionid: str, status: str):
+    def writes_log_entry_if_not_exists(self, processing_status: str, status_data: dict):
 
-        zipfile = os.path.basename(zipfile)
+        zipfile = status_data.get('zipfile_basename')
         existing_entry = self.retrieve_log_entry(zipfile)
-        entity = self.build_log_entity(status, zipfile, source, sessionid, None)
+        entity = self.build_log_entity(processing_status, None, status_data)
 
         if not existing_entry:
             log.info(f'No log entry found for {zipfile}. Writing new one.')
             self.table_client.create_entity(entity)
             return True
 
-    def determine_if_need_for_processing(self, zipfile: str, source: str, sessionid: str, status: str, Config):
-        '''Determines if a triagepackage should be processed by this script instance and writes log entries'''
+    def update_status_in_log(self, status, starttime, status_data):
 
-        retry = Config.var_retryfailed
-
-        zipfile = os.path.basename(zipfile)
-        existing_entry = self.retrieve_log_entry(zipfile)
-        entity = self.build_log_entity(status, zipfile, source, sessionid, None)
-
-        if not existing_entry:
-            log.info(f'No log entry found for {zipfile}. Writing new one.')
-
-            self.table_client.create_entity(entity)
-            return True
-
-        if self.check_if_processing_by_this_instance(zipfile, sessionid):
-            log.info(f'{zipfile} is already being processed by this instance.')
-            return True
-
-        log.info(f'Skipping {zipfile}. Already processed or processing.')
-        return False
-
-    def update_status_in_log(self, status, zipfile, source, sessionid, starttime):
+        zipfile = status_data.get('zipfile_fullpath')
 
         zipfile = os.path.basename(zipfile)
 
         duration = self.calculate_duration(starttime)
 
-        entity = self.build_log_entity(status, zipfile, source, sessionid, duration)
+        entity = self.build_log_entity(status, duration, status_data)
 
         self.update_log_entry(entity)
 

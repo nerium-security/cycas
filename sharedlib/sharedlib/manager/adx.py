@@ -77,7 +77,8 @@ class AdxManager:
 
             return df
         except Exception as e:
-            log.error(f'Error converting file to dataframe: {e}')
+
+            log.error(f'Error converting {f} to dataframe: {e}')
             return pd.DataFrame()
 
     def find_dynamic_int_columns(self, df, var_sample_size):
@@ -204,9 +205,10 @@ class AdxManager:
             data_format=DataFormat.JSON,
             report_level=ReportLevel.FailuresAndSuccesses)
 
-    def launch_upload_file(self, tablename: str, fullpath: str) -> bool:
+    def launch_upload_file(self, tablename: str, fullpath: str, result: dict) -> bool:
         '''Uploads a file to adx'''
 
+        start = time.time()
         ingestion_props = self.read_ingestion_properties(tablename)
 
         try:
@@ -214,24 +216,52 @@ class AdxManager:
 
             self.kusto_queued.ingest_from_file(fullpath, ingestion_properties=ingestion_props)
 
-            log.info(f'Successfully initiated upload request of {basename} to table {tablename}')
+            duration = time.time() - start
 
-            return True
+            log.info(f'Successfully initiated upload request of {basename} to table {tablename}')
+            result['success'] = True
+            result['duration'] = duration
+
         except Exception as e:
             log.error(f'Failed to initiate the data upload request of {basename} to table {tablename}. Error: {e}' )
-            return False
 
-    def add_hostname_to_file(self, fullpath, hostname, zipfile):
+            duration = time.time() - start
+            result['success'] = False
+            result['duration'] = duration
+            result['error'] = str(e)  
+
+        result['fullpath'] = fullpath
+        result['basename'] = basename
+        result['size'] = os.path.getsize(fullpath)
+
+        return result
+
+    def add_hostname_to_file(self, fullpath, hostname, zipfile, hostname_dict):
         ''' Adds hostname and sourcefilename inline to file'''
 
+        start = time.time()
+        basename = os.path.basename(fullpath)
         columns = f',"Sourcefilename":"{zipfile}","Hostname":"{hostname}"'
         replacement = columns + '}'
 
-        for line in fileinput.input(fullpath, inplace=True):
-            line = line.rstrip("\n")
-            if line.endswith("}"):
-                line = line[:-1] + replacement
-            print(line)
+        try:
+            for line in fileinput.input(fullpath, inplace=True):
+                line = line.rstrip("\n")
+                if line.endswith("}"):
+                    line = line[:-1] + replacement
+                print(line)
+        except Exception as e:
+            log.error(f'Could not add hostname as column to file {basename}. Error: {e}')
+            hostname_dict['error'] = e
+        
+        duration = time.time() - start
+
+        hostname_dict['fullpath'] = fullpath
+        hostname_dict['basename'] = basename
+        hostname_dict['duration'] = duration
+
+        return hostname_dict
+
 
     def check_if_table_exists(self, tablename):
 

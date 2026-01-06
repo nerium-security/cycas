@@ -65,12 +65,24 @@ def verify_if_password_works(zipfile, zip_password):
     except Exception:
         return False
 
+def zip_contains_raw_artifacts(content):
+    
+    for file_in_zip in content:
+
+        if file_in_zip.filename.startswith('uploads/'):
+            log.info('Starts post-processing as zipfile seems to contain raw artifacts in \'uploads\' folder')
+            
+            return True
+    
+    log.info('Skipping post-processing as zipfile does not '
+             'seem to contain raw artifacts typically stored in \'uploads\' folder')
+    return False
+
 def extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password):
     '''Extract zip file if it is encrypted with a password.'''
 
     zipfilecontent = list_files_in_zip(zipfile, zip_password)
     
-
     if not zipfilecontent:
         return None, zipfile
 
