@@ -5,7 +5,7 @@ from sharedlib.utils.postprocess import download_velociraptor, build_remap, find
 from sharedlib.utils.summary import define_results_addhostname_dict, define_results_upload_dict, add_results_as_list, define_results_dict, add_info_to_results, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file, add_statistics_to_results
 from sharedlib.utils.misc import send_webhook
 from sharedlib.utils.auth import Authenticator
-from sharedlib.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing
+from sharedlib.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing, upload_detailed_status
 from datetime import datetime
 import os
 import logging as log
@@ -69,9 +69,12 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
                                                    zipfilecontent, 
                                                    results)
 
+
     results = add_info_to_results(results, key='finished', value=True)
     results = add_statistics_to_results(results)
-    breakpoint()
+    
+    upload_detailed_status(managers, results, tablename='_status')
+
     #summary_per_zip = pretty_print_summary_per_zip(zipfile, results, mode='limited')
     #summary_per_zip_to_file(summary_per_zip, extract_path, Config.var_artifact_summary_filename)
 
@@ -282,7 +285,7 @@ def upload_file_to_adx(managers, file):
 
     if Config.adx_cluster_enabled:
 
-        tablename = managers.adx.create_new_table_if_required(Config, file)
+        tablename = managers.adx.create_new_table_if_required(Config, file, forcetablename=False)
 
         result = managers.adx.launch_upload_file(tablename, file, result)
 

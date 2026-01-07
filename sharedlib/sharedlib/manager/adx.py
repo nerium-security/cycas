@@ -67,8 +67,18 @@ class AdxManager:
 
         try:
 
-            df = pd.read_json(f, lines=True, nrows=nrows, chunksize=chunksize)
-            log.debug(f'Loaded chunk of file into Pandas dataframe: {f}')
+            # --- In-memory JSON cases ---
+            if isinstance(f, dict):
+
+                df = pd.DataFrame([f])
+
+            elif isinstance(f, list):
+                df = pd.DataFrame(f)
+
+            # --- Filepath case ---
+            elif isinstance(f, (str, Path)):
+                df = pd.read_json(f, lines=True, nrows=nrows, chunksize=chunksize)
+                log.debug(f'Loaded chunk of file into Pandas dataframe: {f}')
 
             if isinstance(df, pd.DataFrame):
                 if df.empty:
@@ -153,10 +163,13 @@ class AdxManager:
 
         return ', '.join(parts)
 
-    def create_new_table_if_required(self, Config, file):
+    def create_new_table_if_required(self, Config, file, forcetablename):
         ''' Creates a new table when there is isn't one or when a new column needs to be added to the table '''
-
-        tablename = self.get_tablename(os.path.basename(file))
+        
+        if forcetablename:
+            tablename = forcetablename
+        else:
+            tablename = self.get_tablename(os.path.basename(file))
 
         table_exists, existing_columns = self.check_if_table_exists(tablename)
 
@@ -185,7 +198,7 @@ class AdxManager:
 
     def get_table_createcommand(self, file, Config, tablename):
         ''' Prepares the command for creating a table in ADX'''
-
+        
         df = self.convert_to_dataframe(file, Config.var_sample_size, chunksize=None)
 
         columnames = self.remove_columnames_with_special_characters(df.columns)
@@ -196,6 +209,11 @@ class AdxManager:
 
         return f'.create-merge table {tablename} ({columnstring})', columnames
 
+    def upload_detailed_status(self, tablename, results, Config):
+
+        table = self.create_new_table_if_required(Config, results, tablename)
+        results_df = pd.DataFrame([results])
+        self.launch_upload_df(results_df, table)
 
     def read_ingestion_properties(self, tablename):
 
@@ -236,6 +254,18 @@ class AdxManager:
 
         return result
 
+    def launch_upload_df(self, df, tablename: str) -> bool:
+        '''Uploads a dataframe to adx'''
+
+        ingestion_props = self.read_ingestion_properties(tablename)
+
+        try:
+            self.kusto_queued.ingest_from_dataframe(df, ingestion_properties=ingestion_props)
+            log.info(f'Initiated the upload of detailed status to ADX table: {tablename}')
+
+        except Exception as e:
+            log.error(f'Failed to initiate the data upload request to table {tablename}. Error: {e}' )
+
     def add_hostname_to_file(self, fullpath, hostname, zipfile, hostname_dict):
         ''' Adds hostname and sourcefilename inline to file'''
 
@@ -261,7 +291,6 @@ class AdxManager:
         hostname_dict['duration'] = duration
 
         return hostname_dict
-
 
     def check_if_table_exists(self, tablename):
 

@@ -58,3 +58,9 @@ def determine_if_needs_processing(managers, zipfile):
     else:
         log.debug('Is already processed or processing.')
         return False
+    
+def upload_detailed_status(managers, results, tablename):
+
+    if Config.adx_cluster_enabled:
+
+        managers.adx.upload_detailed_status(tablename, results, Config)
