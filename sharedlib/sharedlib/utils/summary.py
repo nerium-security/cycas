@@ -22,9 +22,11 @@ def define_results_dict():
         'zipfile_size': None,
         'hostname': None,
         'artifacts': [],
-        'uploads': [],
+        'artifacts_uploaded': [],
+        'json_files_in_zip_uploaded': [],
         'added_hostname_as_column_to_file': [],
         'artifacts_to_be_processed': None,
+        'statistics': {},
         'finished': None
     }
 
@@ -39,7 +41,7 @@ def define_results_postprocess_dict():
         'error': None,
         'stdout': None,
         'stderr': None,
-        'returncode': None,
+        'returncode': None
     }
 
 def define_results_upload_dict():
@@ -49,7 +51,7 @@ def define_results_upload_dict():
         'size': None,
         'success': None,
         'duration': None,
-        'error': None,
+        'error': None
     }
 
 def define_results_addhostname_dict():
@@ -80,7 +82,8 @@ def add_statistics_to_results(results: Dict[str, Any]) -> Dict[str, Any]:
     '''
 
     artifacts: List[Dict[str, Any]] = list(results.get('artifacts') or [])
-    uploads: List[Dict[str, Any]] = list(results.get('uploads') or [])
+    json_files_in_zip_uploaded: List[Dict[str, Any]] = list(results.get('json_files_in_zip_uploaded') or [])
+    artifacts_uploaded: List[Dict[str, Any]] = list(results.get('artifacts_uploaded') or [])
     hostname_steps: List[Dict[str, Any]] = list(
         results.get('added_hostname_as_column_to_file') or []
     )
@@ -132,13 +135,14 @@ def add_statistics_to_results(results: Dict[str, Any]) -> Dict[str, Any]:
             'duration_s': float(slowest_dur) if _is_num(slowest_dur) else None,
         },
         'zero_byte_artifacts': zero_byte_artifacts,
-        'total_add_hostname_duration_s': _sum(hostname_steps, 'duration'),
-        'total_upload_duration_s': _sum(uploads, 'duration'),
+        'total_adding_hostname_duration_s': _sum(hostname_steps, 'duration'),
+        'total_json_files_in_zip_upload_duration_s': _sum(json_files_in_zip_uploaded, 'duration'),
         'total_artifact_postprocessing_duration_s': _sum(artifacts, 'duration'),
         'nr_of_artifacts_failed_to_postprocess': nr_of_artifacts_failed_to_postprocess,
         'nr_of_artifacts_to_be_postprocessed': nr_of_artifacts_to_be_postprocessed,
         'nr_of_artifacts_postprocessed': nr_of_artifacts_postprocessed,
-        'nr_of_files_uploaded': len(uploads)
+        'nr_of_json_files_in_zip_uploaded': len(json_files_in_zip_uploaded),
+        'nr_of_postprocessed_artifacts_uploaded': len(artifacts_uploaded)
     }
 
     results['statistics'] = statistics

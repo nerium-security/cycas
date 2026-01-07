@@ -38,17 +38,19 @@ class TablestorageManager:
 
         return {
             'PartitionKey': self.partitionkey,
-            'RowKey': self.hash_filename(status_data.get('zipfile_basename')),
-            'ZipfileBasename': status_data.get('zipfile_basename'),
+            'RowKey': self.hash_filename(status_data.get('zipfile_basename', '')),
+            'ZipfileBasename': status_data.get('zipfile_basename', ''),
             'Status': status,
-            'Sessionid': status_data.get('sessionid'),
+            'Sessionid': status_data.get('sessionid', ''),
             'ScriptLocation': self.computername,
-            'Source': status_data.get('source_name'),
+            'Source': status_data.get('source_name', ''),
             'Duration': duration,
             'StartTime': f'{datetime.utcnow():%Y-%m-%dT%H:%M:%SZ}',
-            'Hostname': status_data.get('hostname'),
-            'Size': status_data.get('zipfile_size'),
-            'Artifacts_succes': None
+            'Extracted_Hostname': status_data.get('hostname', ''),
+            'Size': status_data.get('zipfile_size', ''),
+            'nr_of_artifacts_postprocessed': status_data['statistics'].get('nr_of_artifacts_postprocessed', ''),
+            'nr_of_postprocessed_artifacts_uploaded': status_data['statistics'].get('nr_of_postprocessed_artifacts_uploaded', ''),
+            'nr_of_json_files_in_zip_uploaded': status_data['statistics'].get('nr_of_json_files_in_zip_uploaded', '')
         }
 
     def calculate_duration(self, starttime):
@@ -143,7 +145,6 @@ class TablestorageManager:
             self.table_client.update_entity(entity)
             return True
         except Exception as e:
-            breakpoint()
             log.error(f'Could not update table. Error: {e}')
 
     def output_logtable(self):

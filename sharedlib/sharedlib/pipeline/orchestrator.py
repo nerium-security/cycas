@@ -68,7 +68,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
                                                    zip_password, 
                                                    zipfilecontent, 
                                                    results)
-    
+
     results = add_info_to_results(results, key='finished', value=True)
     results = add_statistics_to_results(results)
     breakpoint()
@@ -155,7 +155,7 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
                 result_upload = upload_file_to_adx(managers, outputfile_path)
                 delete_file(outputfile_path)
 
-            results = add_results_as_list(results, result_upload, key='uploads')
+            results = add_results_as_list(results, result_upload, key='artifacts_uploaded')
             
         duration = get_duration_from_timespan(start_postprocessing)
 
@@ -183,7 +183,7 @@ def extract_all_json_from_zip_and_upload(managers,
         hostname = results.get('hostname')
 
     for file_in_zip in zipfilecontent:
-        
+
         ignored = is_ignored(file_in_zip, ignorelist)
         
         if ignored:
@@ -214,7 +214,7 @@ def extract_all_json_from_zip_and_upload(managers,
             for file_path in files_to_upload:
                 
                 result_upload = upload_file_to_adx(managers, file_path)
-                results = add_results_as_list(results, result_upload, key='uploads')
+                results = add_results_as_list(results, result_upload, key='json_files_in_zip_uploaded')
 
                 delete_file(file_path)
             

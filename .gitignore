@@ -429,3 +429,5 @@ blog.md
 sharedlib.egg-info
 sharedlibrary.egg-info
 build/*
+*.json
+*.csf
