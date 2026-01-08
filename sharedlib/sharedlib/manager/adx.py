@@ -9,11 +9,14 @@ import os
 import logging as log
 import pandas as pd
 import fileinput
+import numpy as np
 from pathlib import Path
 from datetime import timedelta
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
 from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel
 from azure.kusto.ingest.status import KustoIngestStatusQueues
+from datetime import datetime
+from collections import Counter
 
 log = log.getLogger(__name__)
 
@@ -69,15 +72,14 @@ class AdxManager:
 
             # --- In-memory JSON cases ---
             if isinstance(f, dict):
-
-                df = pd.DataFrame([f])
+                df = pd.DataFrame([f], dtype=str)
 
             elif isinstance(f, list):
-                df = pd.DataFrame(f)
+                df = pd.DataFrame(f, dtype=str)
 
             # --- Filepath case ---
             elif isinstance(f, (str, Path)):
-                df = pd.read_json(f, lines=True, nrows=nrows, chunksize=chunksize)
+                df = pd.read_json(f, lines=True, nrows=nrows, chunksize=chunksize, dtype=str)
                 log.debug(f'Loaded chunk of file into Pandas dataframe: {f}')
 
             if isinstance(df, pd.DataFrame):
@@ -90,23 +92,6 @@ class AdxManager:
 
             log.error(f'Error converting {f} to dataframe: {e}')
             return pd.DataFrame()
-
-    def find_dynamic_int_columns(self, df, var_sample_size):
-        
-        log.debug('Entered function that finds dynamic and integer columns.')
-        dict_columns = []
-        int_columns = []
-
-        if isinstance(df, pd.DataFrame):
-            for column in df.columns:
-                for item in df[column].head(var_sample_size):
-                    if isinstance(item, dict):
-                        if len(item.keys()) >= 1 and column not in dict_columns:
-                            dict_columns.append(column)
-                    if isinstance(item, int) and column not in int_columns:
-                        int_columns.append(column)
-
-        return dict_columns, int_columns
 
     def convert_dict_to_json(self, df, dyn_columns):
         log.debug('Entered function to convert dictionaries in the dataframe to json.')
@@ -126,42 +111,66 @@ class AdxManager:
         log.debug(f'Extracted the following name which will be used to create the table: {tablename}.')
         return tablename
 
-    def remove_columnames_with_special_characters(self, colums):
-        
-        return colums[~colums.str.contains(r'\(.*\)')]
-
-    def prepare_string_with_columnames(self, columns, dyn_columns, int_columns):
+    def prepare_string_with_columnames(self, schema):
         ''' 
         Prepares the string with columnames and determines columntypes.
         Expected output: ['CreationTime']:date, ['PhysicalProcessorCount']:string, etc
         '''
 
-        if not any([dyn_columns, int_columns]):
-            dyn_columns = []
-            int_columns = []
-
-        time_columns = ['time', '0x30', '0x10', 'date', 'LastSeen', 'LastAccess']
-
         parts = []
-        for columname in dict.fromkeys(columns):
-            columname = columname.replace('>', '').replace('<', '')
+        
+        for columnname in dict.fromkeys(schema):  # preserves order, removes duplicates
 
-            if any(item in columname.lower() for item in time_columns):
-                dtype = 'date'
-            elif columname in dyn_columns:
-                dtype = 'dynamic'
-            elif columname in int_columns:
-                dtype = 'int'
-            else:
-                dtype = 'string'
+            clean_name = self.sanitize_adx_column_name(columnname)
+            
+            # default safely to string if missing from schema
+            adx_type = schema.get(clean_name, 'string')
 
-            parts.append(f"['{columname}']:{dtype}")
-
-        # Adding columns Hostname and Sourcefile
-        #parts.append("['Hostname']:string")
-        #parts.append("['Sourcefile']:string")
+            parts.append(f"['{clean_name}']:{adx_type}")
 
         return ', '.join(parts)
+
+    def infer_adx_type_majority(self, df, sample_size=100):
+        '''
+        Infer ADX type by simple majority vote.
+        '''
+
+        def _kind(v):
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return None
+            if isinstance(v, (dict, list)):
+                return 'dynamic'
+            if isinstance(v, bool):            # bool before int
+                return 'bool'
+            if isinstance(v, datetime):
+                return 'datetime'
+            if isinstance(v, int):
+                return 'long'
+            if isinstance(v, float):
+                return 'real'
+            if isinstance(v, str):
+                return 'string'
+            return 'dynamic'
+
+        schema = {}
+        
+        for col in df.columns:
+
+            values = df[col].head(sample_size).tolist()
+            if col == 'uploadinitiated':
+                breakpoint()
+            counts = Counter(
+
+                _kind(v) for v in values if _kind(v) is not None
+            )
+
+            if not counts:
+                schema[col] = 'dynamic'
+                continue
+
+            schema[col] = counts.most_common(1)[0][0]
+
+        return schema
 
     def create_new_table_if_required(self, Config, file, forcetablename):
         ''' Creates a new table when there is isn't one or when a new column needs to be added to the table '''
@@ -185,7 +194,6 @@ class AdxManager:
 
         return tablename
         
-
     def checking_if_new_columns_exists(self, existing_columns, new_columns):
         ''' Returns True if a new column is observed that needs to be added to the table in ADX. '''
 
@@ -198,18 +206,32 @@ class AdxManager:
 
         return False
 
+    def sanitize_adx_column_name(self, name: str) -> str:
+        '''
+        Sanitize a string so it can be safely used as an Azure Data Explorer (ADX) column name.
+        '''
+
+        name = re.sub(r"[<>\[\]{}\"'`\\]", "_", name)
+        name = re.sub(r"\s+", "_", name)
+        name = re.sub(r"[^A-Za-z0-9_]", "_", name)
+
+        if name and name[0].isdigit():
+            name = f'{name}'
+
+        return name
+
     def get_table_createcommand(self, file, Config, tablename):
         ''' Prepares the command for creating a table in ADX'''
         
         df = self.convert_to_dataframe(file, Config.var_sample_size, chunksize=None)
 
-        columnames = self.remove_columnames_with_special_characters(df.columns)
+        schema = self.infer_adx_type_majority(df, Config.var_sample_size)
+        
+        columnstring = self.prepare_string_with_columnames(schema)
 
-        dyn_columns, int_columns = self.find_dynamic_int_columns(df, Config.var_sample_size)
+        clean_columnames = list(schema.keys())
 
-        columnstring = self.prepare_string_with_columnames(columnames, dyn_columns, int_columns)
-
-        return f'.create-merge table {tablename} ({columnstring})', columnames
+        return f'.create-merge table {tablename} ({columnstring})', clean_columnames
 
     def upload_detailed_status(self, results, Config, tablename):
 

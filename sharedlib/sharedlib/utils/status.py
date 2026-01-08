@@ -86,7 +86,7 @@ def upload_detailed_status_to_adx(managers, results, tablename):
             'files_in_zip_ignored': '_status_ignored'
 
         }
-
+        
         for key, tablename in dict_status.items():
 
             results_prepared = _prepare_dictionary_for_upload_to_adx(results, key)
