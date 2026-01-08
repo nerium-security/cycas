@@ -252,14 +252,14 @@ class AdxManager:
             log.info(f'Successfully initiated upload request of {basename} to table {tablename}')
             
             result['success'] = True
-            result['duration_s'] = duration
+            result['duration_in_sec'] = duration
 
         except Exception as e:
             log.error(f'Failed to initiate the data upload request of {basename} to table {tablename}. Error: {e}' )
 
             duration = time.time() - start
             result['success'] = False
-            result['duration_s'] = duration
+            result['duration_in_sec'] = duration
             result['error'] = str(e)
 
         return result
