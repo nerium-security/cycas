@@ -23,8 +23,7 @@ def define_results_dict():
         'hostname': None,
         'files_in_zip_ignored': [],
         'artifacts': [],
-        'artifacts_uploaded': [],
-        'json_files_in_zip_uploaded': [],
+        'uploads': [],
         'added_hostname_as_column_to_file': [],
         'artifacts_to_be_processed': None,
         'statistics': {},
@@ -38,7 +37,7 @@ def define_results_postprocess_dict():
         'artifact': None,
         'size': None,
         'success': None,
-        'duration': None,
+        'duration_in_sec': None,
         'error': None,
         'stdout': None,
         'stderr': None,
@@ -51,15 +50,17 @@ def define_results_upload_dict():
         'basename': None,
         'size': None,
         'success': None,
-        'duration': None,
-        'error': None
+        'duration_in_sec': None,
+        'error': None,
+        'was_postprocessed_with': None,
+        'location_in_zip': None
     }
 
 def define_results_addhostname_dict():
     return {
         'fullpath': None,
         'basename': None,
-        'duration': None
+        'duration_in_sec': None
     }
 
 def add_results_as_list(result_zip, result_within_zip, key):

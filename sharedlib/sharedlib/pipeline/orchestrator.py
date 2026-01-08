@@ -6,6 +6,7 @@ from sharedlib.utils.summary import define_results_addhostname_dict, define_resu
 from sharedlib.utils.misc import send_webhook
 from sharedlib.utils.auth import Authenticator
 from sharedlib.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing, upload_detailed_status_to_adx
+from sharedlib.utils.log import generate_sessionid
 from datetime import datetime
 import os
 import logging as log
@@ -16,14 +17,16 @@ Config = load_config()
 
 def run_zip_processor(managers, source_name, zipfile, sessionid, message):
 
+    start = datetime.now()
+
     results = define_results_dict()
     results = add_info_to_results(results, key='zipfile_basename', value=os.path.basename(zipfile))
     results = add_info_to_results(results, key='zipfile_fullpath', value=zipfile)
     results = add_info_to_results(results, key='zipfile_size', value=os.path.getsize(zipfile))
     results = add_info_to_results(results, key='sessionid', value=sessionid)
+    results = add_info_to_results(results, key='uploadid', value=generate_sessionid())
     results = add_info_to_results(results, key='source_name', value=source_name)
-
-    start = datetime.now()
+    results = add_info_to_results(results, key='starttime_script', value=start)
 
     write_logentry_if_new(managers, Status.NEW, results)
 
@@ -61,21 +64,21 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
                                                   extracted_zip, 
                                                   zipfilecontent,
                                                   results)
-
+    
     results = extract_all_json_from_zip_and_upload(managers, 
                                                    extracted_zip, 
                                                    extract_path, 
                                                    zip_password, 
                                                    zipfilecontent, 
                                                    results)
-
+    
 
     results = add_info_to_results(results, key='finished', value=True)
     results = add_statistics_to_results(results)
     
 
     update_status_in_log(managers, Status.FINISHED, start, results)
-
+    
     upload_detailed_status_to_adx(managers, results, tablename='_status')
     '''
     pretty_print_summary_per_zip(zipfile, results, mode='full')
@@ -136,7 +139,7 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
         start_postprocessing = datetime.now()
 
         for artifact in artifacts:
-            
+
             result_postprocess = postprocess(hostname, 
                                              artifact, 
                                              zipfile, 
@@ -145,18 +148,20 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
                                              binary, 
                                              outputformat,
                                              remappingfile)
-            
+
             results = add_results_as_list(results, result_postprocess, key='artifacts')
 
-            outputfile_size = result_postprocess.get('size')        
             outputfile_path = result_postprocess.get('fullpath')
+        
+            result_upload = define_results_upload_dict()
+            
+            result_upload = upload_file_to_adx(managers, outputfile_path, result_upload)
 
-            if outputfile_size > 0:
+            delete_file(outputfile_path)
+           
+            result_upload['was_postprocessed_with'] = artifact
 
-                result_upload = upload_file_to_adx(managers, outputfile_path)
-                delete_file(outputfile_path)
-
-            results = add_results_as_list(results, result_upload, key='artifacts_uploaded')
+            results = add_results_as_list(results, result_upload, key='uploads')
             
         duration = get_duration_from_timespan(start_postprocessing)
 
@@ -215,8 +220,10 @@ def extract_all_json_from_zip_and_upload(managers,
 
             for file_path in files_to_upload:
                 
-                result_upload = upload_file_to_adx(managers, file_path)
-                results = add_results_as_list(results, result_upload, key='json_files_in_zip_uploaded')
+                result_upload = define_results_upload_dict()
+                result_upload = upload_file_to_adx(managers, file_path, result_upload)
+                result_upload['location_in_zip'] = file_in_zip.filename
+                results = add_results_as_list(results, result_upload, key='uploads')
 
                 delete_file(file_path)
             
@@ -277,18 +284,16 @@ def verify_if_all_uploads_are_initiated(managers, results, zipfile, source_name,
 
     return all_success
 
-def upload_file_to_adx(managers, file):
+def upload_file_to_adx(managers, file, upload_result):
     '''Prepares the adx table and uploads the file'''
-
-    result = define_results_upload_dict()
 
     if Config.adx_cluster_enabled:
 
         tablename = managers.adx.create_new_table_if_required(Config, file, forcetablename=False)
 
-        result = managers.adx.launch_upload_file(tablename, file, result)
+        upload_result = managers.adx.launch_upload_file(tablename, file, upload_result)
 
-    return result
+    return upload_result
 
 def remove_zip(managers, source_name, zipfile_downloaded, zip):
 

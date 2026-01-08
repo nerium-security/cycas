@@ -170,11 +170,13 @@ class AdxManager:
             tablename = forcetablename
         else:
             tablename = self.get_tablename(os.path.basename(file))
+            if os.path.getsize(file) == 0:
+                return tablename
 
         table_exists, existing_columns = self.check_if_table_exists(tablename)
 
         cmd_createmergetable, new_columns = self.get_table_createcommand(file, Config, tablename)
-               
+            
         new_columns_exists = self.checking_if_new_columns_exists(existing_columns, new_columns)
 
         if not table_exists or new_columns_exists:
@@ -209,10 +211,11 @@ class AdxManager:
 
         return f'.create-merge table {tablename} ({columnstring})', columnames
 
-    def upload_detailed_status(self, tablename, results, Config):
+    def upload_detailed_status(self, results, Config, tablename):
 
         table = self.create_new_table_if_required(Config, results, tablename)
-        results_df = pd.DataFrame([results])
+        results_df = pd.DataFrame(results)
+
         self.launch_upload_df(results_df, table)
 
     def read_ingestion_properties(self, tablename):
@@ -229,28 +232,35 @@ class AdxManager:
         start = time.time()
         ingestion_props = self.read_ingestion_properties(tablename)
 
+        basename = os.path.basename(fullpath)
+        result['fullpath'] = fullpath
+        result['basename'] = basename
+        result['size'] = os.path.getsize(fullpath)
+
+        if os.path.getsize(fullpath) == 0:
+            result['success'] = False
+            result['error'] = 'filesize is 0'
+            return result
+
         try:
-            basename = os.path.basename(fullpath)
-
+            
             self.kusto_queued.ingest_from_file(fullpath, ingestion_properties=ingestion_props)
-
+            
             duration = time.time() - start
-
+            result['uploadinitiated'] = start
+            
             log.info(f'Successfully initiated upload request of {basename} to table {tablename}')
+            
             result['success'] = True
-            result['duration'] = duration
+            result['duration_s'] = duration
 
         except Exception as e:
             log.error(f'Failed to initiate the data upload request of {basename} to table {tablename}. Error: {e}' )
 
             duration = time.time() - start
             result['success'] = False
-            result['duration'] = duration
-            result['error'] = str(e)  
-
-        result['fullpath'] = fullpath
-        result['basename'] = basename
-        result['size'] = os.path.getsize(fullpath)
+            result['duration_s'] = duration
+            result['error'] = str(e)
 
         return result
 

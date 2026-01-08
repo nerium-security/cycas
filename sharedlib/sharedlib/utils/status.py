@@ -58,9 +58,37 @@ def determine_if_needs_processing(managers, zipfile):
     else:
         log.debug('Is already processed or processing.')
         return False
-    
+
+def _prepare_dictionary_for_upload_to_adx(results_dict, dict_key):
+    ''' Prepares dictionary for uploading it to ADX '''
+
+    output = []
+    for a in results_dict[dict_key]:
+        row = a.copy()
+
+        output.append({
+            'uploadid': results_dict['uploadid'],
+            'zipfile': results_dict['zipfile_basename'],
+            **row,
+        })
+
+    return output
+
 def upload_detailed_status_to_adx(managers, results, tablename):
+    ''' Uploads the detailed status in results dictionary to a table in ADX'''
 
     if Config.adx_cluster_enabled:
 
-        managers.adx.upload_detailed_status(tablename, results, Config)
+        dict_status = {
+
+            'artifacts': '_status_artifacts',
+            'uploads': '_status_upload',
+            'files_in_zip_ignored': '_status_ignored'
+
+        }
+
+        for key, tablename in dict_status.items():
+
+            results_prepared = _prepare_dictionary_for_upload_to_adx(results, key)
+
+            managers.adx.upload_detailed_status(results_prepared, Config, tablename)

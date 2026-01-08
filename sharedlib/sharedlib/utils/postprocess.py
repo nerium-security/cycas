@@ -46,7 +46,7 @@ def run_command(cmd, result, store_output=False):
         duration = time.time() - start
 
         result['success'] = True
-        result['duration'] = duration
+        result['duration_in_sec'] = duration
         result['stdout'] = cp.stdout if store_output else None
         result['stderr'] = cp.stderr
         result['returncode'] = cp.returncode
@@ -58,7 +58,7 @@ def run_command(cmd, result, store_output=False):
         duration = time.time() - start
 
         result['success'] = False
-        result['duration'] = duration
+        result['duration_in_sec'] = duration
         result['error'] = (e.stderr or e.stdout or str(e)).strip()
         result['stdout'] = e.stdout
         result['stderr'] = e.stderr
