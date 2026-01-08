@@ -21,6 +21,7 @@ def define_results_dict():
         'zipfile_fullpath': None,
         'zipfile_size': None,
         'hostname': None,
+        'files_in_zip_ignored': [],
         'artifacts': [],
         'artifacts_uploaded': [],
         'json_files_in_zip_uploaded': [],
