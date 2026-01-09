@@ -130,42 +130,74 @@ class AdxManager:
 
         return ', '.join(parts)
 
+
+    def _classify_str_value(self, string: str):
+        '''
+        Classify a string value into an ADX type.
+
+        Returns one of:
+        - 'long'
+        - 'datetime'
+        - 'dynamic'
+        - 'string'
+        '''
+
+        if string is None:
+            return None
+
+        # Checks if null, none, or nan
+        s = string.strip()
+        if s == '' or s.lower() in ('null', 'none', 'nan'):
+            return 'string'
+
+        # Checks if string is dynamic
+        if (string.startswith('{') and string.endswith('}')) or (string.startswith('[') and string.endswith(']')):
+            try:
+                json.loads(s)
+                return 'dynamic'
+            except Exception:
+                pass
+
+        # Checks if string is integer
+        if s.isdigit() or (s.startswith('-') and s[1:].isdigit()):
+            return 'long'
+
+        # Checks if string is date
+        try:
+            num = float(s)
+            # epoch seconds ~ 1e9, milliseconds ~ 1e12
+            if 1_000_000_000 <= num <= 20_000_000_000_000:
+                return 'datetime'
+        except ValueError:
+            pass
+
+        # Checks if string is date
+        try:
+            datetime.fromisoformat(s.replace('Z', '+00:00'))
+            return 'datetime'
+        except ValueError:
+            pass
+
+        return 'string'
+
+
     def infer_adx_type_majority(self, df, sample_size=100):
         '''
         Infer ADX type by simple majority vote.
         '''
-
-        def _kind(v):
-            if v is None or (isinstance(v, float) and pd.isna(v)):
-                return None
-            if isinstance(v, (dict, list)):
-                return 'dynamic'
-            if isinstance(v, bool):            # bool before int
-                return 'bool'
-            if isinstance(v, datetime):
-                return 'datetime'
-            if isinstance(v, int):
-                return 'long'
-            if isinstance(v, float):
-                return 'real'
-            if isinstance(v, str):
-                return 'string'
-            return 'dynamic'
 
         schema = {}
         
         for col in df.columns:
 
             values = df[col].head(sample_size).tolist()
-            if col == 'uploadinitiated':
-                breakpoint()
-            counts = Counter(
 
-                _kind(v) for v in values if _kind(v) is not None
+            counts = Counter(
+                self._classify_str_value(v) for v in values if self._classify_str_value(v) is not None
             )
 
             if not counts:
-                schema[col] = 'dynamic'
+                schema[col] = 'string'
                 continue
 
             schema[col] = counts.most_common(1)[0][0]
