@@ -65,10 +65,9 @@ def _prepare_dictionary_for_upload_to_adx(results_dict, dict_key):
     output = []
     for a in results_dict[dict_key]:
         row = a.copy()
-
         output.append({
-            'uploadid': results_dict['uploadid'],
-            'zipfile': results_dict['zipfile_basename'],
+            'uploadid': results_dict['general'][0]['uploadid'],
+            'zipfile': results_dict['general'][0]['zipfile_basename'],
             **row,
         })
 
@@ -83,12 +82,13 @@ def upload_detailed_status_to_adx(managers, results, tablename):
 
             'artifacts': '_status_artifacts',
             'uploads': '_status_upload',
-            'files_in_zip_ignored': '_status_ignored'
+            'files_in_zip_ignored': '_status_ignored',
+            'general': '_status_summary'
 
         }
         
         for key, tablename in dict_status.items():
-
+            breakpoint()
             results_prepared = _prepare_dictionary_for_upload_to_adx(results, key)
-
+            
             managers.adx.upload_detailed_status(results_prepared, Config, tablename)

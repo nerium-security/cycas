@@ -18,6 +18,7 @@ def _format_size(num_bytes):
 
 def define_results_dict():
     return {
+        'general': [],
         'zipfile_fullpath': None,
         'zipfile_size': None,
         'hostname': None,
@@ -70,13 +71,6 @@ def add_results_as_list(result_zip, result_within_zip, key):
 
     return result_zip
     
-def add_info_to_results(result_zip, key, value):
-    ''' Adds values from zip file to dictionary'''
-
-    result_zip[key] = value
- 
-    return result_zip
-
 def add_statistics_to_results(results: Dict[str, Any]) -> Dict[str, Any]:
     '''
     Adds a 'statistics' block to results without modifying or removing
