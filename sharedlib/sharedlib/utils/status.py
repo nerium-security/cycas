@@ -90,5 +90,4 @@ def upload_detailed_status_to_adx(managers, results, tablename):
         for key, tablename in dict_status.items():
 
             results_prepared = _prepare_dictionary_for_upload_to_adx(results, key)
-            
             managers.adx.upload_detailed_status(results_prepared, Config, tablename)

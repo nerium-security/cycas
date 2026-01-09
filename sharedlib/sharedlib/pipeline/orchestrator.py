@@ -2,7 +2,7 @@ from sharedlib.utils.config import load_config
 from sharedlib.utils.files import split_jsonl_by_size, list_files_in_directory, list_files_in_directory, delete_file, filter_triage_packages, get_filesize_bytes
 from sharedlib.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename
 from sharedlib.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
-from sharedlib.utils.summary import define_results_addhostname_dict, define_results_upload_dict, add_results_as_list, define_results_dict, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file, add_statistics_to_results
+from sharedlib.utils.summary import define_results_addhostname_dict, define_results_upload_dict, define_results_dict, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file, add_statistics_to_results
 from sharedlib.utils.misc import send_webhook
 from sharedlib.utils.auth import Authenticator
 from sharedlib.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing, upload_detailed_status_to_adx
@@ -26,7 +26,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
         'zipfile_fullpath': zipfile,
         'zipfile_size': os.path.getsize(zipfile),
         'sessionid': sessionid,
-        'uploadid': generate_sessionid(),
+        'uploadid': 'id' + generate_sessionid(),
         'source_name': source_name,
         'starttime_script': start
     })
@@ -154,8 +154,8 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
                                              binary, 
                                              outputformat,
                                              remappingfile)
-
-            results = add_results_as_list(results, result_postprocess, key='artifacts')
+            
+            results['artifacts'].append(result_postprocess)
 
             outputfile_path = result_postprocess.get('fullpath')
         
@@ -166,8 +166,7 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
             delete_file(outputfile_path)
            
             result_upload['was_postprocessed_with'] = artifact
-
-            results = add_results_as_list(results, result_upload, key='uploads')
+            results['uploads'].append(result_upload)
             
         duration = get_duration_from_timespan(start_postprocessing)
 
@@ -199,7 +198,7 @@ def extract_all_json_from_zip_and_upload(managers,
         ignored = is_ignored(file_in_zip, ignorelist)
 
         if ignored.get('ignored'):
-            results = add_results_as_list(results, ignored, key='files_in_zip_ignored')
+            results['files_in_zip_ignored'].append(ignored)
             continue
         
         extracted_file = extract_single_file(extracted_zip, file_in_zip, extract_path, zip_password)
@@ -213,8 +212,7 @@ def extract_all_json_from_zip_and_upload(managers,
 
             result_addhostname = managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip, result_addhostname)
 
-            results = add_results_as_list(results, result_addhostname, key='added_hostname_as_column_to_file')
-
+            results['added_hostname_as_column_to_file'].append(result_addhostname)
             MAX_ADX_UPLOAD_SIZE = 6_442_450_944  # 6 GB
 
             if get_filesize_bytes(extracted_file) >= MAX_ADX_UPLOAD_SIZE:
@@ -229,8 +227,7 @@ def extract_all_json_from_zip_and_upload(managers,
                 result_upload = define_results_upload_dict()
                 result_upload = upload_file_to_adx(managers, file_path, result_upload)
                 result_upload['location_in_zip'] = file_in_zip.filename
-                results = add_results_as_list(results, result_upload, key='uploads')
-
+                results['uploads'].append(result_upload)
                 delete_file(file_path)
             
             if file_is_split:

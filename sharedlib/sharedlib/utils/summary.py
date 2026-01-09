@@ -59,13 +59,6 @@ def define_results_addhostname_dict():
         'duration_in_sec': None
     }
 
-def add_results_as_list(result_zip, result_within_zip, key):
-    ''' Adds results to a list in a dictionary. Either "artifacts" or "uploads" '''
-
-    result_zip[key].append(result_within_zip)
-
-    return result_zip
-    
 def add_statistics_to_results(results: Dict[str, Any]) -> Dict[str, Any]:
     '''
     Adds a 'statistics' block to results without modifying or removing
