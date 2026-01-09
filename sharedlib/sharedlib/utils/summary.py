@@ -18,17 +18,12 @@ def _format_size(num_bytes):
 
 def define_results_dict():
     return {
-        'general': [],
-        'zipfile_fullpath': None,
-        'zipfile_size': None,
-        'hostname': None,
-        'files_in_zip_ignored': [],
+        'summary': [],
         'artifacts': [],
         'uploads': [],
+        'files_in_zip_ignored': [],
         'added_hostname_as_column_to_file': [],
-        'artifacts_to_be_processed': None,
-        'statistics': {},
-        'finished': None
+        'statistics': {}
     }
 
 def define_results_postprocess_dict():
@@ -121,9 +116,7 @@ def add_statistics_to_results(results: Dict[str, Any]) -> Dict[str, Any]:
                 'size': int(size),
             })
 
-    nr_of_artifacts_to_be_postprocessed = len(results.get('artifacts_to_be_processed'))
     nr_of_artifacts_postprocessed = len(artifacts)
-    nr_of_artifacts_failed_to_postprocess = nr_of_artifacts_to_be_postprocessed - nr_of_artifacts_postprocessed
 
     statistics = {
         'slowest_artifact': {
@@ -134,8 +127,6 @@ def add_statistics_to_results(results: Dict[str, Any]) -> Dict[str, Any]:
         'total_adding_hostname_duration_s': _sum(hostname_steps, 'duration'),
         'total_json_files_in_zip_upload_duration_s': _sum(json_files_in_zip_uploaded, 'duration'),
         'total_artifact_postprocessing_duration_s': _sum(artifacts, 'duration'),
-        'nr_of_artifacts_failed_to_postprocess': nr_of_artifacts_failed_to_postprocess,
-        'nr_of_artifacts_to_be_postprocessed': nr_of_artifacts_to_be_postprocessed,
         'nr_of_artifacts_postprocessed': nr_of_artifacts_postprocessed,
         'nr_of_json_files_in_zip_uploaded': len(json_files_in_zip_uploaded),
         'nr_of_postprocessed_artifacts_uploaded': len(artifacts_uploaded)

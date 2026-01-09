@@ -146,36 +146,42 @@ class AdxManager:
             return None
 
         # Checks if null, none, or nan
-        s = string.strip()
-        if s == '' or s.lower() in ('null', 'none', 'nan'):
-            return 'string'
+        try:
+            s = string.strip()
+            if s == '' or s.lower() in ('null', 'none', 'nan'):
+                return 'string'
+        except:
+            pass
 
         # Checks if string is dynamic
-        if (string.startswith('{') and string.endswith('}')) or (string.startswith('[') and string.endswith(']')):
-            try:
+        try:
+            if (string.startswith('{') and string.endswith('}')) or (string.startswith('[') and string.endswith(']')):
                 json.loads(s)
                 return 'dynamic'
-            except Exception:
-                pass
+        except:
+            pass
 
         # Checks if string is integer
-        if s.isdigit() or (s.startswith('-') and s[1:].isdigit()):
-            return 'long'
-
-        # Checks if string is date
         try:
-            num = float(s)
-            # epoch seconds ~ 1e9, milliseconds ~ 1e12
-            if 1_000_000_000 <= num <= 20_000_000_000_000:
-                return 'datetime'
-        except ValueError:
+            if string.isdigit() or (string.startswith('-') and string[1:].isdigit()):
+                return 'long'
+        except:
             pass
 
         # Checks if string is date
         try:
-            datetime.fromisoformat(s.replace('Z', '+00:00'))
+            num = float(string)
+            # epoch seconds ~ 1e9, milliseconds ~ 1e12
+            if 1_000_000_000 <= num <= 20_000_000_000_000:
+                return 'datetime'
+        except:
+            pass
+
+        # Checks if string is date
+        try:
+            datetime.fromisoformat(string.replace('Z', '+00:00'))
             return 'datetime'
-        except ValueError:
+        except:
             pass
 
         return 'string'

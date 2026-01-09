@@ -21,7 +21,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
 
     results = define_results_dict()
 
-    results['general'].append({
+    results['summary'].append({
         'zipfile_basename': os.path.basename(zipfile),
         'zipfile_fullpath': zipfile,
         'zipfile_size': os.path.getsize(zipfile),
@@ -139,9 +139,8 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
 
         start_postprocessing = datetime.now()
 
-        results.update({
+        results['summary'].append({
             'hostname': hostname,
-            'artifacts_to_be_processed': artifacts,
             'started_postprocessing': start_postprocessing
         })
 
