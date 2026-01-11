@@ -141,17 +141,18 @@ def extract_single_file(zip_path, file_info, extract_to, password=None):
 
 def is_ignored(file_in_zip, ignorelist):
     '''Determines wheter a file should be ignored for further processing or not'''
-
+    
     filename = file_in_zip.filename
 
     def result(ignored, reason=None, pattern=None):
+
         if ignored:
             log.debug(f'Ignoring: {file_in_zip.filename} | reason={reason} | pattern={pattern}')
         return {
-            'path_in_zip': filename,
-            'ignored': ignored,
-            'reason': reason,
-            'pattern': pattern,
+            'ignored_upload': ignored,
+            'ignored_reason': reason,
+            'ignored_pattern': pattern,
+            'upload_initiated': False
         }
 
     if filename.endswith('/'):

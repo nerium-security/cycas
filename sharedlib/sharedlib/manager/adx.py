@@ -286,41 +286,41 @@ class AdxManager:
             data_format=DataFormat.JSON,
             report_level=ReportLevel.FailuresAndSuccesses)
 
-    def launch_upload_file(self, tablename: str, fullpath: str, result: dict) -> bool:
+    def launch_upload_file(self, tablename: str, fullpath: str) -> bool:
         '''Uploads a file to adx'''
-
+        result = {}
         start = time.time()
         ingestion_props = self.read_ingestion_properties(tablename)
 
         basename = os.path.basename(fullpath)
-        result['fullpath'] = fullpath
-        result['basename'] = basename
-        result['size'] = os.path.getsize(fullpath)
 
         if os.path.getsize(fullpath) == 0:
-            result['success'] = False
-            result['error'] = 'filesize is 0'
-            return result
+
+            return {
+                
+                'upload_initiated': False,
+                'upload_error': 'Filesize is 0'
+            }
 
         try:
             
             self.kusto_queued.ingest_from_file(fullpath, ingestion_properties=ingestion_props)
             
             duration = time.time() - start
-            result['uploadinitiated'] = start
+            result['upload_initiated_timestamp'] = start
             
             log.info(f'Successfully initiated upload request of {basename} to table {tablename}')
             
-            result['success'] = True
-            result['duration_in_sec'] = duration
+            result['upload_initiated'] = True
+            result['upload_duration_in_sec'] = duration
 
         except Exception as e:
             log.error(f'Failed to initiate the data upload request of {basename} to table {tablename}. Error: {e}' )
 
             duration = time.time() - start
-            result['success'] = False
-            result['duration_in_sec'] = duration
-            result['error'] = str(e)
+            result['upload_initiated'] = False
+            result['upload_duration_in_sec'] = duration
+            result['upload_error'] = str(e)
 
         return result
 
@@ -336,7 +336,7 @@ class AdxManager:
         except Exception as e:
             log.error(f'Failed to initiate the data upload request to table {tablename}. Error: {e}' )
 
-    def add_hostname_to_file(self, fullpath, hostname, zipfile, hostname_dict):
+    def add_hostname_to_file(self, fullpath, hostname, zipfile):
         ''' Adds hostname and sourcefilename inline to file'''
 
         start = time.time()
@@ -352,15 +352,16 @@ class AdxManager:
                 print(line)
         except Exception as e:
             log.error(f'Could not add hostname as column to file {basename}. Error: {e}')
-            hostname_dict['error'] = e
+            return {
+                'added_hostname_error': e 
+            }
         
         duration = time.time() - start
 
-        hostname_dict['fullpath'] = fullpath
-        hostname_dict['basename'] = basename
-        hostname_dict['duration'] = duration
-
-        return hostname_dict
+        return {      
+            'added_hostname': True,
+            'added_hostname_duration': duration
+        }
 
     def check_if_table_exists(self, tablename):
 

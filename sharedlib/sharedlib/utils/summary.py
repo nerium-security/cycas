@@ -42,91 +42,21 @@ def define_results_postprocess_dict():
 
 def define_results_upload_dict():
     return {
-        'fullpath': None,
+        'location_in_zip': None,
         'basename': None,
         'size': None,
-        'success': None,
-        'duration_in_sec': None,
-        'error': None,
+        'upload_initiated': None,
+        'upload_initiated_timestamp': None,
+        'upload_duration_in_sec': None,
+        'upload_error': None,
         'was_postprocessed_with': None,
-        'location_in_zip': None
+        'ignored_upload': None,
+        'ignored_reason': None,
+        'ignored_pattern': None,
+        'added_hostname': None,
+        'added_hostname_duration': None,
+        'added_hostname_error': None
     }
-
-def define_results_addhostname_dict():
-    return {
-        'fullpath': None,
-        'basename': None,
-        'duration_in_sec': None
-    }
-
-def add_statistics_to_results(results: Dict[str, Any]) -> Dict[str, Any]:
-    '''
-    Adds a 'statistics' block to results without modifying or removing
-    any existing keys or values.
-    '''
-
-    artifacts: List[Dict[str, Any]] = list(results.get('artifacts') or [])
-    json_files_in_zip_uploaded: List[Dict[str, Any]] = list(results.get('json_files_in_zip_uploaded') or [])
-    artifacts_uploaded: List[Dict[str, Any]] = list(results.get('artifacts_uploaded') or [])
-    hostname_steps: List[Dict[str, Any]] = list(
-        results.get('added_hostname_as_column_to_file') or []
-    )
-
-    def _is_num(v: Any) -> bool:
-        return isinstance(v, (int, float)) and not isinstance(v, bool)
-
-    def _sum(items: List[Dict[str, Any]], field: str) -> float:
-        total = 0.0
-        for item in items:
-            v = item.get(field)
-            if _is_num(v):
-                total += float(v)
-        return total
-
-    def _safe_name(item: Optional[Dict[str, Any]]) -> Optional[str]:
-        if not item:
-            return None
-        return item.get('artifact') or item.get('basename') or item.get('fullpath')
-
-    # ---- slowest artifact ----
-    slowest = None
-    slowest_dur = None
-    for a in artifacts:
-        d = a.get('duration')
-        if _is_num(d) and (slowest_dur is None or float(d) > float(slowest_dur)):
-            slowest = a
-            slowest_dur = d
-
-    # ---- zero-byte artifacts ----
-    zero_byte_artifacts = []
-    for a in artifacts:
-        size = a.get('size')
-        if _is_num(size) and int(size) == 0:
-            zero_byte_artifacts.append({
-                'artifact': a.get('artifact'),
-                'basename': a.get('basename'),
-                'fullpath': a.get('fullpath'),
-                'size': int(size),
-            })
-
-    nr_of_artifacts_postprocessed = len(artifacts)
-
-    statistics = {
-        'slowest_artifact': {
-            'name': _safe_name(slowest),
-            'duration_s': float(slowest_dur) if _is_num(slowest_dur) else None,
-        },
-        'zero_byte_artifacts': zero_byte_artifacts,
-        'total_adding_hostname_duration_s': _sum(hostname_steps, 'duration'),
-        'total_json_files_in_zip_upload_duration_s': _sum(json_files_in_zip_uploaded, 'duration'),
-        'total_artifact_postprocessing_duration_s': _sum(artifacts, 'duration'),
-        'nr_of_artifacts_postprocessed': nr_of_artifacts_postprocessed,
-        'nr_of_json_files_in_zip_uploaded': len(json_files_in_zip_uploaded),
-        'nr_of_postprocessed_artifacts_uploaded': len(artifacts_uploaded)
-    }
-
-    results['statistics'] = statistics
-    return results
 
 def summary_per_zip_to_file(summary, extract_path, filename):
     '''Writes summary text to _summary.txt in the extraction folder.'''

@@ -2,7 +2,7 @@ from sharedlib.utils.config import load_config
 from sharedlib.utils.files import split_jsonl_by_size, list_files_in_directory, list_files_in_directory, delete_file, filter_triage_packages, get_filesize_bytes
 from sharedlib.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename, is_zip_encrypted
 from sharedlib.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
-from sharedlib.utils.summary import define_results_addhostname_dict, define_results_upload_dict, define_results_dict, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file, add_statistics_to_results
+from sharedlib.utils.summary import define_results_upload_dict, define_results_dict, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file
 from sharedlib.utils.misc import send_webhook
 from sharedlib.utils.auth import Authenticator
 from sharedlib.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing, upload_detailed_status_to_adx
@@ -80,8 +80,6 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
         'finished': True
     })
 
-    results = add_statistics_to_results(results)
-    
     update_status_in_log(managers, Status.FINISHED, start, results)
     
     upload_detailed_status_to_adx(managers, results, tablename='_status')
@@ -140,7 +138,7 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
 
         start_postprocessing = datetime.now()
 
-        results['summary'].append({
+        results['summary'][0].update({
             'hostname': hostname,
             'started_postprocessing': start_postprocessing
         })
@@ -160,9 +158,7 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
 
             outputfile_path = result_postprocess.get('fullpath')
         
-            result_upload = define_results_upload_dict()
-            
-            result_upload = upload_file_to_adx(managers, outputfile_path, result_upload)
+            result_upload = upload_file_to_adx(managers, outputfile_path)
 
             delete_file(outputfile_path)
            
@@ -192,14 +188,22 @@ def extract_all_json_from_zip_and_upload(managers,
     ignorelist = load_ignore_list(Config.var_location_ignorelist)
     
     if Config.adx_cluster_enabled:
-        hostname = results.get('hostname')
+        hostname = results['summary'][0].get('hostname')
 
     for file_in_zip in zipfilecontent:
 
-        ignored = is_ignored(file_in_zip, ignorelist)
+        upload_dict = define_results_upload_dict()
+        filename = file_in_zip.filename
+        basename = os.path.basename(filename)
+        filesize = file_in_zip.file_size
+        upload_dict['location_in_zip'] = filename
+        upload_dict['basename'] = basename
+        upload_dict['size'] = filesize
 
-        if ignored.get('ignored'):
-            results['files_in_zip_ignored'].append(ignored)
+        upload_dict.update(is_ignored(file_in_zip, ignorelist))
+
+        if upload_dict.get('ignored_upload'):
+            results['uploads'].append(upload_dict)
             continue
         
         extracted_file = extract_single_file(extracted_zip, file_in_zip, extract_path, zip_password)
@@ -208,12 +212,9 @@ def extract_all_json_from_zip_and_upload(managers,
             continue
 
         if hostname:
-
-            result_addhostname = define_results_addhostname_dict()
-
-            result_addhostname = managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip, result_addhostname)
-
-            results['added_hostname_as_column_to_file'].append(result_addhostname)
+            upload_dict.update(managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip))
+            
+            results['uploads'].append(upload_dict)
             MAX_ADX_UPLOAD_SIZE = 6_442_450_944  # 6 GB
 
             if get_filesize_bytes(extracted_file) >= MAX_ADX_UPLOAD_SIZE:
@@ -224,11 +225,10 @@ def extract_all_json_from_zip_and_upload(managers,
                 files_to_upload = [extracted_file]
 
             for file_path in files_to_upload:
-                
-                result_upload = define_results_upload_dict()
-                result_upload = upload_file_to_adx(managers, file_path, result_upload)
-                result_upload['location_in_zip'] = file_in_zip.filename
-                results['uploads'].append(result_upload)
+
+                upload_dict.update(upload_file_to_adx(managers, file_path))
+
+                results['uploads'].append(upload_dict)
                 delete_file(file_path)
             
             if file_is_split:
@@ -288,14 +288,14 @@ def verify_if_all_uploads_are_initiated(managers, results, zipfile, source_name,
 
     return all_success
 
-def upload_file_to_adx(managers, file, upload_result):
+def upload_file_to_adx(managers, file):
     '''Prepares the adx table and uploads the file'''
 
     if Config.adx_cluster_enabled:
 
         tablename = managers.adx.create_new_table_if_required(Config, file, forcetablename=False)
 
-        upload_result = managers.adx.launch_upload_file(tablename, file, upload_result)
+        upload_result = managers.adx.launch_upload_file(tablename, file)
 
     return upload_result
 
