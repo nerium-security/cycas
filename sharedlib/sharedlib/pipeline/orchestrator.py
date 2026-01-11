@@ -1,6 +1,6 @@
 from sharedlib.utils.config import load_config
 from sharedlib.utils.files import split_jsonl_by_size, list_files_in_directory, list_files_in_directory, delete_file, filter_triage_packages, get_filesize_bytes
-from sharedlib.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename
+from sharedlib.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename, is_zip_encrypted
 from sharedlib.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
 from sharedlib.utils.summary import define_results_addhostname_dict, define_results_upload_dict, define_results_dict, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file, add_statistics_to_results
 from sharedlib.utils.misc import send_webhook
@@ -28,7 +28,8 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
         'sessionid': sessionid,
         'uploadid': 'id' + generate_sessionid(),
         'source_name': source_name,
-        'starttime_script': start
+        'starttime_script': start,
+        'is_encrypted': is_zip_encrypted(zipfile)
     })
 
     write_logentry_if_new(managers, Status.NEW, results)
