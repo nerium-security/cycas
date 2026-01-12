@@ -19,7 +19,7 @@ def _format_size(num_bytes):
 def define_results_dict():
     return {
         'summary': [],
-        'artifacts': [],
+        'postprocessing': [],
         'uploads': [],
         'files_in_zip_ignored': [],
         'added_hostname_as_column_to_file': [],

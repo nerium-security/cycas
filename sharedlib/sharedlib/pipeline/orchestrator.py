@@ -81,19 +81,8 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
     })
 
     update_status_in_log(managers, Status.FINISHED, start, results)
-    
+
     upload_detailed_status_to_adx(managers, results, tablename='_status')
-    '''
-    pretty_print_summary_per_zip(zipfile, results, mode='full')
-    
-    verify_if_all_uploads_are_initiated(managers, 
-                                        results, 
-                                        zipfile, 
-                                        source_name, 
-                                        sessionid, 
-                                        start,
-                                        message)
-    '''
 
 def should_download(source_name):
     if source_name == 'localfolder':
@@ -106,6 +95,8 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
 
     log.info(f'Post-processing is set to: {Config.velociraptor_enabled}')
     if Config.velociraptor_enabled:
+
+
 
         remappingdir = Config.velociraptor_remappingdir
         binary = Config.velociraptor_binary
@@ -153,12 +144,13 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
                                              binary, 
                                              outputformat,
                                              remappingfile)
-            
-            results['artifacts'].append(result_postprocess)
 
+            results['postprocessing'].append(result_postprocess)
             outputfile_path = result_postprocess.get('fullpath')
-        
-            result_upload = upload_file_to_adx(managers, outputfile_path)
+            result_postprocess.pop('fullpath', None)
+            result_upload = define_results_upload_dict()
+            
+            result_upload.update(upload_file_to_adx(managers, outputfile_path))
 
             delete_file(outputfile_path)
            
@@ -194,11 +186,7 @@ def extract_all_json_from_zip_and_upload(managers,
 
         upload_dict = define_results_upload_dict()
         filename = file_in_zip.filename
-        basename = os.path.basename(filename)
-        filesize = file_in_zip.file_size
         upload_dict['location_in_zip'] = filename
-        upload_dict['basename'] = basename
-        upload_dict['size'] = filesize
 
         upload_dict.update(is_ignored(file_in_zip, ignorelist))
 
@@ -213,8 +201,7 @@ def extract_all_json_from_zip_and_upload(managers,
 
         if hostname:
             upload_dict.update(managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip))
-            
-            results['uploads'].append(upload_dict)
+
             MAX_ADX_UPLOAD_SIZE = 6_442_450_944  # 6 GB
 
             if get_filesize_bytes(extracted_file) >= MAX_ADX_UPLOAD_SIZE:

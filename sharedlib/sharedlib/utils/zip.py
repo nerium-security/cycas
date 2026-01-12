@@ -149,6 +149,7 @@ def is_ignored(file_in_zip, ignorelist):
         if ignored:
             log.debug(f'Ignoring: {file_in_zip.filename} | reason={reason} | pattern={pattern}')
         return {
+            'basename': os.path.basename(filename),
             'ignored_upload': ignored,
             'ignored_reason': reason,
             'ignored_pattern': pattern,

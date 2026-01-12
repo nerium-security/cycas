@@ -72,14 +72,14 @@ class AdxManager:
 
             # --- In-memory JSON cases ---
             if isinstance(f, dict):
-                df = pd.DataFrame([f], dtype=str)
+                df = pd.DataFrame([f], dtype=object)
 
             elif isinstance(f, list):
-                df = pd.DataFrame(f, dtype=str)
+                df = pd.DataFrame(f, dtype=object)
 
             # --- Filepath case ---
             elif isinstance(f, (str, Path)):
-                df = pd.read_json(f, lines=True, nrows=nrows, chunksize=chunksize, dtype=str)
+                df = pd.read_json(f, lines=True, nrows=nrows, chunksize=chunksize, dtype=object)
                 log.debug(f'Loaded chunk of file into Pandas dataframe: {f}')
 
             if isinstance(df, pd.DataFrame):
@@ -131,9 +131,9 @@ class AdxManager:
         return ', '.join(parts)
 
 
-    def _classify_str_value(self, string: str):
+    def _classify_value(self, value: str):
         '''
-        Classify a string value into an ADX type.
+        Classify value into an ADX type.
 
         Returns one of:
         - 'long'
@@ -142,65 +142,65 @@ class AdxManager:
         - 'string'
         '''
 
-        if string is None:
+        if value is None:
             return None
 
-        # Checks if null, none, or nan
-        try:
-            s = string.strip()
-            if s == '' or s.lower() in ('null', 'none', 'nan'):
-                return 'string'
-        except:
-            pass
+        # If dropna() was used:
+        if value is None:
+            return None
+        if isinstance(value, float) and pd.isna(value):
+            return None
 
-        # Checks if string is dynamic
-        try:
-            if (string.startswith('{') and string.endswith('}')) or (string.startswith('[') and string.endswith(']')):
-                json.loads(s)
-                return 'dynamic'
-        except:
-            pass
+        # Real structured python objects
+        if isinstance(value, (dict, list)):
+            return 'dynamic'
 
-        # Checks if string is integer
-        try:
-            if string.isdigit() or (string.startswith('-') and string[1:].isdigit()):
-                return 'long'
-        except:
-            pass
+        # Bool before int
+        if isinstance(value, (bool)):
+            return 'bool'
 
-        # Checks if string is date
-        try:
-            num = float(string)
-            # epoch seconds ~ 1e9, milliseconds ~ 1e12
+        # Real datetime objects
+        if isinstance(value, (datetime)):
+            return 'datetime'
+
+        # Numeric objects
+        if isinstance(value, (int)):
+            return 'long'
+
+        # Epoch detection for float 
+        if isinstance(value, (float)):
+            num = float(value)
             if 1_000_000_000 <= num <= 20_000_000_000_000:
                 return 'datetime'
-        except:
-            pass
+            else:
+                return 'real'
 
-        # Checks if string is date
-        try:
-            datetime.fromisoformat(string.replace('Z', '+00:00'))
-            return 'datetime'
-        except:
-            pass
+        if isinstance(value, str):
+            s = value.strip()
 
+            # ISO-8601 datetime
+            try:
+                datetime.fromisoformat(s.replace('Z', '+00:00'))
+                return 'datetime'
+            except ValueError:
+                pass
+
+        # return string for rest (which includes unclear and vague values)
         return 'string'
 
 
     def infer_adx_type_majority(self, df, sample_size=100):
         '''
-        Infer ADX type by simple majority vote.
+        Infer ADX type by majority vote.
         '''
 
         schema = {}
         
         for col in df.columns:
 
-            values = df[col].head(sample_size).tolist()
-
-            counts = Counter(
-                self._classify_str_value(v) for v in values if self._classify_str_value(v) is not None
-            )
+            values = df[col].dropna().head(sample_size).tolist()
+            
+            counts = Counter(self._classify_value(v) for v in values if self._classify_value(v) is not None)
 
             if not counts:
                 schema[col] = 'string'
@@ -292,9 +292,13 @@ class AdxManager:
         start = time.time()
         ingestion_props = self.read_ingestion_properties(tablename)
 
+        size = os.path.getsize(fullpath)
         basename = os.path.basename(fullpath)
+        result['basename'] = basename
+        result['size'] = size      
+        result['ignored_upload'] = False 
 
-        if os.path.getsize(fullpath) == 0:
+        if size == 0:
 
             return {
                 

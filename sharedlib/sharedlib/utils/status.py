@@ -80,7 +80,7 @@ def upload_detailed_status_to_adx(managers, results, tablename):
 
         dict_status = {
 
-            'artifacts': tablename + '_artifacts',
+            'postprocessing': tablename + '_postprocessing',
             'uploads': tablename + '_uploads',
             'summary': tablename + '_summary'
 
