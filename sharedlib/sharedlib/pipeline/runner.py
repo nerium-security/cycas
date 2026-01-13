@@ -69,18 +69,23 @@ def run_localdevice(triagepackage_source: str) -> None:
     managers = init(triagepackage_source, sessionid)
     zipfiles = list_zipfiles(managers, triagepackage_source)
 
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     futures = []
 
     concurrency = Config.var_localdevice_concurrency
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [
+            executor.submit(
+                run_zip_processor,
+                managers,
+                triagepackage_source,
+                zipfile,
+                sessionid,
+                None,
+            )
+            for zipfile in zipfiles
+        ]
 
-        for zipfile in zipfiles:
-
-            futures.append(executor.submit(run_zip_processor, 
-                                           managers, 
-                                           triagepackage_source, 
-                                           zipfile, sessionid, 
-                                           None))
-
+        for fut in as_completed(futures):
+            fut.result()
             #run_zip_processor(managers, triagepackage_source, zipfile, sessionid)

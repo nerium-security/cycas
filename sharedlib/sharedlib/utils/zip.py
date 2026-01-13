@@ -65,12 +65,24 @@ def verify_if_password_works(zipfile, zip_password):
     except Exception:
         return False
 
+def zip_contains_raw_artifacts(content):
+    
+    for file_in_zip in content:
+
+        if file_in_zip.filename.startswith('uploads/'):
+            log.info('Starts post-processing as zipfile seems to contain raw artifacts in \'uploads\' folder')
+            
+            return True
+    
+    log.info('Skipping post-processing as zipfile does not '
+             'seem to contain raw artifacts typically stored in \'uploads\' folder')
+    return False
+
 def extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password):
     '''Extract zip file if it is encrypted with a password.'''
 
     zipfilecontent = list_files_in_zip(zipfile, zip_password)
     
-
     if not zipfilecontent:
         return None, zipfile
 
@@ -128,32 +140,42 @@ def extract_single_file(zip_path, file_info, extract_to, password=None):
 
 
 def is_ignored(file_in_zip, ignorelist):
-    '''Check if the filename matches any of the glob patterns in the ignore list.'''
-
-    if file_in_zip.filename.endswith('/'):
-        log.debug(f'Ignoring directory: {file_in_zip.filename}')
-        return True
+    '''Determines wheter a file should be ignored for further processing or not'''
     
-    if not file_in_zip.filename.endswith(('.jsonl', 'json')):
-        log.debug(f'Ignoring non json(l) file: {file_in_zip.filename}')
-        return True
+    filename = file_in_zip.filename
+
+    def result(ignored, reason=None, pattern=None):
+
+        if ignored:
+            log.debug(f'Ignoring: {file_in_zip.filename} | reason={reason} | pattern={pattern}')
+        return {
+            'basename': os.path.basename(filename),
+            'ignored_upload': ignored,
+            'ignored_reason': reason,
+            'ignored_pattern': pattern,
+            'upload_initiated': False
+        }
+
+    if filename.endswith('/'):
+        return result(True, reason='is directory')
+
+    if not filename.endswith(('.jsonl', '.json')):
+        return result(True, reason='not json/jsonl')
 
     if file_in_zip.file_size == 0:
-        log.debug(f'Ignoring empty file: {file_in_zip.filename}')
-        return True
+        return result(True, reason='empty file')
 
-    for pattern in ignorelist['ignorelist']:
-        filename_only = os.path.basename(file_in_zip.filename)
+    filename_only = os.path.basename(filename)
+
+    for pattern in ignorelist.get('ignorelist', []):
         if fnmatch.fnmatch(filename_only, pattern):
-            log.debug(f'Ignoring file: {file_in_zip}')
-            return True
+            return result(True, reason='ignored by basename pattern in ignorelist', pattern=pattern)
 
-    for pattern in ignorelist['ignorepattern']:
-        if fnmatch.fnmatch(file_in_zip.filename, pattern):
-            log.debug(f'Ignoring file: {file_in_zip.filename}')
-            return True
-        
-    return False
+    for pattern in ignorelist.get('ignorepattern', []):
+        if fnmatch.fnmatch(filename, pattern):
+            return result(True, reason='ignored by path pattern in ignorelist', pattern=pattern)
+
+    return result(False)
 
 def load_ignore_list(ignorelist_path):
     '''Load the ignore list from a file.'''

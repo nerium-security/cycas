@@ -8,7 +8,7 @@ import re
 import time
 from pathlib import Path
 from sharedlib.utils.files import create_directory_if_not_exists
-from sharedlib.utils.misc import calculate_total, adding_seconds
+from sharedlib.utils.summary import define_results_postprocess_dict, define_results_upload_dict
 
 log = log.getLogger(__name__)
 
@@ -21,58 +21,52 @@ def set_executepermissions(dest_path):
     except Exception as e:
         log.error(f'Could not set execute permission for {dest_path}. Error: {e}')
 
-def run_command(cmd, store_output=False):
+def run_command(cmd, result, store_output=False):
     '''Runs the Velociraptor command to post-process zip file.'''
 
-    if store_output == True:
+    if store_output:
         run_opts = {
-            "capture_output": True,
-            "text": True
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
         }
     else:
         run_opts = {
-            "capture_output": False,
-            "text": False
+            "stderr": subprocess.PIPE,  # capture errors
+            "text": True,
         }
-    
+
+    start = time.time()
+
     try:
         log.debug(f'Running command: {" ".join(cmd)}')
-        start = time.time()
-
-        cp = subprocess.run(cmd, check=True, **run_opts)
-        end = time.time()
-
-        duration = end - start
         
-        log.info(f'Command executed successfully in {duration:.2f} seconds.')
+        cp = subprocess.run(cmd, check=True, **run_opts)
+
+        duration = time.time() - start
+
+        result['success'] = True
+        result['duration_in_sec'] = duration
+        result['stdout'] = cp.stdout if store_output else None
+        result['stderr'] = cp.stderr
+        result['returncode'] = cp.returncode
+
+        log.info(f'Command executed successfully in {round(duration, 2)} seconds.')
 
     except subprocess.CalledProcessError as e:
-        log.info(f'Command failed to execute. Error: {e.returncode}')
-        cp = None
-        duration = None
-    
-    return cp, duration
 
-def collecting_data_for_summary(duration):
-    ''' Returns value with only 2 decimals after comma '''
+        duration = time.time() - start
 
-    return round(duration, 2)
+        result['success'] = False
+        result['duration_in_sec'] = duration
+        result['error'] = (e.stderr or e.stdout or str(e)).strip()
+        result['stdout'] = e.stdout
+        result['stderr'] = e.stderr
+        result['returncode'] = e.returncode
 
-def generate_summary_postprocessing(summary, zipfile, extracted_zip, filename):
-    ''' Generates a summary of post-processing time and dumps it to stdout and a file '''
+        log.error(f'Command failed (exit {e.returncode}) after {duration} seconds. Error: {e.stderr}')
 
-    summary[zipfile]['total'] = calculate_total(summary[zipfile])
-    summary[zipfile] = adding_seconds(summary[zipfile])
-    summary_json = json.dumps(summary, indent=4)
-
-    log.info('Printing summary:')
-    print('\n', summary_json, '\n')
-
-    fullpath = os.path.join(extracted_zip, filename)
-    log.info(f'Outputting summary to: {fullpath}')
-    with open(fullpath, 'w') as f:
-        f.write(summary_json)
-
+    return result
 
 def download_velociraptor(binary, url):
     '''This function downloads the velociraptor binary if it does not exist on disk yet.'''
@@ -122,8 +116,7 @@ def build_remap(zipfile, remapfolder, binary, definitions, unzipdir):
     remappingfile = os.path.join(unzip_dir_fullpath, remappingfilename)
 
     log.info(f'Creating remapping file: {remappingfile}')
-
-    run_command(cmd, store_output=True)
+    run_command(cmd, {}, store_output=True)
     
     return remappingfile
 
@@ -145,9 +138,10 @@ def find_hostname(remappingfile, binary, definitions):
     ]
 
     log.info(f'Extracting hostname in {registrykey}')
-    result, _ = run_command(cmd, store_output=True)
+    result = run_command(cmd, {}, store_output=True)
     try:
-        hostname = json.loads(result.stdout)[0]['Hostname']
+
+        hostname = json.loads(result['stdout'])[0]['Hostname']
         log.info(f'Successfully extracted hostname: {hostname}')
         return hostname
     except:
@@ -156,7 +150,7 @@ def find_hostname(remappingfile, binary, definitions):
 
 
 def load_artifacts(artifactslist):
-    ''' Loads the Velociraptor artefacts from the inputfile.'''
+    ''' Loads the Velociraptor artifacts from the inputfile.'''
 
     try:
         with open(artifactslist, 'r') as f:
@@ -223,6 +217,8 @@ def get_zipfiledir(zipfile, unzip_dir):
 def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outputformat, remappingfile):
     '''Prepares the Velociraptor command and runs it to post-process zip file.'''
     
+    postprocess_results = define_results_postprocess_dict()
+
     artifact_name = re.sub(r'\(.*', '', artifact)
 
     zipfile_basename = get_zipfilename(zipfile, unzipdir)
@@ -245,9 +241,16 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
     ]
 
     log.info(f'Running artifact: {artifact}')
-    _, duration = run_command(cmd)
 
-    if os.path.exists(outputfile) and os.path.getsize(outputfile) == 0:
+    postprocess_results = run_command(cmd, postprocess_results, store_output=False)
+
+    filesize = os.path.getsize(outputfile)
+    if os.path.exists(outputfile) and filesize == 0:
         log.debug(f'Empty file: {outputfile}')
 
-    return outputfile, duration
+    postprocess_results['size'] = filesize
+    postprocess_results['fullpath'] = outputfile
+    postprocess_results['artifact'] = artifact
+    postprocess_results['basename'] = os.path.basename(outputfile)
+
+    return postprocess_results

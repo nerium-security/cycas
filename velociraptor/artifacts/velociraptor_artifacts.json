@@ -1,9 +1,9 @@
 {
   "essential": [
+    "Custom.Windows.Registry.UserAssist()",
+    "Custom.Windows.Sys.Users()"
   ],
   "full": [
-    "Custom.Windows.Registry.UserAssist()",
-    "Custom.Windows.Sys.Users()",
     "Windows.Sys.AppcompatShims()",
     "Custom.Windows.Forensics.Bam()",
     "Windows.Forensics.RecentApps(RecentAppsKey='HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\**')",

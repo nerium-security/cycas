@@ -9,11 +9,14 @@ import os
 import logging as log
 import pandas as pd
 import fileinput
+import numpy as np
 from pathlib import Path
 from datetime import timedelta
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
 from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel
 from azure.kusto.ingest.status import KustoIngestStatusQueues
+from datetime import datetime
+from collections import Counter
 
 log = log.getLogger(__name__)
 
@@ -67,8 +70,17 @@ class AdxManager:
 
         try:
 
-            df = pd.read_json(f, lines=True, nrows=nrows, chunksize=chunksize)
-            log.debug(f'Loaded chunk of file into Pandas dataframe: {f}')
+            # --- In-memory JSON cases ---
+            if isinstance(f, dict):
+                df = pd.DataFrame([f], dtype=object)
+
+            elif isinstance(f, list):
+                df = pd.DataFrame(f, dtype=object)
+
+            # --- Filepath case ---
+            elif isinstance(f, (str, Path)):
+                df = pd.read_json(f, lines=True, nrows=nrows, chunksize=chunksize, dtype=object)
+                log.debug(f'Loaded chunk of file into Pandas dataframe: {f}')
 
             if isinstance(df, pd.DataFrame):
                 if df.empty:
@@ -77,25 +89,9 @@ class AdxManager:
 
             return df
         except Exception as e:
-            log.error(f'Error converting file to dataframe: {e}')
+
+            log.error(f'Error converting {f} to dataframe: {e}')
             return pd.DataFrame()
-
-    def find_dynamic_int_columns(self, df, var_sample_size):
-        
-        log.debug('Entered function that finds dynamic and integer columns.')
-        dict_columns = []
-        int_columns = []
-
-        if isinstance(df, pd.DataFrame):
-            for column in df.columns:
-                for item in df[column].head(var_sample_size):
-                    if isinstance(item, dict):
-                        if len(item.keys()) >= 1 and column not in dict_columns:
-                            dict_columns.append(column)
-                    if isinstance(item, int) and column not in int_columns:
-                        int_columns.append(column)
-
-        return dict_columns, int_columns
 
     def convert_dict_to_json(self, df, dyn_columns):
         log.debug('Entered function to convert dictionaries in the dataframe to json.')
@@ -115,52 +111,119 @@ class AdxManager:
         log.debug(f'Extracted the following name which will be used to create the table: {tablename}.')
         return tablename
 
-    def remove_columnames_with_special_characters(self, colums):
-        
-        return colums[~colums.str.contains(r'\(.*\)')]
-
-    def prepare_string_with_columnames(self, columns, dyn_columns, int_columns):
+    def prepare_string_with_columnames(self, schema):
         ''' 
         Prepares the string with columnames and determines columntypes.
         Expected output: ['CreationTime']:date, ['PhysicalProcessorCount']:string, etc
         '''
 
-        if not any([dyn_columns, int_columns]):
-            dyn_columns = []
-            int_columns = []
-
-        time_columns = ['time', '0x30', '0x10', 'date', 'LastSeen', 'LastAccess']
-
         parts = []
-        for columname in dict.fromkeys(columns):
-            columname = columname.replace('>', '').replace('<', '')
+        
+        for columnname in dict.fromkeys(schema):  # preserves order, removes duplicates
 
-            if any(item in columname.lower() for item in time_columns):
-                dtype = 'date'
-            elif columname in dyn_columns:
-                dtype = 'dynamic'
-            elif columname in int_columns:
-                dtype = 'int'
-            else:
-                dtype = 'string'
+            clean_name = self.sanitize_adx_column_name(columnname)
+            
+            # default safely to string if missing from schema
+            adx_type = schema.get(clean_name, 'string')
 
-            parts.append(f"['{columname}']:{dtype}")
-
-        # Adding columns Hostname and Sourcefile
-        #parts.append("['Hostname']:string")
-        #parts.append("['Sourcefile']:string")
+            parts.append(f"['{clean_name}']:{adx_type}")
 
         return ', '.join(parts)
 
-    def create_new_table_if_required(self, Config, file):
-        ''' Creates a new table when there is isn't one or when a new column needs to be added to the table '''
 
-        tablename = self.get_tablename(os.path.basename(file))
+    def _classify_value(self, value: str):
+        '''
+        Classify value into an ADX type.
+
+        Returns one of:
+        - 'long'
+        - 'datetime'
+        - 'dynamic'
+        - 'string'
+        '''
+
+        if value is None:
+            return None
+
+        # If dropna() was used:
+        if value is None:
+            return None
+        if isinstance(value, float) and pd.isna(value):
+            return None
+
+        # Real structured python objects
+        if isinstance(value, (dict, list)):
+            return 'dynamic'
+
+        # Bool before int
+        if isinstance(value, (bool)):
+            return 'bool'
+
+        # Real datetime objects
+        if isinstance(value, (datetime)):
+            return 'datetime'
+
+        # Numeric objects
+        if isinstance(value, (int)):
+            return 'long'
+
+        # Epoch detection for float 
+        if isinstance(value, (float)):
+            num = float(value)
+            if 1_000_000_000 <= num <= 20_000_000_000_000:
+                return 'datetime'
+            else:
+                return 'real'
+
+        if isinstance(value, str):
+            s = value.strip()
+
+            # ISO-8601 datetime
+            try:
+                datetime.fromisoformat(s.replace('Z', '+00:00'))
+                return 'datetime'
+            except ValueError:
+                pass
+
+        # return string for rest (which includes unclear and vague values)
+        return 'string'
+
+
+    def infer_adx_type_majority(self, df, sample_size=100):
+        '''
+        Infer ADX type by majority vote.
+        '''
+
+        schema = {}
+        
+        for col in df.columns:
+
+            values = df[col].dropna().head(sample_size).tolist()
+            
+            counts = Counter(self._classify_value(v) for v in values if self._classify_value(v) is not None)
+
+            if not counts:
+                schema[col] = 'string'
+                continue
+
+            schema[col] = counts.most_common(1)[0][0]
+
+        return schema
+
+    def create_new_table_if_required(self, Config, file, forcetablename):
+        ''' Creates a new table when there is isn't one or when a new column needs to be added to the table '''
+        
+        if forcetablename:
+            tablename = forcetablename
+        else:
+            tablename = self.get_tablename(os.path.basename(file))
+            if os.path.getsize(file) == 0:
+                return tablename
 
         table_exists, existing_columns = self.check_if_table_exists(tablename)
 
         cmd_createmergetable, new_columns = self.get_table_createcommand(file, Config, tablename)
-               
+            
         new_columns_exists = self.checking_if_new_columns_exists(existing_columns, new_columns)
 
         if not table_exists or new_columns_exists:
@@ -169,7 +232,6 @@ class AdxManager:
 
         return tablename
         
-
     def checking_if_new_columns_exists(self, existing_columns, new_columns):
         ''' Returns True if a new column is observed that needs to be added to the table in ADX. '''
 
@@ -182,19 +244,39 @@ class AdxManager:
 
         return False
 
+    def sanitize_adx_column_name(self, name: str) -> str:
+        '''
+        Sanitize a string so it can be safely used as an Azure Data Explorer (ADX) column name.
+        '''
+
+        name = re.sub(r"[<>\[\]{}\"'`\\]", "_", name)
+        name = re.sub(r"\s+", "_", name)
+        name = re.sub(r"[^A-Za-z0-9_]", "_", name)
+
+        if name and name[0].isdigit():
+            name = f'{name}'
+
+        return name
+
     def get_table_createcommand(self, file, Config, tablename):
         ''' Prepares the command for creating a table in ADX'''
-
+        
         df = self.convert_to_dataframe(file, Config.var_sample_size, chunksize=None)
 
-        columnames = self.remove_columnames_with_special_characters(df.columns)
+        schema = self.infer_adx_type_majority(df, Config.var_sample_size)
+        
+        columnstring = self.prepare_string_with_columnames(schema)
 
-        dyn_columns, int_columns = self.find_dynamic_int_columns(df, Config.var_sample_size)
+        clean_columnames = list(schema.keys())
 
-        columnstring = self.prepare_string_with_columnames(columnames, dyn_columns, int_columns)
+        return f'.create-merge table {tablename} ({columnstring})', clean_columnames
 
-        return f'.create-merge table {tablename} ({columnstring})', columnames
+    def upload_detailed_status(self, results, Config, tablename):
 
+        table = self.create_new_table_if_required(Config, results, tablename)
+        results_df = pd.DataFrame(results)
+
+        self.launch_upload_df(results_df, table)
 
     def read_ingestion_properties(self, tablename):
 
@@ -206,32 +288,84 @@ class AdxManager:
 
     def launch_upload_file(self, tablename: str, fullpath: str) -> bool:
         '''Uploads a file to adx'''
+        result = {}
+        start = time.time()
+        ingestion_props = self.read_ingestion_properties(tablename)
+
+        size = os.path.getsize(fullpath)
+        basename = os.path.basename(fullpath)
+        result['basename'] = basename
+        result['size'] = size      
+        result['ignored_upload'] = False 
+
+        if size == 0:
+
+            return {
+                
+                'upload_initiated': False,
+                'upload_error': 'Filesize is 0'
+            }
+
+        try:
+            
+            self.kusto_queued.ingest_from_file(fullpath, ingestion_properties=ingestion_props)
+            
+            duration = time.time() - start
+            result['upload_initiated_timestamp'] = start
+            
+            log.info(f'Successfully initiated upload request of {basename} to table {tablename}')
+            
+            result['upload_initiated'] = True
+            result['upload_duration_in_sec'] = duration
+
+        except Exception as e:
+            log.error(f'Failed to initiate the data upload request of {basename} to table {tablename}. Error: {e}' )
+
+            duration = time.time() - start
+            result['upload_initiated'] = False
+            result['upload_duration_in_sec'] = duration
+            result['upload_error'] = str(e)
+
+        return result
+
+    def launch_upload_df(self, df, tablename: str) -> bool:
+        '''Uploads a dataframe to adx'''
 
         ingestion_props = self.read_ingestion_properties(tablename)
 
         try:
-            basename = os.path.basename(fullpath)
+            self.kusto_queued.ingest_from_dataframe(df, ingestion_properties=ingestion_props)
+            log.info(f'Initiated the upload of detailed status to ADX table: {tablename}')
 
-            self.kusto_queued.ingest_from_file(fullpath, ingestion_properties=ingestion_props)
-
-            log.info(f'Successfully initiated upload request of {basename} to table {tablename}')
-
-            return True
         except Exception as e:
-            log.error(f'Failed to initiate the data upload request of {basename} to table {tablename}. Error: {e}' )
-            return False
+            log.error(f'Failed to initiate the data upload request to table {tablename}. Error: {e}' )
 
     def add_hostname_to_file(self, fullpath, hostname, zipfile):
         ''' Adds hostname and sourcefilename inline to file'''
 
+        start = time.time()
+        basename = os.path.basename(fullpath)
         columns = f',"Sourcefilename":"{zipfile}","Hostname":"{hostname}"'
         replacement = columns + '}'
 
-        for line in fileinput.input(fullpath, inplace=True):
-            line = line.rstrip("\n")
-            if line.endswith("}"):
-                line = line[:-1] + replacement
-            print(line)
+        try:
+            for line in fileinput.input(fullpath, inplace=True):
+                line = line.rstrip("\n")
+                if line.endswith("}"):
+                    line = line[:-1] + replacement
+                print(line)
+        except Exception as e:
+            log.error(f'Could not add hostname as column to file {basename}. Error: {e}')
+            return {
+                'added_hostname_error': e 
+            }
+        
+        duration = time.time() - start
+
+        return {      
+            'added_hostname': True,
+            'added_hostname_duration': duration
+        }
 
     def check_if_table_exists(self, tablename):
 

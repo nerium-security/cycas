@@ -5,7 +5,7 @@ git switch -c "$PREFIX/$SUFFIX"
 
 < Do the actual work >
 
-# push to main
+# push to repository
 git add .
 git commit -m "Fix: $SUFFIX"
 git push -u origin "$PREFIX/$SUFFIX"

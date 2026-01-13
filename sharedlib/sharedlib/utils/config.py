@@ -46,6 +46,8 @@ class Config:
     var_delete_processedzipfiles: str
     var_localdevice_concurrency: int
     var_add_hostname: bool
+    var_artifact_summary_filename: str
+    var_master_summary_filename: str
     velociraptor_enabled: bool
     velociraptor_url: str
     velociraptor_remappingdir: str
@@ -92,6 +94,8 @@ def load_config() -> Config:
         var_zipfile_suffix			    = os.getenv('VAR_ZIPFILE_SUFFIX'),
         var_location_ignorelist		    = os.getenv('VAR_LOCATION_IGNORELIST'),
         var_loglevel                    = os.getenv('VAR_LOGLEVEL'),
+        var_artifact_summary_filename   = os.getenv('VAR_ARTIFACT_SUMMARY_FILENAME'),
+        var_master_summary_filename     = os.getenv('VAR_MASTER_SUMMARY_FILENAME'),
         velociraptor_url                = os.getenv('VELOCIRAPTOR_URL'),
         velociraptor_binary             = os.getenv('VELOCIRAPTOR_BINARY'),
         velociraptor_remappingdir       = os.getenv('VELOCIRAPTOR_REMAPPINGDIR'),
