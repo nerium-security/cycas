@@ -72,9 +72,9 @@ def summary_per_zip_to_file(summary, extract_path, filename):
 
     return out_path
 
-def pretty_print_summary_per_zip(zipfile, results, mode='full'):
+def pretty_print_summary_per_zip(outputfolder, results, mode='full'):
     '''
-    Builds and returns the formatted summary text for a ZIP file (new schema).
+    Builds and returns the formatted summary text for a ZIP file
 
     mode:
         - 'full'    -> print full table
@@ -84,20 +84,25 @@ def pretty_print_summary_per_zip(zipfile, results, mode='full'):
     if mode not in ('full', 'limited'):
         mode = 'full'
 
-    zipfile_fullpath = zipfile or results.get('zipfile_fullpath', '')
-    hostname = results.get('hostname')
-    zipfile_size = results.get('zipfile_size')
+    # ---- Pull summary info (new schema) ----
+    summary_list = results.get('summary', [])
+    summary = summary_list[0]
 
-    artifacts = results.get('artifacts', []) or []
+    zipfile_fullpath = summary.get('zipfile_fullpath')
+    hostname = summary.get('hostname', '<NotExtracted>')
+    zipfile_size = summary.get('zipfile_size')
+
+    # Artifacts now live under "postprocessing"
+    artifacts = results.get('postprocessing')
 
     def build_table(table_mode):
         output_lines = []
-
+        
         # ---- Header ----
         output_lines.append(f'ZIP fullpath:\t {zipfile_fullpath}')
         output_lines.append(f'ZIP size:\t {_format_size(zipfile_size)}')
-        if hostname:
-            output_lines.append(f'Hostname:\t {hostname}')
+        output_lines.append(f'Hostname:\t {hostname}')
+        output_lines.append(f'Outputfolder:\t {outputfolder}')
         output_lines.append('Summary table:\n')
 
         rows_data = []
@@ -109,7 +114,7 @@ def pretty_print_summary_per_zip(zipfile, results, mode='full'):
         for a in artifacts:
             artifact = a.get('artifact', '')
             size = a.get('size')
-            duration = a.get('duration')
+            duration = a.get('duration_in_sec')  # <-- new key
             success = a.get('success')
             error = a.get('error')
             returncode = a.get('returncode')
@@ -132,22 +137,16 @@ def pretty_print_summary_per_zip(zipfile, results, mode='full'):
 
             # ---- duration ----
             if isinstance(duration, (int, float)):
-                dur_str = f'{duration:.2f} sec'
+                dur_str = f'{float(duration):.2f} sec'
                 total_duration += float(duration)
             else:
                 dur_str = ''
 
             # ---- error ----
-            if error is None:
-                error_str = ''
-            else:
-                error_str = str(error)
+            error_str = '' if error is None else str(error)
 
             # ---- returncode ----
-            if isinstance(returncode, int):
-                returncode_str = str(returncode)
-            else:
-                returncode_str = ''
+            returncode_str = str(returncode) if isinstance(returncode, int) else ''
 
             rows_data.append({
                 'artifact': artifact,
@@ -186,10 +185,7 @@ def pretty_print_summary_per_zip(zipfile, results, mode='full'):
             ]
             order = ['artifact', 'size', 'duration', 'status']
 
-        rows = []
-        for rd in rows_data:
-            rows.append([rd[key] for key in order])
-
+        rows = [[rd[key] for key in order] for rd in rows_data]
         totals_row = [totals_row_data[key] for key in order]
         rows.append(totals_row)
 
@@ -226,6 +222,7 @@ def pretty_print_summary_per_zip(zipfile, results, mode='full'):
     print(print_text, '\n')
 
     return full_text
+
 
 def merge_master_table_with_file(master_results, output_path):
     '''
@@ -264,21 +261,28 @@ def merge_master_table_with_file(master_results, output_path):
 def build_all_zip_summary(per_zip_results):
     ''' Builds the entry for all zip summary (master summary) for the new schema. '''
 
-    artifacts = per_zip_results.get('artifacts', []) or []
+    artifacts = per_zip_results.get('postprocessing', [])
+    hostname = per_zip_results['summary'][0].get('hostname')
+    basename = per_zip_results['summary'][0].get('zipfile_basename')
 
-    total_processing = sum(
-        a.get('duration') for a in artifacts
-        if isinstance(a.get('duration'), (int, float))
+    total_processing_duration = sum(
+        a.get('duration_in_sec') for a in artifacts
+        if isinstance(a.get('duration_in_sec'), (int, float))
+    )
+
+    total_processing_bytes = sum(
+        a.get('size') for a in artifacts
+        if isinstance(a.get('size'), (int, float))
     )
 
     success_count = sum(1 for a in artifacts if a.get('success') is True)
     fail_count = sum(1 for a in artifacts if a.get('success') is False)
 
     return {
-        'zipfile': per_zip_results.get('zipfile_fullpath'),
-        'hostname': per_zip_results.get('hostname'),
-        'total_processing': total_processing,
-        'total_size_bytes': per_zip_results.get('zipfile_size'),
+        'zipfile': basename,
+        'hostname': hostname,
+        'total_processing': total_processing_duration,
+        'total_size_bytes': total_processing_bytes,
         'success_count': success_count,
         'fail_count': fail_count,
     }
@@ -344,7 +348,7 @@ def pretty_print_master_table(master_results):
     print(header_text)
     output_lines.append(header_text.rstrip('\n'))
 
-    headers = ['ZIP File', 'Hostname', 'Duration', 'Size', 'OK', 'Failed']
+    headers = ['ZIP File', 'Hostname', 'Total duration', 'Total output size', 'OK', 'Failed']
 
     # ---- Build regular rows ----
     rows = []

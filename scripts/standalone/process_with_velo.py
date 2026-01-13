@@ -4,6 +4,10 @@ import argparse
 import logging as log
 from datetime import datetime
 from pathlib import Path
+from sharedlib.utils.log import setup_logging
+from sharedlib.utils.status import (add_summary_info_to_status,
+                                    add_hostname_to_status)
+
 from sharedlib.utils.postprocess import (download_velociraptor, 
                                          build_remap, 
                                          find_hostname, 
@@ -11,9 +15,7 @@ from sharedlib.utils.postprocess import (download_velociraptor,
                                          select_artifacts, 
                                          postprocess)
 
-from sharedlib.utils.summary import (add_results_as_list,
-                                     define_results_dict,
-                                     add_info_to_results,
+from sharedlib.utils.summary import (define_results_dict,
                                      pretty_print_summary_per_zip,
                                      get_duration_from_timespan,
                                      build_all_zip_summary,
@@ -25,8 +27,6 @@ from sharedlib.utils.zip import (extract_encrypted_and_non_encrypted_zipfiles,
                                  get_password,
                                  load_from_env_variable,
                                  find_zip_files)
-
-from sharedlib.utils.log import setup_logging
 
 script_path = sys.argv[0]
 scriptname = os.path.basename(script_path)
@@ -92,11 +92,11 @@ def main():
     all_zip_summaries = []
     for zipfile in zipfiles:
 
-        zip_results = define_results_dict()
+        results = define_results_dict()
 
         zipfile = str(zipfile)
-        zip_results = add_info_to_results(zip_results, key='zipfile_fullpath', value=zipfile)
-        zip_results = add_info_to_results(zip_results, key='zipfile_size', value=os.path.getsize(zipfile))
+
+        results = add_summary_info_to_status(results, zipfile, None, None, start)
 
         if outputfolder:
             p = Path(zipfile)
@@ -121,12 +121,12 @@ def main():
         hostname = find_hostname(remappingfile,
                                  binary_fullpath,
                                  definitions)
-        
-        zip_results = add_info_to_results(zip_results, key='hostname', value=hostname)
+
+        add_hostname_to_status(results, None, hostname)
 
         for artifact in artifacts_selected:
 
-            per_artifact_results = postprocess(hostname, 
+            result_postprocess = postprocess(hostname, 
                                         artifact, 
                                         zipfile, 
                                         definitions, 
@@ -135,13 +135,13 @@ def main():
                                         outputtype,
                                         remappingfile)
             
-            zip_results = add_results_as_list(zip_results, per_artifact_results, key='artifacts')
-            zip_results = add_info_to_results(zip_results, key='finished', value=True)
+            results['postprocessing'].append(result_postprocess)
 
-        summary_per_zip = pretty_print_summary_per_zip(zipfile, zip_results, mode='limited')
+        summary_per_zip = pretty_print_summary_per_zip(extract_path, results, mode='full')
+        
         summary_per_zip_to_file(summary_per_zip, extract_path, artifact_summary)
 
-        all_zip_summary = build_all_zip_summary(zip_results)
+        all_zip_summary = build_all_zip_summary(results)
         all_zip_summaries.append(all_zip_summary)
 
         duration = get_duration_from_timespan(start)

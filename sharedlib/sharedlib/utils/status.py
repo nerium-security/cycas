@@ -1,4 +1,6 @@
 from sharedlib.utils.config import load_config
+from sharedlib.utils.log import generate_sessionid
+from sharedlib.utils.zip import is_zip_encrypted
 import logging as log
 import os
 
@@ -89,3 +91,29 @@ def upload_detailed_status_to_adx(managers, results, tablename):
         for key, tablename in dict_status.items():
             results_prepared = _prepare_dictionary_for_upload_to_adx(results, key)
             managers.adx.upload_detailed_status(results_prepared, Config, tablename)
+
+def add_summary_info_to_status(results, zipfile, sessionid, source_name, start):
+    ''' Adds summary info to results dictionary '''
+    
+    results['summary'].append({
+        'zipfile_basename': os.path.basename(zipfile),
+        'zipfile_fullpath': zipfile,
+        'zipfile_size': os.path.getsize(zipfile),
+        'sessionid': sessionid,
+        'uploadid': 'id' + generate_sessionid(),
+        'source_name': source_name,
+        'starttime_script': start,
+        'is_encrypted': is_zip_encrypted(zipfile)
+    })
+
+    return results
+
+def add_hostname_to_status(results, start_postprocessing, hostname):
+    ''' Adds hostname to status dictionary '''
+
+    results['summary'][0].update({
+        'hostname': hostname,
+        'started_postprocessing': start_postprocessing
+    })
+
+    return results

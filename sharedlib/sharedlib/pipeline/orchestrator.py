@@ -1,12 +1,12 @@
 from sharedlib.utils.config import load_config
 from sharedlib.utils.files import split_jsonl_by_size, list_files_in_directory, list_files_in_directory, delete_file, filter_triage_packages, get_filesize_bytes
-from sharedlib.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename, is_zip_encrypted
+from sharedlib.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename
 from sharedlib.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
 from sharedlib.utils.summary import define_results_upload_dict, define_results_dict, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file
 from sharedlib.utils.misc import send_webhook
 from sharedlib.utils.auth import Authenticator
-from sharedlib.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing, upload_detailed_status_to_adx
-from sharedlib.utils.log import generate_sessionid
+from sharedlib.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing, upload_detailed_status_to_adx, add_summary_info_to_status, add_hostname_to_status
+
 from datetime import datetime
 import os
 import logging as log
@@ -21,17 +21,8 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
 
     results = define_results_dict()
 
-    results['summary'].append({
-        'zipfile_basename': os.path.basename(zipfile),
-        'zipfile_fullpath': zipfile,
-        'zipfile_size': os.path.getsize(zipfile),
-        'sessionid': sessionid,
-        'uploadid': 'id' + generate_sessionid(),
-        'source_name': source_name,
-        'starttime_script': start,
-        'is_encrypted': is_zip_encrypted(zipfile)
-    })
-
+    results = add_summary_info_to_status(results, zipfile, sessionid, source_name, start)
+    
     write_logentry_if_new(managers, Status.NEW, results)
 
     should_process = determine_if_needs_processing(managers, zipfile)
@@ -76,9 +67,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
                                                    zipfilecontent, 
                                                    results)
     
-    results.update({
-        'finished': True
-    })
+    results.update({'finished': True})
 
     update_status_in_log(managers, Status.FINISHED, start, results)
 
@@ -95,8 +84,6 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
 
     log.info(f'Post-processing is set to: {Config.velociraptor_enabled}')
     if Config.velociraptor_enabled:
-
-
 
         remappingdir = Config.velociraptor_remappingdir
         binary = Config.velociraptor_binary
@@ -129,10 +116,7 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
 
         start_postprocessing = datetime.now()
 
-        results['summary'][0].update({
-            'hostname': hostname,
-            'started_postprocessing': start_postprocessing
-        })
+        add_hostname_to_status(results, start_postprocessing, hostname)
 
         for artifact in artifacts:
 
