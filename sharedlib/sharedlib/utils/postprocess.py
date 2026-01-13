@@ -150,7 +150,7 @@ def find_hostname(remappingfile, binary, definitions):
 
 
 def load_artifacts(artifactslist):
-    ''' Loads the Velociraptor artefacts from the inputfile.'''
+    ''' Loads the Velociraptor artifacts from the inputfile.'''
 
     try:
         with open(artifactslist, 'r') as f:

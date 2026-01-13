@@ -31,7 +31,7 @@ from sharedlib.utils.log import setup_logging
 script_path = sys.argv[0]
 scriptname = os.path.basename(script_path)
 parser = argparse.ArgumentParser(
-description = 'This script post-processes zip files containing raw artefact files collected with velociraptor.',
+description = 'This script post-processes zip files containing raw artifact files collected with velociraptor.',
 epilog=f'Example usage: python3 {scriptname} -i *.zip')
 parser.add_argument('-o', '--outputtype', default='csv', choices=['csv', 'jsonl', 'json'])
 parser.add_argument('-c', '--custom_definitions', default='../../velociraptor/definitions/')
