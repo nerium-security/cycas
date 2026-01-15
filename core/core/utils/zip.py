@@ -1,3 +1,20 @@
+'''
+ZIP handling utilities for the ingestion pipeline.
+
+Provides helpers for:
+    - Detecting encrypted ZIP files (AES/standard ZIP encryption)
+    - Extracting hostnames from ZIP filenames
+    - Validating ZIP passwords and prompting the user when needed
+    - Listing and extracting files from ZIP archives (including nested data.zip)
+    - Applying ignore rules to ZIP contents (by extension, size, and patterns)
+    - Discovering ZIP files on disk using glob patterns
+
+Several functions log errors instead of raising exceptions and some may
+prompt the user for input when a password is required.
+'''
+
+from core.utils.files import list_files_in_directory, list_files_in_directory, filter_triage_packages
+from core.utils.config import load_config
 import logging as log
 import pyzipper
 import os
@@ -9,8 +26,18 @@ import glob
 
 log = log.getLogger(__name__)
 
+Config = load_config()
+
 def is_zip_encrypted(zipfile):
-    ''' Checks if a zip file is encrypted'''
+    '''
+    Check whether a ZIP archive contains encrypted entries.
+
+    Args:
+        zipfile (str): Path to the ZIP file.
+
+    Returns:
+        bool: True if the ZIP contains an encrypted entry, otherwise False.
+    '''
 
     with pyzipper.AESZipFile(zipfile) as zf:
         for info in zf.infolist():
@@ -29,6 +56,12 @@ def get_hostname_from_filename(fullpath):
     - Collection-HOSTNAME-2024-03-01T16_10_46Z.zip
     - HOSTNAME-2025-03-01T16_10_46Z.zip
     - LAPTOP-DC-C.65e548a6aa01faa1-F.D3DN1LABPD0OA
+
+    Args:
+        fullpath (str): Filename or full path to parse.
+
+    Returns:
+        str: Extracted hostname if matched, otherwise an empty string.
     '''
 
     if fullpath:
@@ -54,6 +87,19 @@ def get_hostname_from_filename(fullpath):
             return ''
 
 def verify_if_password_works(zipfile, zip_password):
+    '''
+    Verify whether a password can decrypt at least one entry in an encrypted ZIP.
+
+    Attempts to open an entry using the provided password and read a single byte.
+
+    Args:
+        zipfile (str): Path to the ZIP file.
+        zip_password (str): Candidate password.
+
+    Returns:
+        bool: True if the password successfully decrypts an entry, otherwise False.
+    '''
+
     try:
         with pyzipper.AESZipFile(zipfile) as zf:
             for info in zf.infolist():
@@ -66,7 +112,16 @@ def verify_if_password_works(zipfile, zip_password):
         return False
 
 def zip_contains_raw_artifacts(content):
-    
+    '''
+    Determine whether a ZIP contains raw artifacts under the 'uploads/' prefix.
+
+    Args:
+        content (list): List of ZipInfo-like objects returned from `infolist()`.
+
+    Returns:
+        bool: True if any entry path starts with 'uploads/', otherwise False.
+    '''
+
     for file_in_zip in content:
 
         if file_in_zip.filename.startswith('uploads/'):
@@ -79,7 +134,23 @@ def zip_contains_raw_artifacts(content):
     return False
 
 def extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password):
-    '''Extract zip file if it is encrypted with a password.'''
+    '''
+    Handle extraction logic for encrypted and non-encrypted triage ZIP structures.
+
+    Lists ZIP contents and detects whether a nested 'data.zip' exists. If found,
+    extracts 'data.zip' to the extraction path and returns it as the new archive
+    to process. If no nested archive is present, returns the original ZIP.
+
+    Args:
+        zipfile (str): Path to the outer ZIP file.
+        extract_path (str): Directory to extract into.
+        zip_password (str | None): ZIP password, if required.
+
+    Returns:
+        tuple[str | None, str | None]: Tuple of:
+            - extracted_zip: Path to extracted nested 'data.zip' if present, otherwise None
+            - unextracted_zip: Path to the ZIP to process if no nested ZIP was extracted, otherwise None
+    '''
 
     zipfilecontent = list_files_in_zip(zipfile, zip_password)
     
@@ -104,18 +175,41 @@ def extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_pass
             return zipfile, None
 
 def get_extract_path(zip_path, base_extract_dir):
-    '''Builds a clean extraction path based on the zip filename.'''
-    # Get the filename without .zip
+    '''
+    Build an extraction folder path for a zipfile.
+
+    Uses the zip filename (without extension) as a subfolder under the
+    provided base extraction directory.
+
+    Args:
+        zip_path (str): Path to the zipfile.
+        base_extract_dir (str): Base directory for extractions.
+
+    Returns:
+        str: Full path to the extraction directory for this zipfile.
+    '''
+
     zip_name = os.path.splitext(os.path.basename(zip_path))[0]
 
-    # Join with base unzip directory
     return os.path.join(base_extract_dir, zip_name)
 
 def extract_single_file(zip_path, file_info, extract_to, password=None):
     '''
-    Extracts a single file from a zip archive given an AESZipInfo object.
-    Also checks if the extracted file is 'data.zip' and extracts its contents.
+    Extract a single entry from a ZIP archive.
+
+    Extracts the entry described by `file_info` into the target folder. If the
+    entry is encrypted, a password must be provided.
+
+    Args:
+        zip_path (str): Path to the ZIP archive.
+        file_info: Zip entry metadata (AESZipInfo/ZipInfo-like object).
+        extract_to (str): Destination directory for extraction.
+        password (str | None): Password for encrypted entries.
+
+    Returns:
+        str or None: Full path to the extracted file on success, otherwise None.
     '''
+
     extracted_path = None
     try:
         with pyzipper.AESZipFile(zip_path, 'r') as zf:
@@ -138,9 +232,26 @@ def extract_single_file(zip_path, file_info, extract_to, password=None):
 
     return extracted_path
 
-
 def is_ignored(file_in_zip, ignorelist):
-    '''Determines wheter a file should be ignored for further processing or not'''
+    '''
+    Determine whether a ZIP entry should be ignored for further processing.
+
+    Applies rules in this order:
+        - Ignore directories
+        - Ignore non-.json/.jsonl files
+        - Ignore empty files
+        - Ignore files matching basename patterns in ignorelist['ignorelist']
+        - Ignore files matching path patterns in ignorelist['ignorepattern']
+
+    Args:
+        file_in_zip: Zip entry metadata object with `filename` and `file_size`.
+        ignorelist (dict): Ignore configuration with optional keys:
+            - 'ignorelist': list of filename (basename) patterns
+            - 'ignorepattern': list of full path patterns
+
+    Returns:
+        dict: Decision payload
+    '''
     
     filename = file_in_zip.filename
 
@@ -178,7 +289,17 @@ def is_ignored(file_in_zip, ignorelist):
     return result(False)
 
 def load_ignore_list(ignorelist_path):
-    '''Load the ignore list from a file.'''
+    '''
+    Load ignore patterns from a JSON file.
+
+    Args:
+        ignorelist_path (str): Path to the ignore list JSON file.
+
+    Returns:
+        dict or list: Parsed ignore list configuration on success.
+        Returns an empty list on failure.
+    '''
+
     try:
         with open(ignorelist_path, 'r') as f:
             config = json.load(f)
@@ -189,7 +310,16 @@ def load_ignore_list(ignorelist_path):
         return []
 
 def list_files_in_zip(zip_path, password=None):
-    '''Returns a list of file names contained in the zip archive.'''
+    '''
+    List entries contained in a ZIP archive.
+
+    If the archive appears to contain encrypted entries and no password is
+    provided, returns an empty list.
+
+    Args:
+        zip_path (str): Path to the ZIP archive.
+        password (str | None): Password for encrypted archives.
+    '''
 
     try:
         with pyzipper.AESZipFile(zip_path, 'r') as zf:
@@ -216,7 +346,16 @@ def list_files_in_zip(zip_path, password=None):
     return []
 
 def find_computername(filename):
-    '''Find computername from name in zipfile.'''
+    '''
+    Extract a computer name from a filename of the form 'Collection-<name>-YYYY-MM-DD'.
+
+    Args:
+        filename (str): Filename to parse.
+
+    Returns:
+        str: Extracted computer name if matched, otherwise 'ComputernameNotFound'.
+    '''
+
     match = re.search(r'Collection-(.*)-\d{4}-\d{2}-\d{2}', filename)
 
     if match:
@@ -228,6 +367,24 @@ def find_computername(filename):
         return 'ComputernameNotFound'
 
 def get_password(zipfile, passwords):
+    '''
+    Determine a working ZIP password from a list or by prompting the user.
+
+    If the ZIP is encrypted, tries each password in `passwords`. If none work,
+    prompts the user for a password using `getpass`. If the user provides a
+    working password, it is appended to the list.
+
+    Args:
+        zipfile (str): Path to the ZIP file.
+        passwords (list[str]): Candidate passwords to try.
+
+    Returns:
+        tuple[list[str], str | None, bool]: Tuple of:
+            - passwords: Updated password list (may include newly entered password)
+            - working_password: Password that works, or None
+            - incorrect_pw: True if a password was entered but did not work
+    '''
+
     password_ok = False
     working_password = None
     incorrect_pw = False
@@ -261,13 +418,35 @@ def get_password(zipfile, passwords):
     return passwords, working_password, incorrect_pw
 
 def load_from_env_variable():
-    
+    '''
+    Load ZIP passwords from the 'ZIP_PASSWORDS' environment variable.
+
+    Expects a JSON-encoded list of passwords, for example:
+        '["pass1", "pass2"]'
+
+    Returns:
+        list[str]: List of passwords loaded from the environment.
+    '''
+
     passwords_json = os.getenv('ZIP_PASSWORDS', '[]')
     passwords = json.loads(passwords_json)
 
     return passwords
 
 def find_zip_files(zip_patterns):
+    '''
+    Find ZIP files matching one or more glob patterns.
+
+    Expands patterns (with optional recursive wildcards), collects matches,
+    filters to '.zip' files, removes duplicates, and returns a sorted list.
+
+    Args:
+        zip_patterns (list[str]): Glob patterns to expand.
+
+    Returns:
+        list[str]: Sorted list of unique ZIP file paths.
+    '''
+
     files = []
     for pattern in zip_patterns:
         # Expand wildcards recursively
@@ -278,6 +457,22 @@ def find_zip_files(zip_patterns):
     return sorted(files)
 
 def get_password_from_env_or_prompt(source_name, unextracted_zip):
+    '''
+    Resolve a ZIP password for a given source, using env passwords or prompting.
+
+    For source 'localfolder', loads candidate passwords from the environment and
+    prompts the user if none work. For other sources, returns (None, None).
+
+    Args:
+        source_name (str): Source identifier (e.g. 'localfolder').
+        unextracted_zip (str): Path to the zipfile that may require a password.
+
+    Returns:
+        tuple[str | None, str | None]: Tuple of:
+            - zip_password: Working password if available, otherwise None
+            - zip_path: Zipfile path if processing can proceed, otherwise None
+    '''
+
     if source_name == 'localfolder':
         passwords = load_from_env_variable()
         passwords, zip_password, incorrect_pw = get_password(unextracted_zip, passwords)
@@ -288,3 +483,50 @@ def get_password_from_env_or_prompt(source_name, unextracted_zip):
             return None, None
 
     return None, None
+
+def list_zipfiles(managers, source_name):
+    '''
+    List and filter ZIP files from a configured data source.
+
+    Retrieves files from the specified source (blob storage, SAS container,
+    SFTP server, or local filesystem) and filters the results using the
+    configured ZIP filename prefix and suffix.
+
+    Args:
+        managers: Container holding authenticated service managers
+            for the enabled data sources.
+        source_name (str): Name of the data source to query.
+            Supported values: 'blob', 'sas', 'sftp', 'localfolder'.
+
+    Returns:
+        list[str]: List of ZIP file paths or names matching the configured
+        prefix and suffix.
+    '''
+
+    log.info(f'Attempting to find zip files in datasource: {source_name}')
+
+    try:
+
+        if source_name == 'blob':
+
+            all_files = managers.blob.list_blobs(Config.blob_container_input)
+
+        if source_name == 'sas':
+
+            all_files = managers.sas.list_blobs_from_sas()
+
+        if source_name == 'sftp':
+
+            all_files = managers.sftp.list_files_recursive('/')
+
+        if source_name == 'localfolder':
+
+            all_files = list_files_in_directory(Config.var_localfolder_directory)
+
+    except:
+        log.error(f'Could not list files in: {source_name}. Was this source enabled in .env file?')
+        return []
+
+    filtered_files = filter_triage_packages(all_files, Config.var_zipfile_prefix, Config.var_zipfile_suffix)
+
+    return filtered_files

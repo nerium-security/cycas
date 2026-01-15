@@ -1,6 +1,12 @@
 '''
-Module for dealing with messages in the
-message queue of an storage account
+Module for interacting with an Azure Storage Queue.
+
+Provides functionality to authenticate against an Azure Storage Queue,
+send messages, receive and peek messages, delete messages, and encode
+or decode queue message payloads.
+
+Messages are encoded as Base64-encoded JSON strings to comply with
+Azure Queue Storage message requirements.
 '''
 
 from azure.storage.queue import QueueClient, QueueMessage
@@ -15,13 +21,31 @@ log = log.getLogger(__name__)
 
 class QueueManager:
     def __init__(self, credential, queue_url, queue_name):
+        '''
+        Initialize the QueueManager.
+
+        Args:
+            credential: Azure credential used to authenticate with
+                Azure Queue Storage.
+            queue_url (str): Base URL of the storage account queue endpoint.
+            queue_name (str): Name of the queue to interact with.
+        '''
+
         self.credential = credential
         self.queue_url = queue_url
         self.queue_name = queue_name
         self.queue_client: Optional[QueueClient] = None
 
     def authenticate(self) -> bool:
-        ''' Authenticate and create the QueueClient.'''
+        '''
+        Authenticate and initialize the Azure Queue client.
+
+        Creates a QueueClient, ensures the queue exists, and validates
+        the connection by retrieving queue properties.
+
+        Returns:
+            bool: True if authentication succeeds, otherwise False.
+        '''
         try:
 
             queue_endpoint = f'{self.queue_url}/{self.queue_name}'
@@ -41,7 +65,10 @@ class QueueManager:
 
     def create_queue_if_not_exists(self, queue_name: str):
         '''
-        Creates a queue only if it does not already exist.
+        Create the queue if it does not already exist.
+
+        Args:
+            queue_name (str): Name of the queue to create.
         '''
 
         try:
@@ -54,7 +81,19 @@ class QueueManager:
         return
 
     def peek_messages(self, max_messages: int = 1):
-        '''Peek at messages without dequeuing.'''
+        '''
+        Peek at messages in the queue without dequeuing them.
+
+        Args:
+            max_messages (int): Maximum number of messages to peek.
+
+        Returns:
+            Iterable[QueueMessage]: Peeked queue messages.
+
+        Raises:
+            ValueError: If the queue client is not authenticated.
+        '''
+
         if not self.queue_client:
             raise ValueError('Queue client not authenticated. Call authenticate() first.')
         
@@ -62,7 +101,21 @@ class QueueManager:
         return messages
 
     def receive_messages(self, max_messages: int = 1) -> List[QueueMessage]:
-        '''Retrieve messages from the queue.'''
+        '''
+        Retrieve messages from the queue.
+
+        Messages are dequeued and become invisible for the queue's
+        visibility timeout period.
+
+        Args:
+            max_messages (int): Maximum number of messages to retrieve.
+
+        Returns:
+            list[QueueMessage]: Retrieved queue messages.
+
+        Raises:
+            ValueError: If the queue client is not authenticated.
+        '''
         if not self.queue_client:
             raise ValueError('Queue client not authenticated. Call authenticate() first.')
 
@@ -78,6 +131,12 @@ class QueueManager:
     def delete_message(self, message):
         '''
         Delete a message from the queue.
+
+        Args:
+            message (QueueMessage): Message to delete.
+
+        Raises:
+            ValueError: If the queue client is not authenticated.
         '''
 
         if not self.queue_client:
@@ -86,7 +145,23 @@ class QueueManager:
         self.queue_client.delete_message(message)
 
     def send_message(self, zipfile: str, source_name: str) -> bool:
-        '''Send a message to the queue. Message content (must be <= 64KB)'''
+        '''
+        Send a message to the queue. Message content (must be <= 64KB)
+
+        The message payload is encoded as a Base64-encoded JSON string
+        containing the zipfile name and source name.
+
+        Args:
+            zipfile (str): Name of the zipfile to include in the message.
+            source_name (str): Source identifier to include in the message.
+
+        Returns:
+            bool: True if the message is sent successfully, otherwise False.
+
+        Raises:
+            ValueError: If the queue client is not authenticated.
+        '''
+
         if not self.queue_client:
             raise ValueError('Queue client not authenticated. Call authenticate() first.')
 
@@ -100,9 +175,18 @@ class QueueManager:
         except AzureError as e:
             log.info(f'Failed to send message to queue: {e}')
             return False
-        
+
 def decode_message(message):
-    ''' Decodes a message '''
+    '''
+    Decode a Base64-encoded queue message.
+
+    Args:
+        message (dict): Queue message containing a Base64-encoded
+            'content' field.
+
+    Returns:
+        str: Decoded message content as an ASCII string.
+    '''
 
     message_content = message.get('content')
     message_content_decoded = base64.b64decode(message_content)
@@ -111,7 +195,21 @@ def decode_message(message):
     return message_content_decoded_ascii
 
 def encode_messsage(zipfile: str, source_name: str):
-    '''Encodes the message for sending or deleting it to queue'''
+    '''
+    Encode a message for sending to Azure Queue Storage.
+
+    The message content is serialized as JSON and Base64-encoded
+    to comply with Azure Queue Storage requirements.
+
+    Args:
+        zipfile (str): Zipfile name to include in the message.
+        source_name (str): Source name to include in the message.
+
+    Returns:
+        tuple[str, str]: Tuple containing:
+            - Base64-encoded message string.
+            - Original JSON message content.
+    '''
 
     content = json.dumps({'triagepackage': zipfile, 'source_name' : source_name})
     message_bytes = content.encode('utf-8')

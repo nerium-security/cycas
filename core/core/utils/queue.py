@@ -1,3 +1,16 @@
+'''
+Helpers for queue interaction and status coordination.
+
+Provides utility functions to:
+    - Decide whether a zipfile should be sent to the processing queue
+    - Send messages to an Azure Storage Queue
+    - Decode and extract queue message contents
+    - Update processing status for queued and unqueued items
+
+These helpers integrate queue operations with Table Storage–based
+status tracking to support idempotent processing.
+'''
+
 from core.utils.config import load_config
 from core.utils.status import Status, update_status_in_log
 from core.manager.queue import decode_message
@@ -10,6 +23,19 @@ log = log.getLogger(__name__)
 Config = load_config()
 
 def should_send_to_queue(managers, zipfile):
+    '''
+    Determine whether a zipfile should be sent to the processing queue.
+
+    Checks the current processing status of the zipfile in Table Storage
+    and allows queueing only if the status indicates a new or failed item.
+
+    Args:
+        managers: Container holding authenticated service managers.
+        zipfile (str): Zipfile basename used as the status lookup key.
+
+    Returns:
+        bool: True if the zipfile should be sent to the queue, otherwise False.
+    '''
 
     if Config.blob_logtable_enabled:
 
@@ -23,6 +49,21 @@ def should_send_to_queue(managers, zipfile):
         return False
     
 def send_to_queue(managers, source_name, zipfile, sessionid):
+    '''
+    Send a zipfile reference to the processing queue and update its status.
+
+    Sends a queue message containing the zipfile and source name, then
+    records the QUEUED status in Table Storage.
+
+    Args:
+        managers: Container holding authenticated service managers.
+        source_name (str): Source identifier associated with the zipfile.
+        zipfile (str): Zipfile basename to send to the queue.
+        sessionid (str): Session identifier for the current run.
+
+    Returns:
+        bool: Result of the queue send operation.
+    '''
 
     start = datetime.now()
 
@@ -33,7 +74,22 @@ def send_to_queue(managers, source_name, zipfile, sessionid):
     return send_to_queue
 
 def get_message_in_queue(message):
-    
+    '''
+    Decode and extract fields from a queue message.
+
+    Decodes the Base64-encoded queue message payload, parses it as JSON,
+    and extracts the source name and triage package name.
+
+    Args:
+        message: Queue message object as received from the queue client.
+
+    Returns:
+        tuple[str | None, str | None]: Tuple containing:
+            - source_name
+            - triagepackage
+        Returns (None, None) if decoding or parsing fails.
+    '''
+
     try:
         decoded_message = json.loads(decode_message(message))
 
@@ -47,6 +103,18 @@ def get_message_in_queue(message):
         return None, None
     
 def update_status_unqueued(managers, source_name, zipfile, sessionid):
+    '''
+    Update the status of a zipfile to UNQUEUED if it has not started processing.
+
+    Checks whether the zipfile is still in a QUEUED state and, if so,
+    updates its status to UNQUEUED in Table Storage.
+
+    Args:
+        managers: Container holding authenticated service managers.
+        source_name (str): Source identifier associated with the zipfile.
+        zipfile (str): Zipfile basename used for status updates.
+        sessionid (str): Session identifier for the current run.
+    '''
 
     start = datetime.now()
 
@@ -56,7 +124,20 @@ def update_status_unqueued(managers, source_name, zipfile, sessionid):
         update_status_in_log(managers, Status.UNQUEUED, zipfile, source_name, sessionid, start)
 
 def is_message_not_yet_processing(managers, zipfile) -> bool:
-    '''Returns True if the message is currently being processed.'''
+    '''
+    Check whether a queued message has not yet started processing.
+
+    Looks up the zipfile status in Table Storage and returns True only
+    if the current status is QUEUED.
+
+    Args:
+        managers: Container holding authenticated service managers.
+        zipfile (str): Zipfile basename used as the status lookup key.
+
+    Returns:
+        bool: True if the message is still queued and not yet processed.
+        Returns None implicitly if no status entry exists.
+    '''
 
     status_all = managers.table.get_status_zipfile(zipfile)
     

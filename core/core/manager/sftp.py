@@ -1,5 +1,9 @@
 '''
-Module for handling data in an SFTP server.
+Module for interacting with an SFTP server.
+
+Provides functionality for authenticating with an SFTP server,
+listing files (recursively or non-recursively), downloading files,
+and deleting remote files.
 '''
 
 import logging as log
@@ -12,13 +16,33 @@ log = log.getLogger(__name__)
 
 class SftpManager:
     def __init__(self, host: str, username: str, port: int, ssh_key_str: str, ):
+        '''
+        Initialize the SFTP manager with connection details.
+
+        Args:
+            host (str): Hostname or IP address of the SFTP server.
+            username (str): Username used for authentication.
+            port (int): Port number of the SFTP service.
+            ssh_key_str (str): SSH private key as a string.
+        '''
+        
         self.host = host
         self.port = port
         self.username = username
         self.ssh_key_str = ssh_key_str
 
     def authenticate(self) -> bool:
-        '''Authenticate and open an SFTP connection.'''
+        '''
+        Authenticate and establish an SFTP connection.
+
+        Uses the provided SSH private key to authenticate and initializes
+        both the underlying transport and SFTP client.
+
+        Returns:
+            bool: True if authentication succeeds, otherwise False.
+
+        '''
+
         try:
 
             log.info(f'Authenticating with SFTP server: {self.host}.')
@@ -37,7 +61,21 @@ class SftpManager:
             return False
 
     def list_files(self, remote_path: str = '.') -> list:
-        '''List all files in a remote SFTP directory.'''
+        '''
+        List files in a remote SFTP directory.
+
+        Args:
+            remote_path (str): Remote directory path to list. Defaults to
+                the current directory.
+
+        Returns:
+            list[str]: List of filenames in the remote directory. Returns
+            an empty list on failure.
+
+        Raises:
+            Exception: If the SFTP connection is not established.
+        '''
+
         if not self.sftp:
             raise Exception('SFTP connection not established. Call authenticate() first.')
 
@@ -50,7 +88,21 @@ class SftpManager:
             return []
 
     def list_files_recursive(self, remote_path: str = '.') -> list:
-        '''Recursively list all files in the given remote directory.'''
+        '''
+        Recursively list all files in a remote SFTP directory.
+
+        Walks the directory tree starting at the given path and collects
+        full remote file paths for all files encountered.
+
+        Args:
+            remote_path (str): Root directory to start the recursive walk.
+
+        Returns:
+            list[str]: List of full remote file paths found recursively.
+
+        Raises:
+            Exception: If the SFTP connection is not established.
+        '''
 
         if not self.sftp:
             raise Exception('SFTP connection not established. Call authenticate() first.')
@@ -77,7 +129,24 @@ class SftpManager:
         return file_list
 
     def download(self, local_path: str, remote_path: str) -> bool:
-        '''Download a single file from the SFTP server to the local system.'''
+        '''
+        Download a file from the SFTP server to the local filesystem.
+
+        The file is saved using the basename of the remote path inside
+        the specified local directory.
+
+        Args:
+            local_path (str): Local directory where the file will be saved.
+            remote_path (str): Full remote file path.
+
+        Returns:
+            str or False: Full local file path if the download succeeds,
+            otherwise False.
+
+        Raises:
+            Exception: If the SFTP connection is not established.
+        '''
+
         if not self.sftp:
             raise Exception('SFTP connection not established. Call authenticate() first.')
 
@@ -93,9 +162,21 @@ class SftpManager:
         except Exception as e:
             log.error(f'Failed to download {remote_path}: {e}')
             return False
-        
+
     def delete(self, remote_path: str) -> bool:
-        '''Delete a file on the remote SFTP server.'''
+        '''
+        Delete a file from the remote SFTP server.
+
+        Args:
+            remote_path (str): Full remote file path to delete.
+
+        Returns:
+            bool: True if the file was deleted successfully, otherwise False.
+
+        Raises:
+            Exception: If the SFTP connection is not established.
+        '''
+
         if not self.sftp:
             raise Exception('SFTP connection not established. Call authenticate() first.')
 

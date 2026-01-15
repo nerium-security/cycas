@@ -1,12 +1,24 @@
+'''
+Main pipeline orchestration functions for processing triage zip packages.
+
+This module coordinates end-to-end processing of triage packages from various
+sources (blob, sas, sftp, localfolder) into Azure Data Explorer (ADX). It:
+    - Downloads zip files when required
+    - Handles encrypted zip extraction (including nested data.zip)
+    - Optionally post-processes raw artifacts using Velociraptor
+    - Extracts JSON/JSONL files and initiates ADX ingestion
+    - Updates status transitions in Table Storage
+    - Uploads detailed run status to ADX
+'''
+
 from core.utils.config import load_config
-from core.utils.files import split_jsonl_by_size, list_files_in_directory, list_files_in_directory, delete_file, filter_triage_packages, get_filesize_bytes
+from core.utils.files import split_jsonl_by_size, delete_file, get_filesize_bytes
 from core.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename
 from core.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
 from core.utils.summary import define_results_upload_dict, define_results_dict, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file
-from core.utils.misc import send_webhook
+from core.utils.misc import should_download
 from core.utils.auth import Authenticator
 from core.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing, upload_detailed_status_to_adx, add_summary_info_to_status, add_hostname_to_status
-
 from datetime import datetime
 import os
 import logging as log
@@ -16,7 +28,20 @@ log = log.getLogger(__name__)
 Config = load_config()
 
 def run_zip_processor(managers, source_name, zipfile, sessionid, message):
+    '''
+    Process a single zipfile end-to-end.
 
+    Args:
+        managers: Container holding authenticated service managers.
+        source_name (str): Data source identifier (e.g. 'blob', 'sas', 'sftp', 'localfolder').
+        zipfile (str): Zipfile path or remote identifier depending on source.
+        sessionid (str): Session identifier for the current run.
+        message: Queue message object associated with this zipfile (if applicable).
+    '''
+
+    # ------------------------------------------------------------------
+    # Initialize run context
+    # ------------------------------------------------------------------
     start = datetime.now()
 
     results = define_results_dict()
@@ -25,6 +50,10 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
     
     write_logentry_if_new(managers, Status.NEW, results)
 
+
+    # ------------------------------------------------------------------
+    # Determining if required to continue
+    # ------------------------------------------------------------------
     should_process = determine_if_needs_processing(managers, zipfile)
 
     if not should_process:
@@ -32,14 +61,25 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
         return
 
     update_status_in_log(managers, Status.PROCESSING, start, results)
-   
+
+
+    # ----------------------------------------------------------------------
+    # Download zip file
+    # ----------------------------------------------------------------------
     if should_download(source_name):
 
-        zipfile = download_zip(managers, source_name, zipfile, sessionid, start, results)
+        zipfile = _download_zip(managers, source_name, zipfile, sessionid, start, results)
 
+
+    # ----------------------------------------------------------------------
+    # Extract zipfile if encrypted
+    # ----------------------------------------------------------------------
     log.info(f'Processing {os.path.basename(zipfile)}')
 
-    zip_password = get_zip_password_from_keyvault(managers)
+    if Config.keyvault_enabled:
+        zip_password = managers.keyvault.read_creds(Config.keyvault_passwordlocation)
+    else:
+        zip_password = ''
 
     extract_path = get_extract_path(zipfile, Config.var_unzip_directory)
 
@@ -55,103 +95,152 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
 
     zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
 
+
+    # ----------------------------------------------------------------------
+    # Post-process raw artifacts and upload it's results (json)
+    # ----------------------------------------------------------------------
     results = postprocess_velociraptor_and_upload(managers,
                                                   extracted_zip, 
                                                   zipfilecontent,
                                                   results)
-    
+
+    # ----------------------------------------------------------------------
+    # Extract jsons from zip and upload
+    # ----------------------------------------------------------------------
     results = extract_all_json_from_zip_and_upload(managers, 
                                                    extracted_zip, 
                                                    extract_path, 
                                                    zip_password, 
                                                    zipfilecontent, 
                                                    results)
-    
+
+
+    # ----------------------------------------------------------------------
+    # Wrapping up by updating logstatus
+    # ----------------------------------------------------------------------
     results.update({'finished': True})
 
     update_status_in_log(managers, Status.FINISHED, start, results)
 
     upload_detailed_status_to_adx(managers, results, tablename='_status')
 
-def should_download(source_name):
-    if source_name == 'localfolder':
-        return False
-    else:
-        return True
+    log.info('Script finished.')
 
 def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, results):
-    ''' Post-processing with Velociraptor and upload json file output to adx.'''
+    '''
+    Post-process raw artifacts in a triage zip using Velociraptor and upload outputs to ADX.
+
+    When Velociraptor post-processing is enabled and the zip contents indicate
+    the presence of raw artifacts (typically under an 'uploads/' folder), this
+    function:
+        - Ensures the Velociraptor binary is available (downloads if needed)
+        - Generates a remapping file for reading the zip contents
+        - Extracts a hostname from the SYSTEM registry hive via the remap
+        - Loads and selects configured artifact queries ('essential' or 'full')
+        - Executes each artifact query and writes an output file in the configured format
+        - Initiates ADX ingestion for each generated output file
+        - Deletes generated output files after ingestion is initiated
+        - Appends post-processing and upload metadata to the results dictionary
+
+    Args:
+        managers: Container holding authenticated service managers. Requires an ADX
+            manager when ADX ingestion is enabled.
+        zipfile (str): Path to the zip archive being post-processed.
+        zipfilecontent (list): List of ZipInfo-like entries from the zip archive.
+            Used to determine whether raw artifacts are present.
+        results (dict): Results structure to update. Expected to contain 'summary',
+            'postprocessing', and 'uploads' keys.
+
+    Returns:
+        dict: Updated results dictionary. If Velociraptor is disabled or the zip
+        does not contain raw artifacts, returns `results` unchanged.
+    '''
 
     log.info(f'Post-processing is set to: {Config.velociraptor_enabled}')
-    if Config.velociraptor_enabled:
+    if not Config.velociraptor_enabled:
+        return results
 
-        remappingdir = Config.velociraptor_remappingdir
-        binary = Config.velociraptor_binary
-        definitions = Config.velociraptor_definitions
-        url = Config.velociraptor_url
-        binary = Config.velociraptor_binary
-        unzip_dir = Config.var_unzip_directory
-        outputformat = Config.velociraptor_outputformat
-        artifactslist = Config.velociraptor_artifactslist
-        postprocess_var = Config.velociraptor_postprocess
 
-        if not zip_contains_raw_artifacts(zipfilecontent):
-            return results
+    # ----------------------------------------------------------------------
+    # Loading config for Velociraptor
+    # ----------------------------------------------------------------------
+    remappingdir = Config.velociraptor_remappingdir
+    binary = Config.velociraptor_binary
+    definitions = Config.velociraptor_definitions
+    url = Config.velociraptor_url
+    binary = Config.velociraptor_binary
+    unzip_dir = Config.var_unzip_directory
+    outputformat = Config.velociraptor_outputformat
+    artifactslist = Config.velociraptor_artifactslist
+    postprocess_var = Config.velociraptor_postprocess
 
-        download_velociraptor(binary, url)
+    if not zip_contains_raw_artifacts(zipfilecontent):
+        return results
 
-        remappingfile = build_remap(zipfile, 
-                                    remappingdir,
-                                    binary,
-                                    definitions,
-                                    unzip_dir)
+
+    # ----------------------------------------------------------------------
+    # Downloading Velociraptor, build remap, and find hostname in SYSTEM
+    # ----------------------------------------------------------------------
+    download_velociraptor(binary, url)
+
+    remappingfile = build_remap(zipfile, 
+                                remappingdir,
+                                binary,
+                                definitions,
+                                unzip_dir)
+    
+    hostname = find_hostname(remappingfile,
+                                binary,
+                                definitions)
+    
+
+    # ----------------------------------------------------------------------
+    # Loading Velociraptor artifacts
+    # ----------------------------------------------------------------------    
+    artifacts_json = load_artifacts(artifactslist)
+    artifacts = select_artifacts(artifacts_json, postprocess_var)
+
+    start_postprocessing = datetime.now()
+
+    add_hostname_to_status(results, start_postprocessing, hostname)
+
+
+    # ----------------------------------------------------------------------
+    # Post-processing raw-artifacts with Velociraptor
+    # ----------------------------------------------------------------------   
+    for artifact in artifacts:
+
+        result_postprocess = postprocess(hostname, 
+                                            artifact, 
+                                            zipfile, 
+                                            definitions, 
+                                            unzip_dir, 
+                                            binary, 
+                                            outputformat,
+                                            remappingfile)
+
+        results['postprocessing'].append(result_postprocess)
+        outputfile_path = result_postprocess.get('fullpath')
+        result_postprocess.pop('fullpath', None)
+        result_upload = define_results_upload_dict()
         
-        hostname = find_hostname(remappingfile,
-                                 binary,
-                                 definitions)
+        result_upload.update(_upload_file_to_adx(managers, outputfile_path))
+
+        delete_file(outputfile_path)
         
+        result_upload['was_postprocessed_with'] = artifact
+        results['uploads'].append(result_upload)
         
-        artifacts_json = load_artifacts(artifactslist)
-        artifacts = select_artifacts(artifacts_json, postprocess_var)
+    duration = get_duration_from_timespan(start_postprocessing)
 
-        start_postprocessing = datetime.now()
+    if Config.adx_cluster_enabled:
 
-        add_hostname_to_status(results, start_postprocessing, hostname)
+        log.info(f'Processing and uploading all post-processed artifacts took {duration}..')
 
-        for artifact in artifacts:
-
-            result_postprocess = postprocess(hostname, 
-                                             artifact, 
-                                             zipfile, 
-                                             definitions, 
-                                             unzip_dir, 
-                                             binary, 
-                                             outputformat,
-                                             remappingfile)
-
-            results['postprocessing'].append(result_postprocess)
-            outputfile_path = result_postprocess.get('fullpath')
-            result_postprocess.pop('fullpath', None)
-            result_upload = define_results_upload_dict()
-            
-            result_upload.update(upload_file_to_adx(managers, outputfile_path))
-
-            delete_file(outputfile_path)
-           
-            result_upload['was_postprocessed_with'] = artifact
-            results['uploads'].append(result_upload)
-            
-        duration = get_duration_from_timespan(start_postprocessing)
-
-        if Config.adx_cluster_enabled:
-
-            log.info(f'Processing and uploading all post-processed artifacts took {duration}..')
-
-        else:
-            log.info(f'Post-processing all artifacts took {duration}..')
+    else:
+        log.info(f'Post-processing all artifacts took {duration}..')
 
     return results
-
 
 def extract_all_json_from_zip_and_upload(managers, 
                                          extracted_zip, 
@@ -159,13 +248,37 @@ def extract_all_json_from_zip_and_upload(managers,
                                          zip_password, 
                                          zipfilecontent, 
                                          results):
-    '''Extract and upload json files to ADX'''
+    '''
+    Extract JSON and JSONL files from a zip archive and initiate ADX ingestion.
 
+    Args:
+        managers: Container holding authenticated service managers. Requires an
+            ADX manager when ADX ingestion is enabled.
+        extracted_zip (str): Path to the zip archive being processed (may be the
+            original zip or an extracted nested 'data.zip').
+        extract_path (str): Local directory where files are extracted.
+        zip_password (str | None): Password for encrypted archives, if required.
+        zipfilecontent (list): List of ZipInfo-like entries returned by
+            `list_files_in_zip()`.
+        results (dict): Results structure to update. Must include an 'uploads'
+            list and a 'summary' list with at least one element when ADX is enabled.
+
+    Returns:
+        dict: Updated results dictionary, with per-file upload metadata appended
+        to `results['uploads']`.
+    '''
+
+    # ----------------------------------------------------------------------
+    # Initilializing the extraction
+    # ----------------------------------------------------------------------  
     ignorelist = load_ignore_list(Config.var_location_ignorelist)
     
     if Config.adx_cluster_enabled:
         hostname = results['summary'][0].get('hostname')
 
+    # ----------------------------------------------------------------------
+    # Extract file by file, add hostname to file, and upload jsons
+    # ----------------------------------------------------------------------  
     for file_in_zip in zipfilecontent:
 
         upload_dict = define_results_upload_dict()
@@ -197,7 +310,7 @@ def extract_all_json_from_zip_and_upload(managers,
 
             for file_path in files_to_upload:
 
-                upload_dict.update(upload_file_to_adx(managers, file_path))
+                upload_dict.update(_upload_file_to_adx(managers, file_path))
 
                 results['uploads'].append(upload_dict)
                 delete_file(file_path)
@@ -207,60 +320,20 @@ def extract_all_json_from_zip_and_upload(managers,
 
     return results
 
-def get_zip_password_from_keyvault(managers):
+def _upload_file_to_adx(managers, file):
+    '''
+    Create or update an ADX table and initiate upload of a data file.
 
-    if Config.keyvault_enabled:
-        zip_password = managers.keyvault.read_creds(Config.keyvault_passwordlocation)
-    else:
-        zip_password = ''
+    Ensures the target table exists (creating or merging schema if needed)
+    and initiates ingestion of the specified file into Azure Data Explorer.
 
-    return zip_password
+    Args:
+        managers: Container holding authenticated service managers.
+        file (str): Path to the local file to be uploaded.
 
-
-def verify_if_all_uploads_are_initiated(managers, results, zipfile, source_name, sessionid, start, message):
-    
-    duration = get_duration_from_timespan(start)
-    
-    log.info(f'ZIP processing finished in: {duration}')
-    if Config.blob_queue_enabled:
-        managers.queue.delete_message(message)
-
-    all_success = []
-
-    if Config.adx_cluster_enabled:
-
-        if not results:
-            log.warning('No files were uploaded.')
-            return False
-        
-        all_success = True
-
-        for file, success in results.items():
-            if not success:
-                log.warning(f'Upload failed for file: {file}')
-                all_success = False
-
-        if all_success:
-            log.info('Initiated upload of files in zip successfully.')
-
-        if all_success:
-            status = Status.FINISHED
-        else:
-            status = Status.UPLOADFAILED
-
-    if not Config.adx_cluster_enabled:
-        status = Status.UPLOADDISABLED
-
-    update_status_in_log(managers, status, start, results)
-
-    if Config.var_webhook_url:
-        message = f'{status} of {zipfile}'
-        send_webhook(Config.var_webhook_url, message)
-
-    return all_success
-
-def upload_file_to_adx(managers, file):
-    '''Prepares the adx table and uploads the file'''
+    Returns:
+        dict: Upload result metadata returned by the ADX ingestion client.
+    '''
 
     if Config.adx_cluster_enabled:
 
@@ -270,56 +343,27 @@ def upload_file_to_adx(managers, file):
 
     return upload_result
 
-def remove_zip(managers, source_name, zipfile_downloaded, zip):
+def _download_zip(managers, source_name, zip, sessionid, start, status_data):
+    '''
+    Download a ZIP file from the configured data source and update its status.
 
-    delete_file(zipfile_downloaded)
+    Initiates a download from the specified source (blob storage, SFTP, or
+    SAS container), updates the processing status before and after the
+    operation, and returns the local file path on success.
 
-    if Config.var_delete_processedzipfiles:
-    
-        if source_name == 'blob':
+    Args:
+        managers: Container holding authenticated service managers.
+        source_name (str): Data source type.
+            Supported values: 'blob', 'sftp', 'sas'.
+        zip (str): Source-specific ZIP identifier or path.
+        sessionid (str): Session identifier for the current pipeline run.
+        start (datetime): Timestamp marking the start of the pipeline step.
+        status_data (dict): Status payload used for log table updates.
 
-            managers.blob.delete(Config.blob_container_input, zip)
-
-        if source_name == 'sftp':
-
-            managers.sftp.delete(zip)
-
-        return True
-
-    else:
-        return False
-
-def list_zipfiles(managers, source_name):
-
-    log.info(f'Attempting to find zip files in datasource: {source_name}')
-
-    try:
-
-        if source_name == 'blob':
-
-            all_files = managers.blob.list_blobs(Config.blob_container_input)
-
-        if source_name == 'sas':
-
-            all_files = managers.sas.list_blobs_from_sas()
-
-        if source_name == 'sftp':
-
-            all_files = managers.sftp.list_files_recursive('/')
-
-        if source_name == 'localfolder':
-
-            all_files = list_files_in_directory(Config.var_localfolder_directory)
-
-    except:
-        log.error(f'Could not list files in: {source_name}. Was this source enabled in .env file?')
-        return []
-
-    filtered_files = filter_triage_packages(all_files, Config.var_zipfile_prefix, Config.var_zipfile_suffix)
-
-    return filtered_files
-
-def download_zip(managers, source_name, zip, sessionid, start, status_data):
+    Returns:
+        str | bool: Local filesystem path to the downloaded ZIP file if
+        successful, otherwise False.
+    '''
 
     update_status_in_log(managers, Status.DOWNLOADING, start, status_data)
 
@@ -348,6 +392,21 @@ def download_zip(managers, source_name, zip, sessionid, start, status_data):
         return False
 
 def init(source_name, sessionid):
+    '''
+    Initialize the pipeline runtime and authenticate all required services.
+
+    Ensures required local directories exist, initializes logging context,
+    and authenticates all service managers needed for the selected data source.
+
+    Args:
+        source_name (str): Name of the data source being processed
+            (e.g. 'blob', 'sas', 'sftp', 'localfolder').
+        sessionid (str): Unique identifier for the current pipeline run.
+
+    Returns:
+        AuthManagers: Container holding authenticated service managers
+        for the enabled components.
+    '''
 
     try:
         os.makedirs(Config.var_loglocation, exist_ok=True)

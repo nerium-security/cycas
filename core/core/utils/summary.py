@@ -1,3 +1,16 @@
+'''
+Summary and reporting utilities for ingestion pipeline results.
+
+Provides helper functions to:
+    - Define standard results dictionaries used across the pipeline
+    - Format sizes and durations for human-readable output
+    - Build and pretty-print per-zip and master summary tables
+    - Write per-zip summaries to disk and append master summaries to CSV
+
+Most functions operate on the pipeline 'results' structure, which contains
+a 'summary' list and detailed lists such as 'postprocessing' and 'uploads'.
+'''
+
 import json
 import os
 import csv
@@ -9,14 +22,30 @@ from copy import deepcopy
 log = log.getLogger(__name__)
 
 def _format_size(num_bytes):
+    '''
+    Format a byte count as a human-readable size string.
+
+    Args:
+        num_bytes (int | float): Size in bytes.
+
+    Returns:
+        str: Human-readable size (e.g. '532 B', '1.23 MB', '4.00 GB').
+    '''
+
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if num_bytes < 1024:
             return f'{num_bytes:.2f} {unit}' if unit != 'B' else f'{num_bytes} {unit}'
         num_bytes /= 1024
     return f'{num_bytes:.2f} TB'
 
-
 def define_results_dict():
+    '''
+    Create a new empty results dictionary for a single zipfile run.
+
+    Returns:
+        dict: Results dictionary
+    '''
+
     return {
         'summary': [],
         'postprocessing': [],
@@ -27,6 +56,13 @@ def define_results_dict():
     }
 
 def define_results_postprocess_dict():
+    '''
+    Create a default results dictionary for a single post-processing artifact.
+
+    Returns:
+        dict: Post-processing result structure with standard fields.
+    '''
+
     return {
         'fullpath': None,
         'basename': None,
@@ -41,6 +77,13 @@ def define_results_postprocess_dict():
     }
 
 def define_results_upload_dict():
+    '''
+    Create a default results dictionary for a single upload operation.
+
+    Returns:
+        dict: Upload result structure
+    '''
+
     return {
         'location_in_zip': None,
         'basename': None,
@@ -59,7 +102,17 @@ def define_results_upload_dict():
     }
 
 def summary_per_zip_to_file(summary, extract_path, filename):
-    '''Writes summary text to _summary.txt in the extraction folder.'''
+    '''
+    Write a per-zip summary string to a file in the extraction directory.
+
+    Args:
+        summary (str): Summary text to write.
+        extract_path (str): Directory where the summary file should be written.
+        filename (str): Output filename to use.
+
+    Returns:
+        str: Full path to the written summary file.
+    '''
 
     out_path = os.path.join(extract_path, filename)
 
@@ -74,11 +127,21 @@ def summary_per_zip_to_file(summary, extract_path, filename):
 
 def pretty_print_summary_per_zip(outputfolder, results, mode='full'):
     '''
-    Builds and returns the formatted summary text for a ZIP file
+    Build and print a formatted summary table for a single zipfile.
 
-    mode:
-        - 'full'    -> print full table
-        - 'limited' -> print limited table, BUT still return full table text
+    The function always builds a full summary table and returns its text.
+    Depending on `mode`, it prints either the full table or a limited table.
+
+    Args:
+        outputfolder (str): Output folder path shown in the header.
+        results (dict): Results dictionary for a single zipfile run. Expects
+            `results['summary'][0]` and `results['postprocessing']`.
+        mode (str): Print mode. Supported values:
+            - 'full': print the full table
+            - 'limited': print a limited table, while still returning the full text
+
+    Returns:
+        str: Full summary table text.
     '''
 
     if mode not in ('full', 'limited'):
@@ -223,11 +286,19 @@ def pretty_print_summary_per_zip(outputfolder, results, mode='full'):
 
     return full_text
 
-
 def merge_master_table_with_file(master_results, output_path):
     '''
-    Writes master_results (list of dicts) to a CSV file, appending if file exists,
-    and writing the header only when needed.
+    Append master summary rows to a CSV file, creating it if needed.
+
+    Writes `master_results` (a list of dictionaries) into `output_path`.
+    If the file does not exist or is empty, a header row is written first.
+
+    Args:
+        master_results (list[dict]): Master summary rows to write.
+        output_path (str): Destination CSV file path.
+
+    Returns:
+        str or None: Output path if writing succeeds, otherwise None.
     '''
 
     if not master_results:
@@ -259,7 +330,25 @@ def merge_master_table_with_file(master_results, output_path):
         return None
     
 def build_all_zip_summary(per_zip_results):
-    ''' Builds the entry for all zip summary (master summary) for the new schema. '''
+    '''
+    Build a master summary row for a single zipfile run.
+
+    Aggregates post-processing durations, output sizes, and success/failure
+    counts across artifacts for the provided per-zip results structure.
+
+    Args:
+        per_zip_results (dict): Results dictionary for a single zipfile run.
+            Expects `per_zip_results['summary'][0]` and `per_zip_results['postprocessing']`.
+
+    Returns:
+        dict: Aggregated summary row containing:
+            - zipfile
+            - hostname
+            - total_processing
+            - total_size_bytes
+            - success_count
+            - fail_count
+    '''
 
     artifacts = per_zip_results.get('postprocessing', [])
     hostname = per_zip_results['summary'][0].get('hostname')
@@ -287,13 +376,15 @@ def build_all_zip_summary(per_zip_results):
         'fail_count': fail_count,
     }
 
-
 def get_duration_from_timespan(start):
-    ''' 
-    Used to calculate the duration to output it in a human-friendly manner.
-    
+    '''
+    Format the elapsed time since `start` as minutes and seconds.
+
     Args:
-        start = datetime.now()
+        start (datetime): Start timestamp.
+
+    Returns:
+        str: Duration formatted as '<minutes>m <seconds>s'.
     '''
 
     end = datetime.now()
@@ -304,27 +395,59 @@ def get_duration_from_timespan(start):
 
 def adding_seconds(summary):
     '''
-    Adds the unit "seconds" to be able to pretty print the results
-    of artifact post-processing.
+    Append a 'seconds' unit to numeric duration values for display.
+
+    Args:
+        summary (dict[str, float]): Mapping of labels to duration values
+            in seconds.
+
+    Returns:
+        dict[str, str]: Mapping with durations formatted as strings with
+        two decimals and a trailing 'seconds'.
     '''
 
     return {k: f"{v:.2f} seconds" for k, v in summary.items()}
 
 def calculate_total(summary):
-    ''' 
-    Sums the total of post-processing time and returns it with two
-    decimals after the comma
+    '''
+    Sum all non-None values in a duration mapping.
+
+    Args:
+        summary (dict[str, float | None]): Mapping of labels to duration values.
+
+    Returns:
+        float: Total duration rounded to two decimals.
     '''
 
     return round(sum(v for v in summary.values() if v is not None), 2)
 
 def collecting_data_for_summary(duration):
-    ''' Returns value with only 2 decimals after comma '''
+    '''
+    Round a duration value to two decimal places.
+
+    Args:
+        duration (int | float): Duration value in seconds.
+
+    Returns:
+        float: Duration rounded to two decimals.
+    '''
 
     return round(duration, 2)
 
 def generate_summary_postprocessing(summary, zipfile, extracted_zip, filename):
-    ''' Generates a summary of post-processing time and dumps it to stdout and a file '''
+    '''
+    Generate and persist a JSON summary of post-processing durations.
+
+    Computes the total duration for a zipfile entry, formats values for
+    readability, prints the JSON summary to stdout, and writes it to a file
+    under the extracted zip directory.
+
+    Args:
+        summary (dict): Summary mapping keyed by zipfile, containing timing values.
+        zipfile (str): Zipfile key used to locate the per-zip summary entry.
+        extracted_zip (str): Directory where the summary file will be written.
+        filename (str): Output filename for the summary JSON.
+    '''
 
     summary[zipfile]['total'] = calculate_total(summary[zipfile])
     summary[zipfile] = adding_seconds(summary[zipfile])
@@ -338,9 +461,22 @@ def generate_summary_postprocessing(summary, zipfile, extracted_zip, filename):
     with open(fullpath, 'w') as f:
         f.write(summary_json)
 
-
 def pretty_print_master_table(master_results):
-    ''' Pretty prints the master table to terminal AND returns the final text. '''
+    '''
+    Pretty-print the master summary table and return its full text.
+
+    Builds an ASCII table showing per-zip totals (duration, output size,
+    success/failure counts) and appends a final TOTAL row aggregating
+    duration and output size across all rows.
+
+    Args:
+        master_results (list[dict]): Master summary rows. Each row is expected
+            to include keys such as 'zipfile', 'hostname', 'total_processing',
+            'total_size_bytes', 'success_count', and 'fail_count'.
+
+    Returns:
+        str: Full printed table text.
+    '''
 
     output_lines = []   # collect lines for return
 

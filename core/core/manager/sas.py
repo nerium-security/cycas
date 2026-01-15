@@ -1,5 +1,10 @@
 '''
-Module for handling data in blob storage account using authentication through SAS.
+Module for interacting with an Azure Blob Storage container using a
+Shared Access Signature (SAS) for authentication.
+
+This module defines the `SasManager` class, which provides a lightweight
+wrapper around the Azure Blob Storage SDK for read-only or limited-access
+operations authenticated via a SAS URL.
 '''
 
 import os
@@ -11,14 +16,24 @@ log = log.getLogger(__name__)
 
 class SasManager:
     def __init__(self, sas_url):
+        '''
+        Initialize the SAS manager with a SAS URL.
+
+        If a SAS URL is provided, Azure Blob Storage clients are initialized
+        immediately.
+
+        Args:
+            sas_url (str): Full SAS URL pointing to an Azure Blob Storage
+                container, including SAS token query parameters.
+        '''
+
         self.sas_url = sas_url
         self._blob_service_client = None
         self._container_client = None
 
         if sas_url:
             self._initialize_clients(sas_url)
-    
-    
+
     def _initialize_clients(self, sas_url: str) -> None:
         '''
         Initialize the Azure Blob Storage clients from a SAS URL.
@@ -42,10 +57,13 @@ class SasManager:
 
         log.debug(f'Initialized BlobServiceClient for container: {container_name}')
 
-
     def list_blobs_from_sas(self) -> list[str]:
         '''
-        List all blobs from the container represented by a SAS URL.
+        List all blobs in the container represented by the SAS URL.
+
+        Returns:
+            list[str]: List of blob names found in the container.
+            Returns an empty list if the operation fails.
         '''
         
         log.info(f'Listing blobs from domain: {self.parsed_url.netloc}')
@@ -59,7 +77,6 @@ class SasManager:
         except Exception as e:
             log.error(f'Error listing blobs: {e}')
             return []
-        
 
     def download_all(self, download_path: str) -> None:
         '''
@@ -88,10 +105,18 @@ class SasManager:
 
     def download(self, download_path: str, zip: str) -> None:
         '''
-        Download blob from the container represented by a SAS URL.
+        Download a single blob from the container to the local filesystem.
+
+        The blob is saved using its name relative to the specified
+        download directory.
 
         Args:
-            download_path (str): Local directory to save blobs.
+            download_path (str): Local directory where the blob will be saved.
+            zip (str): Name of the blob to download.
+
+        Returns:
+            str or None: Full local file path if the download succeeds,
+            otherwise None.
         '''
         try:
             os.makedirs(download_path, exist_ok=True)

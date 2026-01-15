@@ -1,3 +1,18 @@
+'''
+Utilities for downloading and running Velociraptor for artifact post-processing.
+
+Provides helpers to:
+    - Download the Velociraptor binary and set executable permissions
+    - Build and run Velociraptor query commands
+    - Generate a remapping file for reading zip contents
+    - Extract a hostname from a remapped registry hive
+    - Load and select artifact sets from a JSON configuration
+    - Run post-processing for a single artifact and return structured results
+
+Most functions log errors rather than raising exceptions, and several
+functions create directories or write output files as side effects.
+'''
+
 import logging as log
 import os
 import requests
@@ -8,12 +23,19 @@ import re
 import time
 from pathlib import Path
 from core.utils.files import create_directory_if_not_exists
-from core.utils.summary import define_results_postprocess_dict, define_results_upload_dict
+from core.utils.summary import define_results_postprocess_dict
 
 log = log.getLogger(__name__)
 
 def set_executepermissions(dest_path):
-    '''Sets the execution permissions for the Velocriaptor binary.'''
+    '''
+    Set executable permissions for the Velociraptor binary.
+
+    Adds the execute bit to the file mode of the given path.
+
+    Args:
+        dest_path (str): Path to the Velociraptor binary.
+    '''
 
     try:
         os.chmod(dest_path, os.stat(dest_path).st_mode | stat.S_IEXEC)
@@ -22,7 +44,27 @@ def set_executepermissions(dest_path):
         log.error(f'Could not set execute permission for {dest_path}. Error: {e}')
 
 def run_command(cmd, result, store_output=False):
-    '''Runs the Velociraptor command to post-process zip file.'''
+    '''
+    Run a subprocess command and record execution results.
+
+    Executes the provided command using `subprocess.run(check=True)` and
+    writes execution metadata into the provided `result` dictionary.
+
+    Args:
+        cmd (list[str]): Command and arguments to execute.
+        result (dict): Mutable dictionary updated with execution results.
+        store_output (bool): If True, captures stdout and stderr. If False,
+            captures stderr only.
+
+    Returns:
+        dict: The updated result dictionary containing keys such as:
+            - success (bool)
+            - duration_in_sec (float)
+            - stdout (str or None)
+            - stderr (str or None)
+            - returncode (int)
+            - error (str) on failure
+    '''
 
     if store_output:
         run_opts = {
@@ -69,9 +111,16 @@ def run_command(cmd, result, store_output=False):
     return result
 
 def download_velociraptor(binary, url):
-    '''This function downloads the velociraptor binary if it does not exist on disk yet.'''
+    '''
+    Download the Velociraptor binary if it does not already exist.
 
-    #create_directory_if_not_exists(binary)
+    Fetches the binary from the provided URL and writes it to `binary`.
+    If the destination file already exists, no download is performed.
+
+    Args:
+        binary (str): Destination path for the Velociraptor binary.
+        url (str): Download URL for the Velociraptor binary.
+    '''
 
     if os.path.exists(binary):
         log.info(f'Download is not required of {url} as {binary} already exists.')
@@ -92,11 +141,23 @@ def download_velociraptor(binary, url):
     except Exception as e:
         log.error(f'Could not download {url} to {binary}. Error: {e}')
 
-
 def build_remap(zipfile, remapfolder, binary, definitions, unzipdir):
     '''
-    This function builds the Velociraptor remapping file to be able to
-    easily post-process the results of the Windows.KapeFiles.Targets artifact
+    Build a Velociraptor remapping file for processing a zipfile.
+
+    Creates the remapping directory if needed and runs a Velociraptor query
+    to generate a remapping YAML file that can be used with '--remap' to
+    access zip contents.
+
+    Args:
+        zipfile (str): Path to the zipfile to remap.
+        remapfolder (str): Directory where remap-related artifacts may be stored.
+        binary (str): Path to the Velociraptor binary.
+        definitions (str): Path to Velociraptor artifact definitions.
+        unzipdir (str): Base directory for unzip/output files.
+
+    Returns:
+        str: Full path to the generated remapping YAML file.
     '''
 
     create_directory_if_not_exists(remapfolder)
@@ -122,8 +183,18 @@ def build_remap(zipfile, remapfolder, binary, definitions, unzipdir):
 
 def find_hostname(remappingfile, binary, definitions):
     '''
-    Outputs the hostname by using the generate remapping file to read the zip-file
-    containg the SYSTEM registry hive with the ComputerName value.
+    Extract the hostname from a remapped SYSTEM registry hive.
+
+    Uses the provided Velociraptor remapping file to query a registry key
+    that typically contains the Windows computer name.
+
+    Args:
+        remappingfile (str): Path to the Velociraptor remapping YAML file.
+        binary (str): Path to the Velociraptor binary.
+        definitions (str): Path to Velociraptor artifact definitions.
+
+    Returns:
+        str: Extracted hostname if available, otherwise an empty string.
     '''
 
     registrykey = "HKEY_LOCAL_MACHINE//SYSTEM//ControlSet001//Control//ComputerName//ComputerName//ComputerName"
@@ -148,9 +219,16 @@ def find_hostname(remappingfile, binary, definitions):
         log.info(f'Could not extract hostname from registry key.')
         return ''
 
-
 def load_artifacts(artifactslist):
-    ''' Loads the Velociraptor artifacts from the inputfile.'''
+    '''
+    Load the Velociraptor artifact configuration from a JSON file.
+
+    Args:
+        artifactslist (str): Path to the JSON file containing artifact groups.
+
+    Returns:
+        dict or None: Parsed JSON content if successful, otherwise None.
+    '''
 
     try:
         with open(artifactslist, 'r') as f:
@@ -163,7 +241,23 @@ def load_artifacts(artifactslist):
         return None
 
 def select_artifacts(artifacts, postprocess_var):
-    '''Selects the Velociraptor artifacts that need to be launched'''
+    '''
+    Select the artifacts to run based on a post-processing mode.
+
+    Supports selecting:
+        - 'essential': only the essential artifact list
+        - 'full': essential plus full artifact list
+        - any other value: empty selection
+
+    Ensures items are unique while preserving the original order.
+
+    Args:
+        artifacts (dict): Artifact configuration containing 'essential' and 'full' lists.
+        postprocess_var (str): Mode selector (e.g. 'essential' or 'full').
+
+    Returns:
+        list[str]: Ordered list of unique artifact names to run.
+    '''
 
     essentials = artifacts['essential']
     full = artifacts['full']
@@ -186,7 +280,19 @@ def select_artifacts(artifacts, postprocess_var):
     return result
 
 def get_zipfilename(zipfile, unzip_dir):
-    '''Gets the zip file basename '''
+    '''
+    Derive a zipfile basename used for output metadata.
+
+    If the zipfile path starts with the unzip directory, removes that prefix.
+    Otherwise falls back to `os.path.basename(zipfile)`.
+
+    Args:
+        zipfile (str): Zipfile path.
+        unzip_dir (str): Base unzip directory path.
+
+    Returns:
+        str: Derived zipfile basename.
+    '''
 
     if zipfile.startswith(unzip_dir):
         zipfile_basename = zipfile.removeprefix(unzip_dir)
@@ -196,7 +302,20 @@ def get_zipfilename(zipfile, unzip_dir):
     return zipfile_basename
 
 def get_zipfiledir(zipfile, unzip_dir):
-    '''Gets the zipfile directory'''
+    '''
+    Determine and create the output directory for a zipfile.
+
+    Computes a directory path under `unzip_dir` based on the zipfile name,
+    normalizes it by removing a trailing '/data' suffix, and ensures the
+    directory exists.
+
+    Args:
+        zipfile (str): Zipfile path.
+        unzip_dir (str): Base directory for unzip/output files.
+
+    Returns:
+        str: Full path to the directory used for extracted and generated files.
+    '''
 
     if zipfile.startswith(unzip_dir):
         unzip_dir_fullpath = os.path.splitext(zipfile)[0]
@@ -215,7 +334,35 @@ def get_zipfiledir(zipfile, unzip_dir):
     return unzip_dir_fullpath
 
 def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outputformat, remappingfile):
-    '''Prepares the Velociraptor command and runs it to post-process zip file.'''
+    '''
+    Run Velociraptor post-processing for a single artifact against a zipfile.
+
+    Builds a Velociraptor query command that executes the specified artifact
+    and writes results to an output file in the chosen format. A separate log
+    file is also written. Returns a structured results dictionary including
+    execution success, duration, output size, and paths.
+
+    Args:
+        hostname (str): Hostname value to embed in each output row.
+        artifact (str): Velociraptor artifact query target (e.g. 'Custom.Windows...()').
+        zipfile (str): Path to the zipfile being processed.
+        definitions (str): Path to Velociraptor artifact definitions.
+        unzipdir (str): Base output directory for extracted/generated files.
+        binary (str): Path to the Velociraptor binary.
+        outputformat (str): Output format passed to Velociraptor (e.g. 'jsonl', 'csv').
+        remappingfile (str): Path to the Velociraptor remapping YAML file.
+
+    Returns:
+        dict: Post-processing results dictionary containing keys such as:
+            - success (bool)
+            - duration_in_sec (float)
+            - stderr (str or None)
+            - returncode (int)
+            - size (int)
+            - fullpath (str)
+            - artifact (str)
+            - basename (str)
+    '''
     
     postprocess_results = define_results_postprocess_dict()
 

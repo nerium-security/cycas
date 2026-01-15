@@ -1,3 +1,13 @@
+'''
+Module for loading application configuration from environment variables.
+
+Defines a `Config` dataclass representing all supported settings and
+provides helpers to load values from a `.env` file using python-dotenv.
+
+Configuration values are loaded from the process environment, with
+selected fields converted to booleans and integers.
+'''
+
 import os
 from dotenv import load_dotenv, find_dotenv
 from dataclasses import dataclass
@@ -58,9 +68,34 @@ class Config:
     velociraptor_postprocess: str
     
 def str_to_bool(value: str) -> bool:
+    '''
+    Convert a string-like value into a boolean.
+
+    Treats common truthy string values as True and all other values as False.
+
+    Args:
+        value (str): Input value to interpret.
+
+    Returns:
+        bool: True if the value represents a truthy string, otherwise False.
+    '''
+
     return str(value).strip().lower() in ('true', 'True', 'TRUE', '1', 'yes')
 
 def load_config() -> Config:
+    '''
+    Load configuration from a .env file and environment variables.
+
+    Uses python-dotenv to locate and load a .env file into the process
+    environment, then constructs a `Config` instance from `os.getenv`.
+
+    Returns:
+        Config: Configuration populated from environment variables.
+
+    Raises:
+        ValueError: If integer conversions fail (e.g. VAR_SAMPLE_SIZE is not an int).
+        TypeError: If required environment variables are missing and `int(None)` occurs.
+    '''
 
     log.info('Loading .env file.')
     try:

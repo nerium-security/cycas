@@ -1,5 +1,9 @@
 '''
-Module for ingesting data into ADx.
+Module for ingesting data into Azure Data Explorer (ADX).
+
+Provides the `AdxManager` class, which authenticates to an ADX cluster,
+infers table schemas from JSONL data, creates or merges tables when
+required, and initiates queued ingestion from files or pandas DataFrames.
 '''
 
 import re
@@ -22,6 +26,17 @@ log = log.getLogger(__name__)
 
 class AdxManager:
     def __init__(self, credential, adx_cluster_uri, adx_cluster_ingestion_uri, adx_database_name):
+        '''
+        Initialize the ADX manager.
+
+        Args:
+            credential: Azure credential capable of acquiring an access token
+                for Kusto (e.g. DefaultAzureCredential).
+            adx_cluster_uri (str): Query endpoint URI of the ADX cluster.
+            adx_cluster_ingestion_uri (str): Ingestion endpoint URI of the ADX cluster.
+            adx_database_name (str): Target ADX database name.
+        '''
+
         self.credential = credential
         self.adx_database_name = adx_database_name
         self.adx_cluster_uri = adx_cluster_uri
@@ -30,6 +45,18 @@ class AdxManager:
         self.kusto_queued = None
 
     def authenticate(self):
+        '''
+        Authenticate to Azure Data Explorer and initialize clients.
+
+        Uses the provided Azure credential to request an access token for the
+        Kusto scope and builds:
+            - a query client (`KustoClient`)
+            - a queued ingestion client (`QueuedIngestClient`)
+
+        Returns:
+            bool: True if authentication succeeds, otherwise False.
+        '''
+
         log.info(f'Authenticating with Azure Data Explorer cluster: {self.adx_cluster_uri}.')
 
         try:
@@ -51,6 +78,18 @@ class AdxManager:
             return False
 
     def query_db_test(self):
+        '''
+        Run a short test query against the configured ADX database.
+
+        Executes a management query ('.show operations | limit 1') with a short
+        timeout to validate connectivity to the cluster and database.
+
+        Returns:
+            bool: True if the query executes successfully, otherwise False.
+
+        Notes:
+            - Assumes `authenticate()` has been called and `self.kusto_client` is set.
+        '''
 
         log.info(f'Running a test query against the database: {self.adx_database_name}')
         try:
@@ -66,7 +105,31 @@ class AdxManager:
             return False
 
     def convert_to_dataframe(self, f, nrows, chunksize):
-        '''Convert a file or in-memory data to a Pandas DataFrame.'''
+        '''
+        Convert a file or in-memory input data to a pandas DataFrame.
+
+        Supports:
+            - dict: converted into a single-row DataFrame
+            - list: converted into a DataFrame of records
+            - filepath (str or Path): read as JSON Lines via `pd.read_json(..., lines=True)`
+
+        Args:
+            f: Input data or file path. Supported types are dict, list,
+                str, or Path.
+            nrows (int): Number of rows to read when loading from a file.
+            chunksize (int or None): Chunk size to use for `pd.read_json`.
+                If provided, pandas may return an iterator instead of a DataFrame.
+
+        Returns:
+            pandas.DataFrame or Iterator[pandas.DataFrame]: DataFrame (or chunk iterator)
+            if conversion succeeds. Returns an empty DataFrame on errors or if the
+            resulting DataFrame is empty.
+
+        Notes:
+            The data is loaded as object so that the columntype can be determined manually
+            _classify_value
+
+        '''
 
         try:
 
@@ -88,12 +151,23 @@ class AdxManager:
                     return pd.DataFrame()
 
             return df
+        
         except Exception as e:
-
             log.error(f'Error converting {f} to dataframe: {e}')
             return pd.DataFrame()
 
     def convert_dict_to_json(self, df, dyn_columns):
+        '''
+        Convert Python dictionaries in selected DataFrame columns into JSON strings.
+
+        For each column listed in `dyn_columns`, values that are dictionaries are
+        serialized using `json.dumps()`.
+
+        Args:
+            df (pandas.DataFrame): DataFrame to modify in place.
+            dyn_columns (list[str]): Column names that may contain dict values.
+        '''
+
         log.debug('Entered function to convert dictionaries in the dataframe to json.')
 
         if dyn_columns:
@@ -103,18 +177,16 @@ class AdxManager:
                 except Exception as e:
                     log.error(f'Could not convert column {dyn_column} of dataframe to json. Error: {e}')
 
-    def get_tablename(self, filename):
-        
-        tablename = Path(filename).stem
-        tablename = re.sub('%2F', '_', tablename)
-        tablename = re.sub('[^0-9a-zA-Z_-]', '_', tablename)
-        log.debug(f'Extracted the following name which will be used to create the table: {tablename}.')
-        return tablename
-
     def prepare_string_with_columnames(self, schema):
         ''' 
         Prepares the string with columnames and determines columntypes.
-        Expected output: ['CreationTime']:date, ['PhysicalProcessorCount']:string, etc
+
+        Args:
+            schema (dict[str, str]): Mapping of column name to ADX type.
+
+        Returns:
+            str: Comma-separated string of ADX column definitions:
+                ['CreationTime']:date, ['PhysicalProcessorCount']:string, etc
         '''
 
         parts = []
@@ -130,16 +202,25 @@ class AdxManager:
 
         return ', '.join(parts)
 
-
     def _classify_value(self, value: str):
         '''
-        Classify value into an ADX type.
+        Classify a single value into an ADX column type.
 
-        Returns one of:
-        - 'long'
-        - 'datetime'
-        - 'dynamic'
-        - 'string'
+        Classification rules include:
+            - dict/list -> 'dynamic'
+            - bool -> 'bool'
+            - datetime -> 'datetime'
+            - int -> 'long'
+            - float -> 'datetime' if it resembles epoch seconds/ms, else 'real'
+            - str -> 'datetime' if ISO-8601 parseable, else 'string'
+            - None/NaN -> None (ignored)
+
+        Args:
+            value: Value to classify. May be of any type observed in a DataFrame.
+
+        Returns:
+            str or None: One of 'long', 'datetime', 'dynamic', 'string', 'real', 'bool',
+            or None for missing/invalid samples.
         '''
 
         if value is None:
@@ -188,10 +269,23 @@ class AdxManager:
         # return string for rest (which includes unclear and vague values)
         return 'string'
 
-
     def infer_adx_type_majority(self, df, sample_size=100):
         '''
-        Infer ADX type by majority vote.
+        Infer ADX column types using a majority vote over sampled values.
+
+        For each DataFrame column, inspects up to `sample_size` non-null values,
+        classifies each value using `_classify_value()`, and selects the most
+        common type.
+
+        Args:
+            df (pandas.DataFrame): DataFrame used for inference.
+            sample_size (int): Number of non-null values to sample per column.
+
+        Returns:
+            dict[str, str]: Mapping of column name to inferred ADX type.
+
+        Notes:
+            - If no valid samples are found for a column, defaults to 'string'.
         '''
 
         schema = {}
@@ -211,12 +305,28 @@ class AdxManager:
         return schema
 
     def create_new_table_if_required(self, Config, file, forcetablename):
-        ''' Creates a new table when there is isn't one or when a new column needs to be added to the table '''
+        '''
+        Create or merge an ADX table if needed based on sample-derived schema.
+
+        Determines the target table name, checks whether the table exists, infers
+        a schema from sample data, and issues a '.create-merge table' command if:
+            - the table does not exist, or
+            - new columns are detected compared to the existing table schema
+
+        Args:
+            Config: Configuration object expected to provide `var_sample_size`.
+            file: File path used for table naming and schema inference. If
+                `forcetablename` is provided, the name is not derived from the file.
+            forcetablename (str or None): Optional explicit table name.
+
+        Returns:
+            str: Name of the table used or created.
+        '''
         
         if forcetablename:
             tablename = forcetablename
         else:
-            tablename = self.get_tablename(os.path.basename(file))
+            tablename = self.sanitize_adx_column_name(os.path.basename(file))
             if os.path.getsize(file) == 0:
                 return tablename
 
@@ -233,7 +343,18 @@ class AdxManager:
         return tablename
         
     def checking_if_new_columns_exists(self, existing_columns, new_columns):
-        ''' Returns True if a new column is observed that needs to be added to the table in ADX. '''
+        '''
+        Determine whether new columns are present compared to an existing ADX table.
+
+        Args:
+            existing_columns (list[dict]): Existing ADX column metadata, expected
+                to contain 'ColumnName' keys.
+            new_columns (list[str]): New column names derived from sample schema.
+
+        Returns:
+            bool: True if a column in `new_columns` is not present in the existing
+            schema, otherwise False.
+        '''
 
         existing_columns_clean = [col.get('ColumnName') for col in existing_columns]
 
@@ -246,7 +367,16 @@ class AdxManager:
 
     def sanitize_adx_column_name(self, name: str) -> str:
         '''
-        Sanitize a string so it can be safely used as an Azure Data Explorer (ADX) column name.
+        Sanitize a string so it can be used as an ADX column name.
+
+        Replaces special characters, whitespace, and non-alphanumeric characters
+        with underscores.
+
+        Args:
+            name (str): Candidate column name.
+
+        Returns:
+            str: Sanitized column name.
         '''
 
         name = re.sub(r"[<>\[\]{}\"'`\\]", "_", name)
@@ -259,7 +389,22 @@ class AdxManager:
         return name
 
     def get_table_createcommand(self, file, Config, tablename):
-        ''' Prepares the command for creating a table in ADX'''
+        '''
+        Generate an ADX '.create-merge table' command from sample data.
+
+        Loads sample data into a DataFrame, infers a schema using majority vote,
+        and formats the ADX create-merge command string.
+
+        Args:
+            file: JSONL file path or in-memory object supported by `convert_to_dataframe()`.
+            Config: Configuration object expected to provide `var_sample_size`.
+            tablename (str): Target table name to include in the command.
+
+        Returns:
+            tuple[str, list[str]]: Tuple containing:
+                - ADX management command string for creating/merging the table
+                - List of column names derived from the inferred schema
+        '''
         
         df = self.convert_to_dataframe(file, Config.var_sample_size, chunksize=None)
 
@@ -272,6 +417,18 @@ class AdxManager:
         return f'.create-merge table {tablename} ({columnstring})', clean_columnames
 
     def upload_detailed_status(self, results, Config, tablename):
+        '''
+        Upload a detailed status payload into ADX.
+
+        Ensures the target table exists (creating/merging if required), converts
+        the results payload into a DataFrame, and initiates ingestion from the
+        DataFrame.
+
+        Args:
+            results: In-memory status payload (typically dict or list).
+            Config: Configuration object used for schema inference sampling.
+            tablename (str): Table name to use or force for detailed status.
+        '''
 
         table = self.create_new_table_if_required(Config, results, tablename)
         results_df = pd.DataFrame(results)
@@ -279,6 +436,16 @@ class AdxManager:
         self.launch_upload_df(results_df, table)
 
     def read_ingestion_properties(self, tablename):
+        '''
+        Build ingestion properties for JSON ingestion into an ADX table.
+
+        Args:
+            tablename (str): Target table name.
+
+        Returns:
+            IngestionProperties: Ingestion properties configured for JSON format
+            and failure/success reporting.
+        '''
 
         return IngestionProperties(
             database=self.adx_database_name,
@@ -287,7 +454,26 @@ class AdxManager:
             report_level=ReportLevel.FailuresAndSuccesses)
 
     def launch_upload_file(self, tablename: str, fullpath: str) -> bool:
-        '''Uploads a file to adx'''
+        '''
+        Initiate queued ingestion of a local file into ADX.
+
+        Builds ingestion properties and calls `ingest_from_file()` using the
+        queued ingestion client. This initiates ingestion but does not wait
+        for completion.
+
+        Args:
+            tablename (str): Target ADX table name.
+            fullpath (str): Full path to the local file to ingest.
+
+        Returns:
+            dict: Dictionary containing upload initiation metadata, including:
+                - basename, size, ignored_upload
+                - upload_initiated (bool)
+                - upload_duration_in_sec (float)
+                - upload_initiated_timestamp (float) on success
+                - upload_error (str) on failure
+        '''
+
         result = {}
         start = time.time()
         ingestion_props = self.read_ingestion_properties(tablename)
@@ -329,7 +515,19 @@ class AdxManager:
         return result
 
     def launch_upload_df(self, df, tablename: str) -> bool:
-        '''Uploads a dataframe to adx'''
+        '''
+        Initiate queued ingestion of a pandas DataFrame into ADX.
+
+        Args:
+            df (pandas.DataFrame): DataFrame to ingest.
+            tablename (str): Target ADX table name.
+
+        Side Effects:
+            - Initiates ingestion using the queued ingestion client.
+
+        Notes:
+            - The current implementation logs errors but does not return a value.
+        '''
 
         ingestion_props = self.read_ingestion_properties(tablename)
 
@@ -341,7 +539,23 @@ class AdxManager:
             log.error(f'Failed to initiate the data upload request to table {tablename}. Error: {e}' )
 
     def add_hostname_to_file(self, fullpath, hostname, zipfile):
-        ''' Adds hostname and sourcefilename inline to file'''
+        '''
+        Add Hostname and Sourcefilename fields to each JSON object line in a file.
+
+        Performs an in-place modification of a JSON Lines file by appending
+        '"Sourcefilename":"<zipfile>","Hostname":"<hostname>"' to each line that
+        ends with '}'.
+
+        Args:
+            fullpath (str): Path to the JSONL file to modify in place.
+            hostname (str): Hostname value to add to each JSON object.
+            zipfile (str): Source filename value to add to each JSON object.
+
+        Returns:
+            dict: Result dictionary containing:
+                - added_hostname (bool) and added_hostname_duration (float) on success
+                - added_hostname_error on failure
+        '''
 
         start = time.time()
         basename = os.path.basename(fullpath)
@@ -368,6 +582,19 @@ class AdxManager:
         }
 
     def check_if_table_exists(self, tablename):
+        '''
+        Check whether an ADX table exists by running a zero-row query.
+
+        Executes '<tablename> | limit 0' and inspects the returned schema.
+
+        Args:
+            tablename (str): Table name to check.
+
+        Returns:
+            tuple[bool, Any]: Tuple containing:
+                - True and raw column metadata if the table exists
+                - False and an empty string if the table does not exist
+        '''
 
         query = f'{tablename} | limit 0'
         try:
@@ -380,7 +607,16 @@ class AdxManager:
             return False, ''
 
     def launch_createmerge_table(self, cmd_createmergetable):
-        ''' Creates the table in ADX. '''
+        '''
+        Execute an ADX management command to create or merge a table.
+
+        Args:
+            cmd_createmergetable (str): ADX management command string,
+                typically a '.create-merge table ...' command.
+
+        Returns:
+            bool: True if the command executes successfully, otherwise False.
+        '''
 
         try:
             self.kusto_client.execute_mgmt(self.adx_database_name, cmd_createmergetable)

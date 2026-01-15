@@ -1,3 +1,12 @@
+'''
+Module for configuring application logging and runtime session identifiers.
+
+Provides helper functions to:
+    - Configure logging output to both console and file
+    - Control log verbosity
+    - Generate short unique session identifiers for a single run
+'''
+
 import logging as log
 import os
 import uuid
@@ -6,6 +15,17 @@ from pathlib import Path
 from core.utils.files import create_directory_if_not_exists
 
 def set_loglevel(level):
+    '''
+    Translate a string log level into a logging module numeric level.
+
+    Args:
+        level (str): Log level as a string. Currently supports 'DEBUG'
+            for debug-level logging. All other values default to INFO.
+
+    Returns:
+        int: Numeric logging level compatible with the logging module.
+    '''
+
     if level == 'DEBUG':
         loglevel = 10
     else:
@@ -14,9 +34,34 @@ def set_loglevel(level):
     return loglevel
 
 def generate_sessionid():
+    '''
+    Generate a short unique session identifier.
+
+    Uses a UUID4 value truncated to 8 hexadecimal characters.
+
+    Returns:
+        str: Short unique session identifier.
+    '''
+
     return str(uuid.uuid4().hex[:8])
 
 def setup_logging(loglocation, loglevel):
+    '''
+    Configure application-wide logging.
+
+    Sets up logging to write to both a timestamped log file and stdout,
+    configures log formatting, and reduces verbosity for selected
+    third-party libraries. Creates the log directory if it does not exist.
+
+    Args:
+        loglocation (str): Relative directory path where log files
+            should be written.
+        loglevel (str): Desired log level as a string (e.g. 'DEBUG',
+            'INFO').
+
+    Returns:
+        str: Generated session identifier for the current runtime.
+    '''
 
     create_directory_if_not_exists(loglocation)
 
