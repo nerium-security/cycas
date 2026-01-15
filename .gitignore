@@ -426,8 +426,8 @@ blog.md
 .DS_Store
 
 #package files
-sharedlib.egg-info
-sharedlibrary.egg-info
-build/*
+core.egg-info
+core.egg-info
+*/build/*
 *.json
 *.csf

@@ -4,18 +4,18 @@ import argparse
 import logging as log
 from datetime import datetime
 from pathlib import Path
-from sharedlib.utils.log import setup_logging
-from sharedlib.utils.status import (add_summary_info_to_status,
+from core.utils.log import setup_logging
+from core.utils.status import (add_summary_info_to_status,
                                     add_hostname_to_status)
 
-from sharedlib.utils.postprocess import (download_velociraptor, 
+from core.utils.postprocess import (download_velociraptor, 
                                          build_remap, 
                                          find_hostname, 
                                          load_artifacts, 
                                          select_artifacts, 
                                          postprocess)
 
-from sharedlib.utils.summary import (define_results_dict,
+from core.utils.summary import (define_results_dict,
                                      pretty_print_summary_per_zip,
                                      get_duration_from_timespan,
                                      build_all_zip_summary,
@@ -23,7 +23,7 @@ from sharedlib.utils.summary import (define_results_dict,
                                      summary_per_zip_to_file,
                                      merge_master_table_with_file)
 
-from sharedlib.utils.zip import (extract_encrypted_and_non_encrypted_zipfiles, 
+from core.utils.zip import (extract_encrypted_and_non_encrypted_zipfiles, 
                                  get_password,
                                  load_from_env_variable,
                                  find_zip_files)
