@@ -16,7 +16,7 @@ from core.utils.files import split_jsonl_by_size, delete_file, get_filesize_byte
 from core.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename
 from core.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
 from core.utils.summary import define_results_upload_dict, define_results_dict, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file
-from core.utils.misc import should_download
+from core.utils.misc import should_download, send_webhook
 from core.utils.auth import Authenticator
 from core.utils.status import Status, update_status_in_log, write_logentry_if_new, determine_if_needs_processing, upload_detailed_status_to_adx, add_summary_info_to_status, add_hostname_to_status
 from datetime import datetime
@@ -124,6 +124,8 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
 
     upload_detailed_status_to_adx(managers, results, tablename='_status')
 
+    _send_webhook_message(Config.var_webhook_url, results)
+    
     log.info('Script finished.')
 
 def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, results):
@@ -239,7 +241,7 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
 
     else:
         log.info(f'Post-processing all artifacts took {duration}..')
-
+    
     return results
 
 def extract_all_json_from_zip_and_upload(managers, 
@@ -390,6 +392,61 @@ def _download_zip(managers, source_name, zip, sessionid, start, status_data):
         return zip
     else:
         return False
+
+def _send_webhook_message(webhook_url, results):
+    '''
+    Send a completion message to a webhook endpoint.
+
+    Builds a human-readable summary message based on processing results
+    and sends it to the configured webhook URL.
+    '''
+
+    if not webhook_url:
+        return
+
+    # Retrieve count of successful uploads
+    nr_uploads = 0
+    for f in results['uploads']:
+        if not isinstance(f, dict):
+            continue
+
+        if not f.get('upload_initiated'):
+            continue
+
+        if f.get('upload_error') is not None:
+            continue
+
+        if not isinstance(f.get('basename'), str):
+            continue
+
+        nr_uploads += 1
+
+    # Retrieve count of postprocessed artefacts
+    nr_postprocessed = 0
+    for f in results['postprocessing']:
+        if not isinstance(f, dict):
+            continue
+
+        if not f.get('success'):
+            continue
+
+        if f.get('error') is not None:
+            continue
+
+        if not isinstance(f.get('basename'), str):
+            continue
+
+        nr_postprocessed += 1
+
+    if webhook_url:
+        basename = results['summary'][0].get('zipfile_basename')
+        message = (
+            f'{basename} finished.'
+            f'Postprocessed {nr_postprocessed} artifacts. '
+            f'Upload in total {nr_uploads} json files.'
+        )
+        
+        send_webhook(webhook_url, message)
 
 def init(source_name, sessionid):
     '''

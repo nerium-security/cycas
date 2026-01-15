@@ -51,8 +51,7 @@ def define_results_dict():
         'postprocessing': [],
         'uploads': [],
         'files_in_zip_ignored': [],
-        'added_hostname_as_column_to_file': [],
-        'statistics': {}
+        'added_hostname_as_column_to_file': []
     }
 
 def define_results_postprocess_dict():

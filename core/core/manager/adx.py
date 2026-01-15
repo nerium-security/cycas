@@ -13,7 +13,6 @@ import os
 import logging as log
 import pandas as pd
 import fileinput
-import numpy as np
 from pathlib import Path
 from datetime import timedelta
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
