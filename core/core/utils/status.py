@@ -1,6 +1,6 @@
-from sharedlib.utils.config import load_config
-from sharedlib.utils.log import generate_sessionid
-from sharedlib.utils.zip import is_zip_encrypted
+from core.utils.config import load_config
+from core.utils.log import generate_sessionid
+from core.utils.zip import is_zip_encrypted
 import logging as log
 import os
 

@@ -59,11 +59,11 @@ Optional: When you want to use Azure Functions:
     - add system assigned identity: key vault secrets user, storage queue data message processor
 
 ## Instructions for development infrastructure
-- pip install -e ./sharedlib
+- pip install -e ./core
 - cd azurefunctions/watcher
-- ln -s ../../sharedlib/  ./sharedlib
+- ln -s ../../core/  ./core
 - ln -s ../../.env .env
 - cd azurefunctions/processor 
-- ln -s ../../sharedlib/  ./sharedlib
+- ln -s ../../core/  ./core
 - ln -s ../../.ignorelist.json  ./.ignorelist.json
 - ln -s ../../.env .env

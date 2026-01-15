@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='sharedlib',
+    name='core',
     version='0.3.0',
     description='Shared library',
     packages=find_packages(),

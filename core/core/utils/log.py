@@ -3,7 +3,7 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from sharedlib.utils.files import create_directory_if_not_exists
+from core.utils.files import create_directory_if_not_exists
 
 def set_loglevel(level):
     if level == 'DEBUG':

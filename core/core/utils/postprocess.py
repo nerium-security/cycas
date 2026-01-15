@@ -7,8 +7,8 @@ import json
 import re
 import time
 from pathlib import Path
-from sharedlib.utils.files import create_directory_if_not_exists
-from sharedlib.utils.summary import define_results_postprocess_dict, define_results_upload_dict
+from core.utils.files import create_directory_if_not_exists
+from core.utils.summary import define_results_postprocess_dict, define_results_upload_dict
 
 log = log.getLogger(__name__)
 

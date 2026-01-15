@@ -1,13 +1,13 @@
 import logging
-from sharedlib.utils.log import setup_logging
-from sharedlib.pipeline.orchestrator import (init, 
+from core.utils.log import setup_logging
+from core.pipeline.orchestrator import (init, 
                                 list_zipfiles, 
                                 run_zip_processor, 
                                 write_logentry_if_new, 
                                 determine_if_needs_processing)
-from sharedlib.utils.status import Status
-from sharedlib.utils.config import load_config
-from sharedlib.utils.queue import send_to_queue, get_message_in_queue, update_status_unqueued
+from core.utils.status import Status
+from core.utils.config import load_config
+from core.utils.queue import send_to_queue, get_message_in_queue, update_status_unqueued
 from typing import Optional
 
 Config = load_config()

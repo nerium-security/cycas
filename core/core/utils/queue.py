@@ -1,6 +1,6 @@
-from sharedlib.utils.config import load_config
-from sharedlib.utils.status import Status, update_status_in_log
-from sharedlib.manager.queue import decode_message
+from core.utils.config import load_config
+from core.utils.status import Status, update_status_in_log
+from core.manager.queue import decode_message
 from datetime import datetime
 import logging as log
 import json
