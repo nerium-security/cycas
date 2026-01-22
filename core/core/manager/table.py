@@ -91,16 +91,16 @@ class TablestorageManager:
 
         return {
             'PartitionKey': self.partitionkey,
-            'RowKey': self.hash_filename(status_data.get('zipfile_basename', '')),
-            'ZipfileBasename': status_data.get('zipfile_basename', ''),
+            'RowKey': self.hash_filename(status_data['summary'][0].get('zipfile_basename', '')),
+            'ZipfileBasename': status_data['summary'][0].get('zipfile_basename', ''),
             'Status': status,
-            'Sessionid': status_data.get('sessionid', ''),
+            'Sessionid': status_data['summary'][0].get('sessionid', ''),
             'ScriptLocation': self.computername,
             'Source': status_data.get('source_name', ''),
             'Duration': duration,
             'StartTime': f'{datetime.utcnow():%Y-%m-%dT%H:%M:%SZ}',
-            'Extracted_Hostname': status_data.get('hostname', ''),
-            'Size': status_data.get('zipfile_size', '')
+            'Extracted_Hostname': status_data['summary'][0].get('hostname', ''),
+            'Size': status_data['summary'][0].get('zipfile_size', '')
         }
 
     def calculate_duration(self, starttime):
