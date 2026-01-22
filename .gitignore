@@ -421,6 +421,7 @@ blog.md
 
 #.env file
 .env
+.env*
 
 #MacFile
 .DS_Store

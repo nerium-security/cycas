@@ -100,10 +100,7 @@ class TablestorageManager:
             'Duration': duration,
             'StartTime': f'{datetime.utcnow():%Y-%m-%dT%H:%M:%SZ}',
             'Extracted_Hostname': status_data.get('hostname', ''),
-            'Size': status_data.get('zipfile_size', ''),
-            'nr_of_artifacts_postprocessed': status_data['statistics'].get('nr_of_artifacts_postprocessed', ''),
-            'nr_of_postprocessed_artifacts_uploaded': status_data['statistics'].get('nr_of_postprocessed_artifacts_uploaded', ''),
-            'nr_of_json_files_in_zip_uploaded': status_data['statistics'].get('nr_of_json_files_in_zip_uploaded', '')
+            'Size': status_data.get('zipfile_size', '')
         }
 
     def calculate_duration(self, starttime):
