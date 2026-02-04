@@ -6,6 +6,7 @@ operations for writing and reading pipeline status information from an
 Azure Table Storage table.
 '''
 
+from azure.data.tables import EntityProperty, EdmType
 from azure.data.tables import TableServiceClient
 from datetime import datetime
 import pandas as pd
@@ -88,19 +89,25 @@ class TablestorageManager:
         Returns:
             dict: Table Storage entity ready to be inserted or updated.
         '''
+        
+        status_data = status_data['summary'][0]
+
+        # Convert size to int64 as otherwise a limit might be reached for entry in table
+        size_int32 = status_data.get('zipfile_size', '')
+        size = EntityProperty(value=int(size_int32), edm_type=EdmType.INT64)
 
         return {
             'PartitionKey': self.partitionkey,
-            'RowKey': self.hash_filename(status_data['summary'][0].get('zipfile_basename', '')),
-            'ZipfileBasename': status_data['summary'][0].get('zipfile_basename', ''),
+            'RowKey': self.hash_filename(status_data.get('zipfile_basename', '')),
+            'ZipfileBasename': status_data.get('zipfile_basename', ''),
             'Status': status,
-            'Sessionid': status_data['summary'][0].get('sessionid', ''),
+            'Sessionid': status_data.get('sessionid', ''),
             'ScriptLocation': self.computername,
             'Source': status_data.get('source_name', ''),
             'Duration': duration,
             'StartTime': f'{datetime.utcnow():%Y-%m-%dT%H:%M:%SZ}',
-            'Extracted_Hostname': status_data['summary'][0].get('hostname', ''),
-            'Size': status_data['summary'][0].get('zipfile_size', '')
+            'Extracted_Hostname': status_data.get('hostname', ''),
+            'Size': size
         }
 
     def calculate_duration(self, starttime):
@@ -200,7 +207,7 @@ class TablestorageManager:
         Returns:
             bool: True if a new entry was created, otherwise None.
         '''
-
+        
         zipfile = status_data.get('zipfile_basename')
         existing_entry = self.retrieve_log_entry(zipfile)
         entity = self.build_log_entity(processing_status, None, status_data)
