@@ -74,7 +74,8 @@ def run_command(cmd, result, store_output=False):
         }
     else:
         run_opts = {
-            "stderr": subprocess.PIPE,  # capture errors
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.PIPE,
             "text": True,
         }
 
@@ -107,7 +108,7 @@ def run_command(cmd, result, store_output=False):
         result['returncode'] = e.returncode
 
         log.error(f'Command failed (exit {e.returncode}) after {duration} seconds. Error: {e.stderr}')
-
+        
     return result
 
 def download_velociraptor(binary, url):
