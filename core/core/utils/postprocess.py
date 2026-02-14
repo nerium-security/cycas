@@ -21,6 +21,7 @@ import stat
 import json
 import re
 import time
+import shlex
 from pathlib import Path
 from core.utils.files import create_directory_if_not_exists
 from core.utils.summary import define_results_postprocess_dict
@@ -181,6 +182,28 @@ def build_remap(zipfile, remapfolder, binary, definitions, unzipdir):
     run_command(cmd, {}, store_output=True)
     
     return remappingfile
+
+def write_command_to_logfile(results, extract_path, logfilename):
+    '''
+    Writes the executed command to a logfile with timestamp.
+
+    Args:
+        cmd (list | str): Command passed to subprocess.
+        extract_path (str): Path to extraction location of zip
+        logfilename (str): logfilename.
+    '''
+
+    cmd = results.get('cmd')
+    out_path = os.path.join(extract_path, logfilename)
+
+    # Convert list to properly escaped shell string
+    if isinstance(cmd, (list, tuple)):
+        command_str = shlex.join(cmd)
+    else:
+        command_str = str(cmd)
+
+    with open(out_path, 'a', encoding='utf-8') as f:
+        f.write(f'{command_str}\n\n')
 
 def find_hostname(remappingfile, binary, definitions):
     '''
@@ -396,6 +419,7 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
     if os.path.exists(outputfile) and filesize == 0:
         log.debug(f'Empty file: {outputfile}')
 
+    postprocess_results['cmd'] = cmd
     postprocess_results['size'] = filesize
     postprocess_results['fullpath'] = outputfile
     postprocess_results['artifact'] = artifact

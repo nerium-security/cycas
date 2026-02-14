@@ -66,6 +66,7 @@ def define_results_postprocess_dict():
         'fullpath': None,
         'basename': None,
         'artifact': None,
+        'cmd': None,
         'size': None,
         'success': None,
         'duration_in_sec': None,

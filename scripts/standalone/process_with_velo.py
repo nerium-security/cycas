@@ -13,7 +13,8 @@ from core.utils.postprocess import (download_velociraptor,
                                          find_hostname, 
                                          load_artifacts, 
                                          select_artifacts, 
-                                         postprocess)
+                                         postprocess,
+                                         write_command_to_logfile)
 
 from core.utils.summary import (define_results_dict,
                                      pretty_print_summary_per_zip,
@@ -44,6 +45,7 @@ parser.add_argument('-e', '--essentials', help='Only essential artifacts', actio
 parser.add_argument('-v', '--verbose', help='Enables verbose logging', action='store_true')
 parser.add_argument('-m', '--master_summary', default='master_summary.csv', help='Outputs the master summary of all processed zips to a file')
 parser.add_argument('-s', '--artifact_summary', default='_summary.txt', help='Outputs detailed summary per single zip to a file.')
+parser.add_argument('-l', '--log_commands', default='_commands.txt', help='Outputs the executed commands to a file.')
 args = parser.parse_args(args=None if sys.argv[1:] else ['--help'])
 
 binary = args.binary
@@ -57,6 +59,7 @@ essentials = args.essentials
 outputfolder = args.outputfolder
 master_summary = args.master_summary
 artifact_summary = args.artifact_summary
+log_commands = args.log_commands
 
 log = log.getLogger(__name__)
     
@@ -134,6 +137,8 @@ def main():
                                         binary_fullpath, 
                                         outputtype,
                                         remappingfile)
+            
+            write_command_to_logfile(result_postprocess, extract_path, log_commands)
             
             results['postprocessing'].append(result_postprocess)
 
