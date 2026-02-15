@@ -66,6 +66,7 @@ class Config:
     velociraptor_outputformat: str
     velociraptor_artifactslist: str
     velociraptor_postprocess: str
+    velociraptor_duration: str
     
 def str_to_bool(value: str) -> bool:
     '''
@@ -138,6 +139,7 @@ def load_config() -> Config:
         velociraptor_definitions        = os.getenv('VELOCIRAPTOR_DEFINITIONS'),
         velociraptor_outputformat       = os.getenv('VELOCIRAPTOR_OUTPUTFORMAT'),
         velociraptor_postprocess        = os.getenv('VELOCIRAPTOR_POSTPROCESS'),
+        velociraptor_duration           = os.getenv('VELOCIRAPTOR_DURATION'),
         var_localdevice_concurrency     = int(os.getenv('VAR_LOCALDEVICE_CONCURRENCY')),
         sftp_port			 		    = int(os.getenv('SFTP_PORT')),
         var_sample_size			 	    = int(os.getenv('VAR_SAMPLE_SIZE')),

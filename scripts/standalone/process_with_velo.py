@@ -50,6 +50,7 @@ parser.add_argument('-v', '--verbose', help='Enables verbose logging', action='s
 parser.add_argument('-m', '--master_summary', default='master_summary.csv', help='Outputs the master summary of all processed zips to a file')
 parser.add_argument('-s', '--artifact_summary', default='_summary.txt', help='Outputs detailed summary per single zip to a file.')
 parser.add_argument('-l', '--log_commands', default='_commandhistory.txt', help='Outputs the executed commands to a file.')
+parser.add_argument('-d', '--duration_in_seconds', default=400, type=int, help='Sets maximum duration of postprocessing an artefact with Velociraptor.')
 args = parser.parse_args(args=None if sys.argv[1:] else ['--help'])
 
 binary = args.binary
@@ -64,6 +65,7 @@ outputfolder = args.outputfolder
 master_summary = args.master_summary
 artifact_summary = args.artifact_summary
 log_commands = args.log_commands
+duration_in_seconds = args.duration_in_seconds
 
 log = log.getLogger(__name__)
     
@@ -139,7 +141,8 @@ def main():
                                         extract_path, 
                                         binary_fullpath, 
                                         outputtype,
-                                        remappingfile)
+                                        remappingfile,
+                                        duration_in_seconds)
             
             write_command_to_logfile(result_postprocess, extract_path, log_commands)
             
