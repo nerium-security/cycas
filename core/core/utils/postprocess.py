@@ -84,7 +84,7 @@ def run_command(cmd, result, store_output=False):
 
     try:
         log.debug(f'Running command: {" ".join(cmd)}')
-        
+
         cp = subprocess.run(cmd, check=True, **run_opts)
 
         duration = time.time() - start
@@ -108,7 +108,7 @@ def run_command(cmd, result, store_output=False):
         result['stderr'] = e.stderr
         result['returncode'] = e.returncode
 
-        log.error(f'Command failed (exit {e.returncode}) after {duration} seconds. Error: {e.stderr}')
+        log.error(f'Command failed (exit {e.returncode}) after {duration} seconds.')
         
     return result
 
