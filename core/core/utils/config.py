@@ -8,15 +8,30 @@ Configuration values are loaded from the process environment, with
 selected fields converted to booleans and integers.
 '''
 
-import os
-from dotenv import load_dotenv, find_dotenv
-from dataclasses import dataclass
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import find_dotenv
 import logging as log
 
 log = log.getLogger(__name__)
 
-@dataclass
-class Config:
+class Config(BaseSettings):
+    '''
+    It reads variables from the environment. If it cannot find it, it
+    loads from a .env using python-dotenv
+
+    Returns:
+        Config: Configuration populated from environment variables.
+
+    Raises:
+        ValueError: If integer conversions fail (e.g. VAR_SAMPLE_SIZE is not an int).
+        TypeError: If required environment variables are missing and `int(None)` occurs.
+    '''
+
+    model_config = SettingsConfigDict(
+        env_file=find_dotenv(),
+        env_file_encoding='utf-8'
+    )
+
     blob_storageaccount_enabled: bool
     blob_storageaccount_uri: str
     blob_storageaccount_sas: str
@@ -67,93 +82,7 @@ class Config:
     velociraptor_artifactslist: str
     velociraptor_postprocess: str
     velociraptor_duration: str
-    
-def str_to_bool(value: str) -> bool:
-    '''
-    Convert a string-like value into a boolean.
-
-    Treats common truthy string values as True and all other values as False.
-
-    Args:
-        value (str): Input value to interpret.
-
-    Returns:
-        bool: True if the value represents a truthy string, otherwise False.
-    '''
-
-    return str(value).strip().lower() in ('true', 'True', 'TRUE', '1', 'yes')
 
 def load_config() -> Config:
-    '''
-    Load configuration from a .env file and environment variables.
-
-    Uses python-dotenv to locate and load a .env file into the process
-    environment, then constructs a `Config` instance from `os.getenv`.
-
-    Returns:
-        Config: Configuration populated from environment variables.
-
-    Raises:
-        ValueError: If integer conversions fail (e.g. VAR_SAMPLE_SIZE is not an int).
-        TypeError: If required environment variables are missing and `int(None)` occurs.
-    '''
-
-    log.info('Loading .env file.')
-    try:
-        load_dotenv(find_dotenv())
-        log.info('Successfully loaded .env file.')
-    except Exception as e:
-        log.error(f'Could not load .env file: {e}')
-
-    return Config(
-        blob_storageaccount_uri		    = os.getenv('BLOB_STORAGEACCOUNT_URI'),
-        blob_storageaccount_sas         = os.getenv('BLOB_STORAGEACCOUNT_SAS'),
-        blob_container_input		    = os.getenv('BLOB_CONTAINER_INPUT'),
-        blob_logtable_uri			    = os.getenv('BLOB_LOGTABLE_URI'),
-        blob_logtable_name			    = os.getenv('BLOB_LOGTABLE_NAME'),
-        blob_queue_url			 	    = os.getenv('BLOB_QUEUE_URL'),
-        blob_queue_name			 	    = os.getenv('BLOB_QUEUE_NAME'),
-        adx_database_name			    = os.getenv('ADX_DATABASE_NAME'),
-        adx_cluster_uri			 	    = os.getenv('ADX_CLUSTER_URI'),
-        adx_cluster_ingestion_uri	    = os.getenv('ADX_CLUSTER_INGESTION_URI'),
-        keyvault_url			 	    = os.getenv('KEYVAULT_URL'),
-        keyvault_passwordlocation       = os.getenv('KEYVAULT_PASSWORDLOCATION'),
-        sftp_keyvaultsecretname		    = os.getenv('SFTP_KEYVAULTSECRETNAME'),
-        sftp_username			 	    = os.getenv('SFTP_USERNAME'),
-        sftp_url			 		    = os.getenv('SFTP_URL'),
-        var_download_directory          = os.getenv('vAR_DOWNLOAD_DIRECTORY'),
-        var_localfolder_directory       = os.getenv('VAR_LOCALFOLDER_DIRECTORY'),
-        var_unzip_directory			    = os.getenv('VAR_UNZIP_DIRECTORY'),
-        var_loglocation			 	    = os.getenv('VAR_LOGLOCATION'),
-        var_webhook_url			 	    = os.getenv('VAR_WEBHOOK_URL'),
-        var_zipfile_prefix			    = os.getenv('VAR_ZIPFILE_PREFIX'),
-        var_zipfile_suffix			    = os.getenv('VAR_ZIPFILE_SUFFIX'),
-        var_location_ignorelist		    = os.getenv('VAR_LOCATION_IGNORELIST'),
-        var_loglevel                    = os.getenv('VAR_LOGLEVEL'),
-        var_artifact_summary_filename   = os.getenv('VAR_ARTIFACT_SUMMARY_FILENAME'),
-        var_master_summary_filename     = os.getenv('VAR_MASTER_SUMMARY_FILENAME'),
-        velociraptor_url                = os.getenv('VELOCIRAPTOR_URL'),
-        velociraptor_binary             = os.getenv('VELOCIRAPTOR_BINARY'),
-        velociraptor_remappingdir       = os.getenv('VELOCIRAPTOR_REMAPPINGDIR'),
-        velociraptor_artifactslist      = os.getenv('VELOCIRAPTOR_ARTIFACTSLIST'),
-        velociraptor_definitions        = os.getenv('VELOCIRAPTOR_DEFINITIONS'),
-        velociraptor_outputformat       = os.getenv('VELOCIRAPTOR_OUTPUTFORMAT'),
-        velociraptor_postprocess        = os.getenv('VELOCIRAPTOR_POSTPROCESS'),
-        velociraptor_duration           = os.getenv('VELOCIRAPTOR_DURATION'),
-        var_localdevice_concurrency     = int(os.getenv('VAR_LOCALDEVICE_CONCURRENCY')),
-        sftp_port			 		    = int(os.getenv('SFTP_PORT')),
-        var_sample_size			 	    = int(os.getenv('VAR_SAMPLE_SIZE')),
-        var_df_chunksize			    = int(os.getenv('VAR_DF_CHUNKSIZE')),
-        blob_storageaccount_enabled     = str_to_bool(os.getenv('BLOB_STORAGEACCOUNT_ENABLED')),
-        sftp_enabled                    = str_to_bool(os.getenv('SFTP_ENABLED')),
-        keyvault_enabled                = str_to_bool(os.getenv('KEYVAULT_ENABLED')),
-        blob_queue_enabled              = str_to_bool(os.getenv('BLOB_QUEUE_ENABLED')),
-        blob_logtable_enabled           = str_to_bool(os.getenv('BLOB_LOGTABLE_ENABLED')),
-        var_removezip			 	    = str_to_bool(os.getenv('VAR_REMOVEZIP')),
-        var_retryfailed			 	    = str_to_bool(os.getenv('VAR_RETRYFAILED')),
-        var_verifyuploads			    = str_to_bool(os.getenv('VAR_VERIFYUPLOADS')),
-        var_delete_processedzipfiles    = str_to_bool(os.getenv('VAR_DELETE_PROCESSEDZIPFILES')),
-        velociraptor_enabled            = str_to_bool(os.getenv('VELOCIRAPTOR_ENABLED')),
-        adx_cluster_enabled             = str_to_bool(os.getenv('ADX_CLUSTER_ENABLED')),
-        var_add_hostname                = str_to_bool(os.getenv('VAR_ADD_HOSTNAME'))
-    )
+    '''Return the configuration.'''
+    return Config()
