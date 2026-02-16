@@ -48,19 +48,19 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
 
     results = add_summary_info_to_status(results, zipfile, sessionid, source_name, start)
     
-    write_logentry_if_new(managers, Status.NEW, results)
+    write_logentry_if_new(managers, Config, Status.NEW, results)
 
 
     # ------------------------------------------------------------------
     # Determining if required to continue
     # ------------------------------------------------------------------
-    should_process = determine_if_needs_processing(managers, zipfile)
+    should_process = determine_if_needs_processing(managers, Config, zipfile)
 
     if not should_process:
         log.info(f'Is already processing {zipfile}')
         return
 
-    update_status_in_log(managers, Status.PROCESSING, start, results)
+    update_status_in_log(managers, Config, Status.PROCESSING, start, results)
 
 
     # ----------------------------------------------------------------------
@@ -120,9 +120,9 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
     # ----------------------------------------------------------------------
     results.update({'finished': True})
 
-    update_status_in_log(managers, Status.FINISHED, start, results)
+    update_status_in_log(managers, Config, Status.FINISHED, start, results)
 
-    upload_detailed_status_to_adx(managers, results, tablename='_status')
+    upload_detailed_status_to_adx(managers, Config, results, tablename='_status')
 
     _send_webhook_message(Config.var_webhook_url, results)
     
@@ -367,7 +367,7 @@ def _download_zip(managers, source_name, zip, sessionid, start, status_data):
         successful, otherwise False.
     '''
 
-    update_status_in_log(managers, Status.DOWNLOADING, start, status_data)
+    update_status_in_log(managers, Config, Status.DOWNLOADING, start, status_data)
 
     if source_name == 'blob':
 
@@ -386,7 +386,7 @@ def _download_zip(managers, source_name, zip, sessionid, start, status_data):
     else:
         status = Status.DOWNLOADFAILED
 
-    update_status_in_log(managers, status, start, status_data)
+    update_status_in_log(managers, Config, status, start, status_data)
 
     if zip:
         return zip

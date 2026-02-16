@@ -14,7 +14,6 @@ prompt the user for input when a password is required.
 '''
 
 from core.utils.files import list_files_in_directory, list_files_in_directory, filter_triage_packages
-from core.utils.config import load_config
 import logging as log
 import pyzipper
 import os
@@ -25,8 +24,6 @@ import getpass
 import glob
 
 log = log.getLogger(__name__)
-
-Config = load_config()
 
 def is_zip_encrypted(zipfile):
     '''
@@ -484,7 +481,7 @@ def get_password_from_env_or_prompt(source_name, unextracted_zip):
 
     return None, None
 
-def list_zipfiles(managers, source_name):
+def list_zipfiles(managers, source_name, Config):
     '''
     List and filter ZIP files from a configured data source.
 
@@ -497,6 +494,7 @@ def list_zipfiles(managers, source_name):
             for the enabled data sources.
         source_name (str): Name of the data source to query.
             Supported values: 'blob', 'sas', 'sftp', 'localfolder'.
+        Config: contains inputparameters from .env file
 
     Returns:
         list[str]: List of ZIP file paths or names matching the configured

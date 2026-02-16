@@ -18,7 +18,7 @@ def run_azurefunction_watcher(triagepackage_source: str) -> None:
 
     sessionid = setup_logging(Config.var_loglocation, Config.var_loglevel)
     managers = init(triagepackage_source, sessionid)
-    zipfiles = list_zipfiles(managers, triagepackage_source)
+    zipfiles = list_zipfiles(managers, triagepackage_source, Config)
 
     results = []
     for zipfile in zipfiles:
@@ -67,7 +67,7 @@ def run_localdevice(triagepackage_source: str) -> None:
 
     sessionid = setup_logging(Config.var_loglocation, Config.var_loglevel)
     managers = init(triagepackage_source, sessionid)
-    zipfiles = list_zipfiles(managers, triagepackage_source)
+    zipfiles = list_zipfiles(managers, triagepackage_source, Config)
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
     futures = []
