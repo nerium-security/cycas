@@ -378,12 +378,13 @@ class AdxManager:
             str: Sanitized column name.
         '''
 
+        # removes extension
+        name = Path(name).stem
+
+        # removes any special characters
         name = re.sub(r"[<>\[\]{}\"'`\\]", "_", name)
         name = re.sub(r"\s+", "_", name)
         name = re.sub(r"[^A-Za-z0-9_]", "_", name)
-
-        if name and name[0].isdigit():
-            name = f'{name}'
 
         return name
 
