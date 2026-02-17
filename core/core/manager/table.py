@@ -89,8 +89,6 @@ class TablestorageManager:
         Returns:
             dict: Table Storage entity ready to be inserted or updated.
         '''
-        
-        status_data = status_data['summary'][0]
 
         # Convert size to int64 as otherwise a limit might be reached for entry in table
         size_int32 = status_data.get('zipfile_size', '')
@@ -208,6 +206,7 @@ class TablestorageManager:
             bool: True if a new entry was created, otherwise None.
         '''
         
+        status_data = status_data['summary'][0]
         zipfile = status_data.get('zipfile_basename')
         existing_entry = self.retrieve_log_entry(zipfile)
         entity = self.build_log_entity(processing_status, None, status_data)
