@@ -4,6 +4,8 @@
     "Custom.Windows.Sys.Users()"
   ],
   "full": [
+    "Windows.Forensics.SRUM()",
+    "Windows.Forensics.Usn(USNFile='C:\\\\$Extend\\\\$UsnJrnl%3A$J', MFTFile='C:\\\\$MFT', Accessor='ntfs')",
     "Windows.Sys.AppcompatShims()",
     "Custom.Windows.Forensics.Bam()",
     "Windows.Forensics.RecentApps(RecentAppsKey='HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\**')",
@@ -18,17 +20,15 @@
     "Windows.System.TaskScheduler()",
     "Windows.Forensics.RecycleBin()",
     "Windows.EventLogs.Evtx()",
-    "Generic.Forensic.SQLiteHunter()",
     "Custom.Windows.Registry.Interfaces()",
     "Windows.Registry.AppCompatCache()",
     "Windows.Forensics.Prefetch()",
     "Windows.Sys.Programs()",
     "Windows.NTFS.MFT()",
-    "Windows.Forensics.Usn(USNFile='C:\\\\$Extend\\\\$UsnJrnl%3A$J', MFTFile='C:\\\\$MFT', Accessor='ntfs')",
     "Windows.Forensics.JumpLists()",
-    "Windows.Forensics.SRUM()",
     "Windows.Forensics.Timeline()"
   ],
   "skip":[
+    "Generic.Forensic.SQLiteHunter()"
   ]
 }

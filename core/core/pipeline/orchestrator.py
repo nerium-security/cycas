@@ -173,6 +173,7 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
     outputformat = Config.velociraptor_outputformat
     artifactslist = Config.velociraptor_artifactslist
     postprocess_var = Config.velociraptor_postprocess
+    velcociraptor_duration = Config.velociraptor_duration
 
     if not zip_contains_raw_artifacts(zipfilecontent):
         return results
@@ -217,7 +218,8 @@ def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, resul
                                             unzip_dir, 
                                             binary, 
                                             outputformat,
-                                            remappingfile)
+                                            remappingfile,
+                                            velcociraptor_duration)
 
         results['postprocessing'].append(result_postprocess)
         outputfile_path = result_postprocess.get('fullpath')
