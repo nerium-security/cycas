@@ -89,3 +89,5 @@ def run_localdevice(triagepackage_source: str) -> None:
         for fut in as_completed(futures):
             fut.result()
             #run_zip_processor(managers, triagepackage_source, zipfile, sessionid)
+
+    log.info('Script finished')

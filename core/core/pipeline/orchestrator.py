@@ -125,8 +125,6 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
     upload_detailed_status_to_adx(managers, Config, results, tablename='_status')
 
     _send_webhook_message(Config.var_webhook_url, results)
-    
-    log.info('Script finished.')
 
 def postprocess_velociraptor_and_upload(managers, zipfile, zipfilecontent, results):
     '''
