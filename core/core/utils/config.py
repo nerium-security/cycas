@@ -61,14 +61,14 @@ class Config(BaseSettings):
     var_download_directory: str
     var_loglocation: str
     var_webhook_url: str
-    var_removezip: str
+    var_removezip: bool
     var_zipfile_prefix: str
     var_zipfile_suffix: str
     var_location_ignorelist: str
     var_retryfailed: bool
-    var_verifyuploads: str
+    var_verifyuploads: bool
     var_loglevel: str
-    var_delete_processedzipfiles: str
+    var_delete_processedzipfiles: bool
     var_localdevice_concurrency: int
     var_add_hostname: bool
     var_artifact_summary_filename: str
@@ -81,7 +81,7 @@ class Config(BaseSettings):
     velociraptor_outputformat: str
     velociraptor_artifactslist: str
     velociraptor_postprocess: str
-    velociraptor_duration: str
+    velociraptor_duration: int
 
 def load_config() -> Config:
     '''Return the configuration.'''
