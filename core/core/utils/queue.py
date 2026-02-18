@@ -20,9 +20,7 @@ import json
 
 log = log.getLogger(__name__)
 
-Config = load_config()
-
-def should_send_to_queue(managers, zipfile):
+def should_send_to_queue(managers, Config, zipfile):
     '''
     Determine whether a zipfile should be sent to the processing queue.
 
@@ -31,6 +29,7 @@ def should_send_to_queue(managers, zipfile):
 
     Args:
         managers: Container holding authenticated service managers.
+        Config: variables defined in .env file
         zipfile (str): Zipfile basename used as the status lookup key.
 
     Returns:
@@ -69,7 +68,7 @@ def send_to_queue(managers, source_name, zipfile, sessionid):
 
     send_to_queue = managers.queue.send_message(zipfile, source_name)
 
-    update_status_in_log(managers, Status.QUEUED, zipfile, source_name, sessionid, start)
+    update_status_in_log(managers, Config, Status.QUEUED, zipfile, source_name, sessionid, start)
 
     return send_to_queue
 
@@ -121,7 +120,7 @@ def update_status_unqueued(managers, source_name, zipfile, sessionid):
     message_not_yet_processed = is_message_not_yet_processing(managers, zipfile)
 
     if message_not_yet_processed:
-        update_status_in_log(managers, Status.UNQUEUED, zipfile, source_name, sessionid, start)
+        update_status_in_log(managers, Config, Status.UNQUEUED, zipfile, source_name, sessionid, start)
 
 def is_message_not_yet_processing(managers, zipfile) -> bool:
     '''

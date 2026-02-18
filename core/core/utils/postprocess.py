@@ -21,6 +21,7 @@ import stat
 import json
 import re
 import time
+import shlex
 from pathlib import Path
 from core.utils.files import create_directory_if_not_exists
 from core.utils.summary import define_results_postprocess_dict
@@ -43,18 +44,20 @@ def set_executepermissions(dest_path):
     except Exception as e:
         log.error(f'Could not set execute permission for {dest_path}. Error: {e}')
 
-def run_command(cmd, result, store_output=False):
+def run_command(cmd, result, store_output, max_duration_sec=400):
     '''
     Run a subprocess command and record execution results.
 
     Executes the provided command using `subprocess.run(check=True)` and
-    writes execution metadata into the provided `result` dictionary.
+    writes execution metadata into the provided `result` dictionary. Sets
+    a maximum duration on how long this process runs.
 
     Args:
         cmd (list[str]): Command and arguments to execute.
         result (dict): Mutable dictionary updated with execution results.
         store_output (bool): If True, captures stdout and stderr. If False,
             captures stderr only.
+        max_duration_sec: Sets a maximum duration in seconds
 
     Returns:
         dict: The updated result dictionary containing keys such as:
@@ -74,7 +77,8 @@ def run_command(cmd, result, store_output=False):
         }
     else:
         run_opts = {
-            "stderr": subprocess.PIPE,  # capture errors
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.PIPE,
             "text": True,
         }
 
@@ -82,8 +86,8 @@ def run_command(cmd, result, store_output=False):
 
     try:
         log.debug(f'Running command: {" ".join(cmd)}')
-        
-        cp = subprocess.run(cmd, check=True, **run_opts)
+
+        cp = subprocess.run(cmd, check=True, timeout=max_duration_sec, **run_opts)
 
         duration = time.time() - start
 
@@ -95,18 +99,27 @@ def run_command(cmd, result, store_output=False):
 
         log.info(f'Command executed successfully in {round(duration, 2)} seconds.')
 
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
 
         duration = time.time() - start
 
+        stdout = getattr(e, 'stdout', None)
+        stderr = getattr(e, 'stderr', None)
+        returncode = getattr(e, 'returncode', None)
+
         result['success'] = False
         result['duration_in_sec'] = duration
-        result['error'] = (e.stderr or e.stdout or str(e)).strip()
-        result['stdout'] = e.stdout
-        result['stderr'] = e.stderr
-        result['returncode'] = e.returncode
+        result['error'] = (stderr or stdout or str(e)).strip()
+        result['stdout'] = stdout
+        result['stderr'] = stderr
+        result['returncode'] = returncode
 
-        log.error(f'Command failed (exit {e.returncode}) after {duration} seconds. Error: {e.stderr}')
+        if isinstance(e, subprocess.TimeoutExpired):
+            msg = f'Command exceeded the configured maximum duration of {max_duration_sec} seconds'
+            log.error(msg)
+            result['stderr'] = msg
+        else:
+            log.error(f'Command failed (exit {returncode}) after {duration} seconds.')        
 
     return result
 
@@ -180,6 +193,28 @@ def build_remap(zipfile, remapfolder, binary, definitions, unzipdir):
     run_command(cmd, {}, store_output=True)
     
     return remappingfile
+
+def write_command_to_logfile(results, extract_path, logfilename):
+    '''
+    Writes the executed command to a logfile with timestamp.
+
+    Args:
+        cmd (list | str): Command passed to subprocess.
+        extract_path (str): Path to extraction location of zip
+        logfilename (str): logfilename.
+    '''
+
+    cmd = results.get('cmd')
+    out_path = os.path.join(extract_path, logfilename)
+
+    # Convert list to properly escaped shell string
+    if isinstance(cmd, (list, tuple)):
+        command_str = shlex.join(cmd)
+    else:
+        command_str = str(cmd)
+
+    with open(out_path, 'a', encoding='utf-8') as f:
+        f.write(f'{command_str}\n\n')
 
 def find_hostname(remappingfile, binary, definitions):
     '''
@@ -333,7 +368,7 @@ def get_zipfiledir(zipfile, unzip_dir):
 
     return unzip_dir_fullpath
 
-def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outputformat, remappingfile):
+def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outputformat, remappingfile, dur):
     '''
     Run Velociraptor post-processing for a single artifact against a zipfile.
 
@@ -389,12 +424,13 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
 
     log.info(f'Running artifact: {artifact}')
 
-    postprocess_results = run_command(cmd, postprocess_results, store_output=False)
+    postprocess_results = run_command(cmd, postprocess_results, False, dur)
 
     filesize = os.path.getsize(outputfile)
     if os.path.exists(outputfile) and filesize == 0:
         log.debug(f'Empty file: {outputfile}')
 
+    postprocess_results['cmd'] = cmd
     postprocess_results['size'] = filesize
     postprocess_results['fullpath'] = outputfile
     postprocess_results['artifact'] = artifact

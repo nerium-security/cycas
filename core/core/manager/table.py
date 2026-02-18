@@ -6,6 +6,7 @@ operations for writing and reading pipeline status information from an
 Azure Table Storage table.
 '''
 
+from azure.data.tables import EntityProperty, EdmType
 from azure.data.tables import TableServiceClient
 from datetime import datetime
 import pandas as pd
@@ -89,6 +90,10 @@ class TablestorageManager:
             dict: Table Storage entity ready to be inserted or updated.
         '''
 
+        # Convert size to int64 as otherwise a limit might be reached for entry in table
+        size_int32 = status_data.get('zipfile_size', '')
+        size = EntityProperty(value=int(size_int32), edm_type=EdmType.INT64)
+
         return {
             'PartitionKey': self.partitionkey,
             'RowKey': self.hash_filename(status_data.get('zipfile_basename', '')),
@@ -100,10 +105,7 @@ class TablestorageManager:
             'Duration': duration,
             'StartTime': f'{datetime.utcnow():%Y-%m-%dT%H:%M:%SZ}',
             'Extracted_Hostname': status_data.get('hostname', ''),
-            'Size': status_data.get('zipfile_size', ''),
-            'nr_of_artifacts_postprocessed': status_data['statistics'].get('nr_of_artifacts_postprocessed', ''),
-            'nr_of_postprocessed_artifacts_uploaded': status_data['statistics'].get('nr_of_postprocessed_artifacts_uploaded', ''),
-            'nr_of_json_files_in_zip_uploaded': status_data['statistics'].get('nr_of_json_files_in_zip_uploaded', '')
+            'Size': size
         }
 
     def calculate_duration(self, starttime):
@@ -203,7 +205,8 @@ class TablestorageManager:
         Returns:
             bool: True if a new entry was created, otherwise None.
         '''
-
+        
+        status_data = status_data['summary'][0]
         zipfile = status_data.get('zipfile_basename')
         existing_entry = self.retrieve_log_entry(zipfile)
         entity = self.build_log_entity(processing_status, None, status_data)
@@ -226,7 +229,7 @@ class TablestorageManager:
             status_data (dict): Zipfile metadata and statistics.
         '''
 
-        zipfile = status_data.get('zipfile_fullpath')
+        zipfile = status_data['summary'][0].get('zipfile_fullpath')
 
         zipfile = os.path.basename(zipfile)
 

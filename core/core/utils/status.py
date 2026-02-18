@@ -12,16 +12,12 @@ pipeline, and provides helper functions to:
 Most functions conditionally execute based on configuration feature flags.
 '''
 
-from core.utils.config import load_config
 from core.utils.log import generate_sessionid
 from core.utils.zip import is_zip_encrypted
 import logging as log
 import os
 
 log = log.getLogger(__name__)
-
-Config = load_config()
-
 
 class Status:
     NEW = 'new'
@@ -41,7 +37,7 @@ class Status:
     FINISHED = 'finished'
     UPLOADDISABLED = 'uploaddisabled'
 
-def update_status_in_log(managers, processing_status, start, status_data):
+def update_status_in_log(managers, Config, processing_status, start, status_data):
     '''
     Update the processing status in the Table Storage log.
 
@@ -50,6 +46,7 @@ def update_status_in_log(managers, processing_status, start, status_data):
 
     Args:
         managers: Container holding authenticated service managers.
+        Config: variables defined in .env file
         processing_status (str): New status value to store.
         start (datetime): Start time used by the table manager to compute duration.
         status_data (dict): Metadata used to build the log entity.
@@ -59,7 +56,7 @@ def update_status_in_log(managers, processing_status, start, status_data):
 
         managers.table.update_status_in_log(processing_status, start, status_data)
 
-def write_logentry_if_new(managers, processing_status, status_data):
+def write_logentry_if_new(managers, Config, processing_status, status_data):
     '''
     Create a log entry in Table Storage if it does not already exist.
 
@@ -68,6 +65,7 @@ def write_logentry_if_new(managers, processing_status, status_data):
 
     Args:
         managers: Container holding authenticated service managers.
+        Config: variables defined in .env file
         processing_status (str): Initial status value to store.
         status_data (dict): Metadata used to build the log entity.
     '''
@@ -76,7 +74,7 @@ def write_logentry_if_new(managers, processing_status, status_data):
 
         managers.table.writes_log_entry_if_not_exists(processing_status, status_data)
 
-def determine_if_needs_processing(managers, zipfile):
+def determine_if_needs_processing(managers, Config, zipfile):
     '''
     Determine whether a zipfile should be processed based on Table Storage status.
 
@@ -141,7 +139,7 @@ def _prepare_dictionary_for_upload_to_adx(results_dict, dict_key):
 
     return output
 
-def upload_detailed_status_to_adx(managers, results, tablename):
+def upload_detailed_status_to_adx(managers, Config, results, tablename):
     '''
     Upload detailed pipeline status results to Azure Data Explorer (ADX).
 

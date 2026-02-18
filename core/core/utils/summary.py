@@ -66,6 +66,7 @@ def define_results_postprocess_dict():
         'fullpath': None,
         'basename': None,
         'artifact': None,
+        'cmd': None,
         'size': None,
         'success': None,
         'duration_in_sec': None,
@@ -178,7 +179,6 @@ def pretty_print_summary_per_zip(outputfolder, results, mode='full'):
             size = a.get('size')
             duration = a.get('duration_in_sec')  # <-- new key
             success = a.get('success')
-            error = a.get('error')
             returncode = a.get('returncode')
 
             # ---- status ----
@@ -204,9 +204,6 @@ def pretty_print_summary_per_zip(outputfolder, results, mode='full'):
             else:
                 dur_str = ''
 
-            # ---- error ----
-            error_str = '' if error is None else str(error)
-
             # ---- returncode ----
             returncode_str = str(returncode) if isinstance(returncode, int) else ''
 
@@ -215,7 +212,6 @@ def pretty_print_summary_per_zip(outputfolder, results, mode='full'):
                 'size': size_str,
                 'duration': dur_str,
                 'status': status_str,
-                'error': error_str,
                 'returncode': returncode_str,
             })
 
@@ -224,7 +220,6 @@ def pretty_print_summary_per_zip(outputfolder, results, mode='full'):
             'size': str(total_size),
             'duration': f'{total_duration:.2f} sec' if total_duration else '',
             'status': f'{success_count} out of {total_items}',
-            'error': '',
             'returncode': '',
         }
 
@@ -234,10 +229,9 @@ def pretty_print_summary_per_zip(outputfolder, results, mode='full'):
                 'outputfile size',
                 'duration',
                 'status',
-                'error',
                 'returncode',
             ]
-            order = ['artifact', 'size', 'duration', 'status', 'error', 'returncode']
+            order = ['artifact', 'size', 'duration', 'status', 'returncode']
         else:
             headers = [
                 'artifact',

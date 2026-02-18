@@ -378,14 +378,34 @@ class AdxManager:
             str: Sanitized column name.
         '''
 
+        # removes extension
+        name = Path(name).stem
+
+        # removes any special characters
         name = re.sub(r"[<>\[\]{}\"'`\\]", "_", name)
         name = re.sub(r"\s+", "_", name)
         name = re.sub(r"[^A-Za-z0-9_]", "_", name)
 
-        if name and name[0].isdigit():
-            name = f'{name}'
-
         return name
+
+    def _move_columns_to_end(self, schema):
+        '''
+        Reorder schema dictionary so that Hostname and Sourcefile
+        appear as the last keys.
+
+        Args:
+            schema (dict): Dictionary representing the table schema
+                with column names as keys and data types as values.
+        '''
+        
+        end = ('Hostname', 'Sourcefile')
+
+        schema = dict(
+            [(k, schema[k]) for k in schema if k not in end] +
+            [(k, schema[k]) for k in end if k in schema]
+        )
+
+        return schema
 
     def get_table_createcommand(self, file, Config, tablename):
         '''
@@ -404,11 +424,13 @@ class AdxManager:
                 - ADX management command string for creating/merging the table
                 - List of column names derived from the inferred schema
         '''
-        
+
         df = self.convert_to_dataframe(file, Config.var_sample_size, chunksize=None)
 
         schema = self.infer_adx_type_majority(df, Config.var_sample_size)
         
+        schema = self._move_columns_to_end(schema)
+
         columnstring = self.prepare_string_with_columnames(schema)
 
         clean_columnames = list(schema.keys())

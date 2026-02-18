@@ -25,10 +25,7 @@ from core.manager.table import TablestorageManager
 from core.manager.keyvault import KeyvaultManager
 from core.manager.queue import QueueManager
 from dataclasses import dataclass
-from core.utils.config import load_config
 import logging as log
-
-Config = load_config()
 
 log = log.getLogger(__name__)
 
@@ -53,7 +50,7 @@ class Authenticator:
         for authenticating all enabled services.
 
         Args:
-            config: Configuration object returned by `load_config()`.
+            config: Configuration object returned`.
             source (str): Identifier of the data source to use (e.g. 'sas',
                 'sftp', 'blob'). Used to conditionally enable source-specific
                 managers.
@@ -89,26 +86,26 @@ class Authenticator:
             AuthManagers: Container holding all authenticated manager instances.
         '''
 
-        if not Config.adx_cluster_enabled:
-            log.info(f'Skipping authentication to adx cluster: {Config.adx_cluster_uri}.')
+        if not self.config.adx_cluster_enabled:
+            log.info(f'Skipping authentication to adx cluster: {self.config.adx_cluster_uri}.')
 
-        if not Config.blob_logtable_enabled:
-            log.info(f'Skipping authentication to storage account table: {Config.blob_logtable_uri}.')
+        if not self.config.blob_logtable_enabled:
+            log.info(f'Skipping authentication to storage account table: {self.config.blob_logtable_uri}.')
 
-        if not Config.blob_queue_enabled:
-            log.info(f'Skipping authentication to storage account queue: {Config.blob_queue_url}.')
+        if not self.config.blob_queue_enabled:
+            log.info(f'Skipping authentication to storage account queue: {self.config.blob_queue_url}.')
 
-        if not Config.keyvault_enabled:
-            log.info(f'Skipping authentication to keyvault: {Config.keyvault_url}.')
+        if not self.config.keyvault_enabled:
+            log.info(f'Skipping authentication to keyvault: {self.config.keyvault_url}.')
 
         return AuthManagers(
             azure=self.authenticate_azure(),
-            keyvault=self.authenticate_keyvault() if Config.keyvault_enabled else False,
-            table=self.authenticate_tablestorage() if Config.blob_logtable_enabled else False,
-            queue=self.authenticate_queue() if Config.blob_queue_enabled else False,
-            adx=self.authenticate_adx() if Config.adx_cluster_enabled else False,
-            sftp=self.authenticate_sftp() if Config.sftp_enabled else False,
-            blob=self.authenticate_blob() if Config.blob_storageaccount_enabled else False,
+            keyvault=self.authenticate_keyvault() if self.config.keyvault_enabled else False,
+            table=self.authenticate_tablestorage() if self.config.blob_logtable_enabled else False,
+            queue=self.authenticate_queue() if self.config.blob_queue_enabled else False,
+            adx=self.authenticate_adx() if self.config.adx_cluster_enabled else False,
+            sftp=self.authenticate_sftp() if self.config.sftp_enabled else False,
+            blob=self.authenticate_blob() if self.config.blob_storageaccount_enabled else False,
             sas=self.authenticate_blob_sas() if self.source == 'sas' else False
         )
 
