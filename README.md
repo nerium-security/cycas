@@ -1,4 +1,4 @@
-# Azure Data Explorer Ingestor
+# velopipe
 
 This Python-based solution that uploads forensic artefacts to Azure Data Explorer (ADX). It supports artefacts collected with Velociraptor, wether these are raw artefacts that require post-postprocessing or that are already post-processed to JSON format. 
 
@@ -8,7 +8,18 @@ When forensic artefacts are collected using Velociraptor
 
 - Run on Windows/Linux device for post-process raw forensic artefacts to json(l) and csv using Velociraptor
 - Pipeline for ingesting forensic artefacts at scale to automatically ingest zip files with forensic artefacts from Blob or SFTP storage using Azure Functions
+- From velociraptor server to azure data explorer
 
+## Building a standalone executable
+
+To distribute the post-processing script as a standalone executable (no Python required):
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --collect-all core scripts/standalone/process_with_velo.py
+```
+
+The executable will be available in the `dist/` folder.
 
 ## drawing 
 
@@ -59,7 +70,7 @@ Optional: When you want to use Azure Functions:
     - add system assigned identity: key vault secrets user, storage queue data message processor
 
 ## Instructions for development infrastructure
-- pip install -e ./core
+- pip install -e .
 - cd azurefunctions/watcher
 - ln -s ../../core/  ./core
 - ln -s ../../.env .env
@@ -67,3 +78,7 @@ Optional: When you want to use Azure Functions:
 - ln -s ../../core/  ./core
 - ln -s ../../.ignorelist.json  ./.ignorelist.json
 - ln -s ../../.env .env
+
+
+License
+See LICENSE for details.
