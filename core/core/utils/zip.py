@@ -446,9 +446,13 @@ def find_zip_files(zip_patterns):
 
     files = []
     for pattern in zip_patterns:
+        # convert relative path to absolute path
+        pattern = os.path.abspath(pattern)
+
         # Expand wildcards recursively
         expanded = glob.glob(pattern, recursive=True)
         files.extend(expanded)
+
     # Filter ZIPs and remove duplicates
     files = [f for f in set(files) if f.lower().endswith('.zip')]
     return sorted(files)
