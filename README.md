@@ -1,6 +1,68 @@
-# velopipe
+# cycs
 
-This Python-based solution that uploads forensic artefacts to Azure Data Explorer (ADX). It supports artefacts collected with Velociraptor, wether these are raw artefacts that require post-postprocessing or that are already post-processed to JSON format. 
+Cycis is a is a Python pipeline for post-processing raw forensic artefacts collected with [Velociraptor](https://www.velocidex.com/golang/velociraptor/). It optionally ingests data into [Azure Data Explorer (ADX)](https://azure.microsoft.com/en-us/products/data-explorer). 
+
+## Features
+
+- Post-process raw Velociraptor artefacts into CSV, JSON, or JSONL format
+- Ingest forensic artefacts at scale from Blob storage, SFTP, SAS token URLs, or a local folder
+- Ingests the data into Azure Data Explorer (ADX) for quick analysis with Kusto Query Language (KQL)
+- Automated pipeline using Azure Functions (watcher + processor)
+- Encrypted ZIP support via Azure Key Vault or environment variables
+- Deduplication and status tracking via Azure Table Storage
+- Webhook notifications on pipeline events
+- Concurrent processing of multiple ZIP files
+
+## Supported Input Sources
+ 
+| Source | Description |
+|---|---|
+| `blob` | Azure Blob Storage with managed identity or key-based auth |
+| `sas` | Azure Blob Storage with SAS token |
+| `sftp` | SFTP server |
+| `localfolder` | Local directory on the machine running the script |
+ 
+## Supported Artefacts
+ 
+All artefacts are Windows-specific. The artefact set is split into two tiers, selectable via the `-e` / `--essentials` flag in the standalone script or the `VELOCIRAPTOR_ARTIFACTSLIST` config.
+ 
+### Essential (minimal, fast)
+ 
+| Artefact | Description |
+|---|---|
+| `Custom.Windows.Registry.UserAssist` | Programs run by each user, with run counts, from UserAssist registry keys |
+| `Custom.Windows.Sys.Users` | Local user accounts |
+ 
+### Full (default)
+ 
+| Artefact | Description |
+|---|---|
+| `Windows.Forensics.SRUM` | System Resource Usage Monitor — process, network, and energy usage history |
+| `Windows.Forensics.Usn` | USN Journal ($UsnJrnl) — filesystem change history |
+| `Windows.Sys.AppcompatShims` | Application compatibility shims |
+| `Custom.Windows.Forensics.Bam` | Background Activity Moderator — records of executed binaries |
+| `Windows.Forensics.RecentApps` | Recently accessed files and applications from the registry |
+| `Windows.Forensics.UserAccessLogs` | User Access Logs (UAL) — remote access and logon history |
+| `Custom.Windows.Registry.NTUser` | NTUser.dat registry hive contents |
+| `Custom.Windows.Registry.RDP` | RDP-related registry keys (MRU, client connection history) |
+| `Custom.Windows.Registry.RecentDocs` | Recently opened documents from the registry |
+| `Windows.Forensics.Shellbags` | Shellbags — folder browsing history |
+| `Windows.Detection.Amcache` | Amcache.hve — file execution and installation history |
+| `Custom.Windows.Forensics.SAM` | SAM database — local account and group information |
+| `Windows.System.Powershell.PSReadline` | PowerShell command history |
+| `Windows.System.TaskScheduler` | Scheduled tasks |
+| `Windows.Forensics.RecycleBin` | Recycle Bin contents and metadata |
+| `Windows.EventLogs.Evtx` | Windows Event Logs (all .evtx files) |
+| `Custom.Windows.Registry.Interfaces` | Network interface registry keys |
+| `Windows.Registry.AppCompatCache` | AppCompatCache (Shimcache) — program execution evidence |
+| `Windows.Forensics.Prefetch` | Prefetch files — execution evidence |
+| `Windows.Sys.Programs` | Installed programs |
+| `Windows.NTFS.MFT` | Master File Table — full filesystem metadata |
+| `Windows.Forensics.JumpLists` | Jump Lists — recently/frequently accessed files per application |
+| `Windows.Forensics.Timeline` | Windows Timeline / Activity history |
+ 
+The essential artefacts are a subset of the full list. `Generic.Forensic.SQLiteHunter` is explicitly skipped.
+ 
 
 ## Use cases
 
@@ -21,20 +83,6 @@ pyinstaller --onefile --collect-all core scripts/standalone/process_with_velo.py
 
 The executable will be available in the `dist/` folder.
 
-## drawing 
-
-
-## Supported inputsources
-
-- Blob storage using azure authentication
-- Blob storage using SAS tokens
-- SFTP storage
-- local folder
-
-
-## Instructions for local post-processing data
-
-
 
 ## Instruction for pushing data to azure data explorer
 - Create ADX 
@@ -50,7 +98,6 @@ The executable will be available in the `dist/` folder.
 - Install sharedlib (pip install ./sharedlib)
 
 ## Instructions for running the pipeline in azure functions
-
 
 - Create blob storage
     - Add permissions to a user: Storage Queue Data Contributor
@@ -80,5 +127,5 @@ Optional: When you want to use Azure Functions:
 - ln -s ../../.env .env
 
 
-License
+## License
 See LICENSE for details.
