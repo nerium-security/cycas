@@ -1,17 +1,21 @@
-# cycs
+# cycas
 
-Cycis is a is a Python pipeline for post-processing raw forensic artefacts collected with [Velociraptor](https://www.velocidex.com/golang/velociraptor/). It optionally ingests data into [Azure Data Explorer (ADX)](https://azure.microsoft.com/en-us/products/data-explorer). 
+Cycas is a is a Python pipeline for post-processing raw forensic artefacts collected with [Velociraptor](https://www.velocidex.com/golang/velociraptor/). It optionally ingests data into [Azure Data Explorer (ADX)](https://azure.microsoft.com/en-us/products/data-explorer). 
 
 ## Features
 
-- Post-process raw Velociraptor artefacts into CSV, JSON, or JSONL format
+- Post-process raw Velociraptor artefacts (MFT, EVTX etc) into CSV, JSON, or JSONL format
 - Ingest forensic artefacts at scale from Blob storage, SFTP, SAS token URLs, or a local folder
 - Ingests the data into Azure Data Explorer (ADX) for quick analysis with Kusto Query Language (KQL)
-- Automated pipeline using Azure Functions (watcher + processor)
 - Encrypted ZIP support via Azure Key Vault or environment variables
 - Deduplication and status tracking via Azure Table Storage
-- Webhook notifications on pipeline events
 - Concurrent processing of multiple ZIP files
+
+## Visualisation
+
+Idea:
+1) Collect raw artefacts from endpoints using Velocirpator -> upload to blob
+2) post-process and upload to adx
 
 ## Supported Input Sources
  
@@ -21,70 +25,57 @@ Cycis is a is a Python pipeline for post-processing raw forensic artefacts colle
 | `sas` | Azure Blob Storage with SAS token |
 | `sftp` | SFTP server |
 | `localfolder` | Local directory on the machine running the script |
+
+## How collected ZIPs are processed offline
+
+Velociraptor artifacts are designed to run against a live Windows system. To run them against a collected ZIP containing raw evidence instead, Cycas generates a remapping file, which is a YAML configuration that tells Velociraptor how to treat the ZIP's contents as if they were a live machine.
+
+The remapping file is dynamically generated against each ZIP file using the YAML configuration that is found here: [Custom.Generic.Utils.ZipRemap.yaml](velociraptor/artifacts/Custom.Generic.Utils.ZipRemap.yaml)
+
+
+### Supported Artefacts
  
-## Supported Artefacts
- 
-All artefacts are Windows-specific. The artefact set is split into two tiers, selectable via the `-e` / `--essentials` flag in the standalone script or the `VELOCIRAPTOR_ARTIFACTSLIST` config.
- 
-### Essential (minimal, fast)
- 
+All Velociraptor artifacts that currently can be used by Cycas to post-process raw evidence are the following:
+
 | Artefact | Description |
 |---|---|
-| `Custom.Windows.Registry.UserAssist` | Programs run by each user, with run counts, from UserAssist registry keys |
-| `Custom.Windows.Sys.Users` | Local user accounts |
- 
-### Full (default)
- 
-| Artefact | Description |
-|---|---|
-| `Windows.Forensics.SRUM` | System Resource Usage Monitor — process, network, and energy usage history |
+| `Windows.NTFS.MFT` | Master File Table — full filesystem metadata |
 | `Windows.Forensics.Usn` | USN Journal ($UsnJrnl) — filesystem change history |
 | `Windows.Sys.AppcompatShims` | Application compatibility shims |
-| `Custom.Windows.Forensics.Bam` | Background Activity Moderator — records of executed binaries |
 | `Windows.Forensics.RecentApps` | Recently accessed files and applications from the registry |
 | `Windows.Forensics.UserAccessLogs` | User Access Logs (UAL) — remote access and logon history |
-| `Custom.Windows.Registry.NTUser` | NTUser.dat registry hive contents |
-| `Custom.Windows.Registry.RDP` | RDP-related registry keys (MRU, client connection history) |
-| `Custom.Windows.Registry.RecentDocs` | Recently opened documents from the registry |
 | `Windows.Forensics.Shellbags` | Shellbags — folder browsing history |
 | `Windows.Detection.Amcache` | Amcache.hve — file execution and installation history |
-| `Custom.Windows.Forensics.SAM` | SAM database — local account and group information |
 | `Windows.System.Powershell.PSReadline` | PowerShell command history |
 | `Windows.System.TaskScheduler` | Scheduled tasks |
 | `Windows.Forensics.RecycleBin` | Recycle Bin contents and metadata |
 | `Windows.EventLogs.Evtx` | Windows Event Logs (all .evtx files) |
-| `Custom.Windows.Registry.Interfaces` | Network interface registry keys |
 | `Windows.Registry.AppCompatCache` | AppCompatCache (Shimcache) — program execution evidence |
 | `Windows.Forensics.Prefetch` | Prefetch files — execution evidence |
 | `Windows.Sys.Programs` | Installed programs |
-| `Windows.NTFS.MFT` | Master File Table — full filesystem metadata |
 | `Windows.Forensics.JumpLists` | Jump Lists — recently/frequently accessed files per application |
 | `Windows.Forensics.Timeline` | Windows Timeline / Activity history |
+| `Windows.Forensics.SRUM` | System Resource Usage Monitor — process, network, and energy usage history |
  
-The essential artefacts are a subset of the full list. `Generic.Forensic.SQLiteHunter` is explicitly skipped.
- 
+The following Velociraptor artifacts work as well, but it required (in some cases small) customisation to the artifact indicated by the 'custom'.
 
-## Use cases
-
-When forensic artefacts are collected using Velociraptor
-
-- Run on Windows/Linux device for post-process raw forensic artefacts to json(l) and csv using Velociraptor
-- Pipeline for ingesting forensic artefacts at scale to automatically ingest zip files with forensic artefacts from Blob or SFTP storage using Azure Functions
-- From velociraptor server to azure data explorer
-
-## Building a standalone executable
-
-To distribute the post-processing script as a standalone executable (no Python required):
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --collect-all core scripts/standalone/process_with_velo.py
-```
-
-The executable will be available in the `dist/` folder.
+| Artefact | Description |
+|---|---|
+| `Custom.Windows.Forensics.Bam` | Background Activity Moderator — records of executed binaries |
+| `Custom.Windows.Forensics.SAM` | SAM database — local account and group information |
+| `Custom.Windows.Registry.Interfaces` | Network interface registry keys |
+| `Custom.Windows.Registry.NTUser` | NTUser.dat registry hive contents |
+| `Custom.Windows.Registry.RDP` | RDP-related registry keys (MRU, client connection history) |
+| `Custom.Windows.Registry.RecentDocs` | Recently opened documents from the registry |
+| `Custom.Windows.Registry.UserAssist` | Programs run by each user, with run counts, from UserAssist registry keys |
+| `Custom.Windows.Sys.Users` | Local user accounts |
 
 
-## Instruction for pushing data to azure data explorer
+## Setting up the automated ingestion pipeline
+
+This section walks you through the setup of 
+
+
 - Create ADX 
     - create a database named 'ir'. This is set via the variable ADX_DATABASE_NAME in .env
     - provide a user with permissions AllDatabaseAdmin
@@ -97,34 +88,31 @@ The executable will be available in the `dist/` folder.
     - KEYVAULT_URL 
 - Install sharedlib (pip install ./sharedlib)
 
-## Instructions for running the pipeline in azure functions
+## Instruction for ad-hoc analysis
 
-- Create blob storage
-    - Add permissions to a user: Storage Queue Data Contributor
-    - Add permissions to a user: Storage Table Data Contributor
-    - Add permissions to a user: Storage Blob Data Contributor
-    - Create the blob container 'triagepackages'. You can change this by setting the BLOB_CONTAINER_INPUT variable in .env 
-    - Create a queue 'triagepackages'. You can change this with the BLOB_QUEUE_NAME variable in .env
-- Create azure keyvault
-    - Add permissions to a user: Key Vault Secrets user
-    - Add a secret named 'velo-password', and set the password of the zip triage packege
+For ad-hoc analysis on a local system, you can run the following script to post-process ZIPs and output the results:
 
-Optional: When you want to use Azure Functions:
+`python3 scripts/standalone/process_with_velo.py -i /opt/collected_evidence/Collection-DPP000458-2026-02-03T20_35_20Z.zip`
 
-- Create azure function app: watcher
-    - add system assigned identity: key vault secrets user, storage queue data message sender, storage table data contributor
-- Create azure function app: processor
-    - add system assigned identity: key vault secrets user, storage queue data message processor
+By-default it outputs the results to the same folder 
 
-## Instructions for development infrastructure
-- pip install -e .
-- cd azurefunctions/watcher
-- ln -s ../../core/  ./core
-- ln -s ../../.env .env
-- cd azurefunctions/processor 
-- ln -s ../../core/  ./core
-- ln -s ../../.ignorelist.json  ./.ignorelist.json
-- ln -s ../../.env .env
+- Windows.EventLogs.Evtx.csv
+- Windows.NTFS.MFT.csv
+- Custom.Windows.Registry.UserAssist.csv
+- etc
+
+
+### Building a standalone executable
+
+To distribute the post-processing script as a standalone executable (no Python required):
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --collect-all core scripts/standalone/process_with_velo.py
+```
+
+The executable will be available in the `dist/` folder.
+
 
 
 ## License
