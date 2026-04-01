@@ -229,8 +229,9 @@ class TablestorageManager:
             status_data (dict): Zipfile metadata and statistics.
         '''
 
-        zipfile = status_data['summary'][0].get('zipfile_fullpath')
         status_data = status_data['summary'][0]
+        zipfile = status_data.get('zipfile_fullpath')
+        
         zipfile = os.path.basename(zipfile)
 
         duration = self.calculate_duration(starttime)
