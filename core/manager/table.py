@@ -230,7 +230,7 @@ class TablestorageManager:
         '''
 
         zipfile = status_data['summary'][0].get('zipfile_fullpath')
-
+        status_data = status_data['summary'][0]
         zipfile = os.path.basename(zipfile)
 
         duration = self.calculate_duration(starttime)
