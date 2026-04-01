@@ -1,4 +1,0 @@
-azurefunctions
-core
-scripts
-velociraptor
