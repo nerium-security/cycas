@@ -187,11 +187,11 @@ def add_summary_info_to_status(results, zipfile, sessionid, source_name, start):
     Returns:
         dict: Updated results dictionary.
     '''
-    
+
     results['summary'].append({
         'zipfile_basename': os.path.basename(zipfile),
         'zipfile_fullpath': zipfile,
-        'zipfile_size': os.path.getsize(zipfile),
+        'zipfile_size': os.path.getsize(zipfile) if os.path.exists(zipfile) else 0,
         'sessionid': sessionid,
         'uploadid': 'id' + generate_sessionid(),
         'source_name': source_name,

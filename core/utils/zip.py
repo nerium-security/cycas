@@ -35,14 +35,18 @@ def is_zip_encrypted(zipfile):
     Returns:
         bool: True if the ZIP contains an encrypted entry, otherwise False.
     '''
+    
+    try:
+        with pyzipper.AESZipFile(zipfile) as zf:
 
-    with pyzipper.AESZipFile(zipfile) as zf:
-        for info in zf.infolist():
+            for info in zf.infolist():
 
-            if info.flag_bits & 0x1 or getattr(info, 'is_encrypted', False):
-                return True
-            else:
-                return False
+                if info.flag_bits & 0x1 or getattr(info, 'is_encrypted', False):
+                    return True
+                else:
+                    return False
+    except:
+        return None
 
 def get_hostname_from_filename(fullpath):
     ''' 

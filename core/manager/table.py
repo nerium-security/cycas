@@ -91,7 +91,7 @@ class TablestorageManager:
         '''
 
         # Convert size to int64 as otherwise a limit might be reached for entry in table
-        size_int32 = status_data.get('zipfile_size', '')
+        size_int32 = status_data.get('zipfile_size', 0)
         size = EntityProperty(value=int(size_int32), edm_type=EdmType.INT64)
 
         return {
