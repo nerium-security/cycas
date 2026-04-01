@@ -535,4 +535,6 @@ def list_zipfiles(managers, source_name, Config):
 
     filtered_files = filter_triage_packages(all_files, Config.var_zipfile_prefix, Config.var_zipfile_suffix)
 
+    log.info(f'Found {len(filtered_files)} zip files.')
+
     return filtered_files
