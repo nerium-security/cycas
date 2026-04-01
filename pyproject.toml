@@ -1,11 +1,11 @@
 # pyproject.toml
 [project]
 name = "cycas"
-description = "Cycas is a is a Python solution for post-processing raw forensic artefacts collected with Velociraptor. It optionally ingests data into [Azure Data Explorer (ADX)]"
+description = "Post-process and ingest forensic artifacts (collected with Velociraptor) into Azure Data Explorer (ADX)."
 version = "0.1.0"
 requires-python = ">=3.10"
-license = "GNU GENERAL PUBLIC LICENSE"
-license-files = "LICENSE"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 
 [project.urls]
 repository = "https://github.com/nerium-security/cycas"

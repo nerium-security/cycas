@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: cycas
+Version: 0.1.0
+Summary: Post-process and ingest forensic artifacts (collected with Velociraptor) into Azure Data Explorer (ADX).
+License-Expression: GPL-3.0-or-later
+Project-URL: repository, https://github.com/nerium-security/cycas
+Requires-Python: >=3.10
+License-File: LICENSE
+Dynamic: license-file
