@@ -11,3 +11,8 @@ git commit -m "Fix: $SUFFIX"
 git push -u origin "$PREFIX/$SUFFIX"
 
 git switch main
+
+
+# Development
+
+pip3 install -e .

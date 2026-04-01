@@ -53,6 +53,7 @@ core/utils/zip.py
 cycas.egg-info/PKG-INFO
 cycas.egg-info/SOURCES.txt
 cycas.egg-info/dependency_links.txt
+cycas.egg-info/requires.txt
 cycas.egg-info/top_level.txt
 scripts/azurefunctions/af_processor.py
 scripts/azurefunctions/af_watcher.py

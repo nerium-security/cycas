@@ -433,4 +433,6 @@ core.egg-info
 *.json
 *.csf
 
+cycas.egg-info/*
+
 README-GITUSAGE.md
