@@ -159,12 +159,15 @@ def upload_detailed_status_to_adx(managers, Config, results, tablename):
 
         dict_status = {
 
-            'postprocessing': tablename + '_postprocessing',
             'uploads': tablename + '_uploads',
             'summary': tablename + '_summary'
 
         }
-        
+
+        if results.get('postprocessing'):
+
+            dict_status['postprocessing'] = tablename + '_postprocessing'
+
         for key, tablename in dict_status.items():
             results_prepared = _prepare_dictionary_for_upload_to_adx(results, key)
             managers.adx.upload_detailed_status(results_prepared, Config, tablename)
