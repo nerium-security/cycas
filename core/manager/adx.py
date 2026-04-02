@@ -13,6 +13,7 @@ import os
 import logging as log
 import pandas as pd
 import fileinput
+import sys
 from pathlib import Path
 from datetime import timedelta
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
@@ -80,7 +81,7 @@ class AdxManager:
         '''
         Run a short test query against the configured ADX database.
 
-        Executes a management query ('.show operations | limit 1') with a short
+        Executes a management query ('.show database dfir principals') with a short
         timeout to validate connectivity to the cluster and database.
 
         Returns:
@@ -93,15 +94,15 @@ class AdxManager:
         log.info(f'Running a test query against the database: {self.adx_database_name}')
         try:
 
-            query_test = '.show operations | limit 1'
+            query_test = f'.show database {self.adx_database_name} principals'
             properties = ClientRequestProperties()
             properties.set_option(properties.request_timeout_option_name, timedelta(seconds=5))
             self.kusto_client.execute(self.adx_database_name, query_test, properties=properties)
             log.info(f'Successfully launched query: {query_test}')
             return True
         except Exception as e:
-            log.error(f'Running test-query failed. Error: {e}')
-            return False
+            log.error(f'Exiting script as running test-query failed. Error: {e}')
+            sys.exit(1)
 
     def convert_to_dataframe(self, f, nrows, chunksize):
         '''
