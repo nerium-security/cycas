@@ -95,7 +95,6 @@ class TablestorageManager:
             log.error(f'Write access to table \'{self.table_name}\' failed. Ensure \'Storage Table Data Contributor\' permissions are provided to the storage account. Error: {e}')
             sys.exit(1)
 
-
     def hash_filename(self, filename):
         '''
         Generate a short hash of a filename.
