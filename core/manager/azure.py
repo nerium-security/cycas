@@ -9,7 +9,9 @@ from azure.identity import DefaultAzureCredential
 from azure.mgmt.resource import SubscriptionClient
 from azure.mgmt.kusto import KustoManagementClient
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
+from azure.core.exceptions import ClientAuthenticationError
 import logging as log
+import sys
 
 log = log.getLogger(__name__)
 
@@ -40,13 +42,17 @@ class AzureManager:
 
         log.info('Attempting to authenticate to Azure.')
         try:
-            self.credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
+            self.credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
             self.sub_client = SubscriptionClient(self.credential)
-            log.info('Successfully authenticated.')
+            self.credential.get_token('https://management.azure.com/.default')
+            log.info('Successfully authenticated with Azure.')
             return self.credential
+        except ClientAuthenticationError:
+            log.error('Azure authentication failed. Try running `az login` on your terminal.')
+            sys.exit(1)
         except Exception as e:
             log.error(f'Authentication failed: {e}')
-            return
+            sys.exit(1)
 
     def find_subscriptions(self):
         '''
