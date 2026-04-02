@@ -9,11 +9,13 @@ Azure Table Storage table.
 from azure.data.tables import EntityProperty, EdmType
 from azure.data.tables import TableServiceClient
 from datetime import datetime
+import uuid
 import pandas as pd
 import logging as log
 import socket
 import hashlib
 import os
+import sys
 
 log = log.getLogger(__name__)
 
@@ -50,12 +52,49 @@ class TablestorageManager:
 
         log.info(f'Attempting to authenticate with blob storage table: {self.table_endpoint}')
         try:
+
             self.table_service = TableServiceClient(endpoint=self.table_endpoint, credential=self.credential)
             log.info('Successfully authenticated.')
         except Exception as e:
             log.error(f'Could not authenticate. Error: {e}')
 
         self.table_client = self.table_service.create_table_if_not_exists(table_name=self.table_name)
+
+        self.has_write_access()
+
+    def has_write_access(self) -> bool:
+        '''
+        Test whether write access is enabled for the configured table.
+
+        This method attempts to insert and then delete a temporary entity.
+        If both operations succeed, write access is confirmed.
+
+        Returns:
+            bool: True if write access is available, False otherwise.
+        '''
+        test_entity = {
+            'PartitionKey': 'write_test',
+            'RowKey': str(uuid.uuid4()),
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+        try:
+            # Try to insert
+            self.table_client.create_entity(entity=test_entity)
+
+            # Cleanup (delete test entity)
+            self.table_client.delete_entity(
+                partition_key=test_entity['PartitionKey'],
+                row_key=test_entity['RowKey']
+            )
+
+            log.info('Write access to table confirmed.')
+            return True
+
+        except Exception as e:
+            log.error(f'Write access to table \'{self.table_name}\' failed. Ensure \'Storage Table Data Contributor\' permissions are provided to the storage account. Error: {e}')
+            sys.exit(1)
+
 
     def hash_filename(self, filename):
         '''
