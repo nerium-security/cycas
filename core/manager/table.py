@@ -58,9 +58,9 @@ class TablestorageManager:
         except Exception as e:
             log.error(f'Could not authenticate. Error: {e}')
 
-        self.table_client = self.table_service.create_table_if_not_exists(table_name=self.table_name)
+        self.has_write_access()        
 
-        self.has_write_access()
+        self.table_client = self.table_service.create_table_if_not_exists(table_name=self.table_name)
 
     def has_write_access(self) -> bool:
         '''
