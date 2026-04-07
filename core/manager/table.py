@@ -58,9 +58,50 @@ class TablestorageManager:
         except Exception as e:
             log.error(f'Could not authenticate. Error: {e}')
 
+        self.create_table_if_not_exists()
+
         self.has_write_access()        
 
-        self.table_client = self.table_service.create_table_if_not_exists(table_name=self.table_name)
+    def create_table_if_not_exists(self) -> bool:
+        '''
+        Create the configured table in Azure Table Storage if it does not
+        already exist.
+
+        Attempts to create the table and initializes self.table_client for
+        subsequent read/write operations. If the table already exists, the
+        existing table is used. If creation fails due to permissions or
+        connectivity issues, the process exits.
+
+        Returns:
+            bool: True if the table exists or was successfully created.
+        '''
+        try:
+            log.info(f"Creating table '{self.table_name}' if it does not already exist.")
+            self.table_client = self.table_service.create_table_if_not_exists(
+                table_name=self.table_name
+            )
+            log.info(f"Table '{self.table_name}' is ready.")
+            return True
+        except Exception as e:
+            if e.status_code == 403:
+                log.error(
+                    f"Permission denied: could not create table '{self.table_name}'. "
+                    f"Ensure 'Storage Table Data Contributor' is assigned to the "
+                    f"identity on the storage account."
+                )
+                log.debug(f'Error: {e}')
+            else:
+                log.error(
+                    f"HTTP error while creating table '{self.table_name}'. "
+                    f"Error: {e}"
+                )
+            sys.exit(1)
+        except Exception as e:
+            log.error(
+                f"Unexpected error while creating table '{self.table_name}'. "
+                f"Error: {e}"
+            )
+            sys.exit(1)
 
     def has_write_access(self) -> bool:
         '''
@@ -92,11 +133,13 @@ class TablestorageManager:
             return True
 
         except Exception as e:
+
             log.error(
                 f"Write access to table '{self.table_name}' failed. "
                 f"Ensure 'Storage Table Data Contributor' permissions are "
-                f"provided to the storage account. Error: {e}"
+                f"provided to the storage account."
                 )
+            log.debu(f'Error: {e}')
             sys.exit(1)
 
     def hash_filename(self, filename):
