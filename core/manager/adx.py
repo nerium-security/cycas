@@ -101,7 +101,10 @@ class AdxManager:
             log.info(f'Successfully launched query: {query_test}')
             return True
         except Exception as e:
-            log.error(f'Exiting script as running test-query failed. Error: {e}')
+            log.error(
+                f'Exiting script as running test-query failed. Try to add \'AllDatabasesAdmin\' '
+                f'to the Azure Data Explorer cluster as RBAC role.')
+            log.debug(f'Error: {e}')
             sys.exit(1)
 
     def convert_to_dataframe(self, f, nrows, chunksize):
