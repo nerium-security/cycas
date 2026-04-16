@@ -48,7 +48,7 @@ class AzureManager:
             log.info('Successfully authenticated with Azure.')
             return self.credential
         except ClientAuthenticationError:
-            log.error('Azure authentication failed. Try running `az login` on your terminal.')
+            log.error('Azure authentication failed. Try running `az login` on your terminal. Exiting script.')
             sys.exit(1)
         except Exception as e:
             log.error(f'Authentication failed: {e}')
