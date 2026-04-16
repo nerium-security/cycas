@@ -18,4 +18,6 @@ Cycas is a solution for post-processing raw forensic artefacts collected with `V
 
    /gettingstarted/installation
 
+   /gettingstarted/usage
+
    /gettingstarted/standalone

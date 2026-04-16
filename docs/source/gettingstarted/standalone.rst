@@ -1,33 +1,35 @@
 Standalone
-============
+==========
+
+The Python script :file:`scripts/standalone/process_with_velo.py` post-processes ZIP files
+containing raw artifact files collected with Velociraptor. For each ZIP file
+it extracts the contents, runs Velociraptor to parse the artifacts, and writes
+the results to CSV, JSON, or JSONL output files alongside a summary report.
+
+Note that the script does not upload results to Azure Data Explorer.
+
 
 .. contents:: Table of Contents
    :depth: 2
    :local:
    :backlinks: none
  
-Overview
---------
- 
-:file:`scripts/standalone/process_with_velo.py` post-processes ZIP files
-containing raw artifact files collected with Velociraptor. For each ZIP file
-it extracts the contents, runs Velociraptor to parse the artifacts, and writes
-the results to CSV, JSON, or JSONL output files alongside a summary report.
-
 
 Installation
 ------------
 
 .. code-block:: bash
  
-   git clone https://github.com/nerium-security/cycas.git
+   # Clone the repository
+   git clone https://github.com/nerium-security/cycas.git && cd cycas
 
-   cd cycas
-
+   # Create an virtual environment
    python3 -m venv .venv
 
+   # Activate the virtual environment
    source .venv/bin/activate
 
+   # Install required packages
    pip3 install .
 
 
