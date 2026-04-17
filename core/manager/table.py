@@ -75,6 +75,7 @@ class TablestorageManager:
         Returns:
             bool: True if the table exists or was successfully created.
         '''
+
         try:
             log.info(f"Creating table '{self.table_name}' if it does not already exist.")
             self.table_client = self.table_service.create_table_if_not_exists(

@@ -34,8 +34,9 @@ class Config(BaseSettings):
 
     blob_storageaccount_enabled: bool
     blob_storageaccount_uri: str
-    blob_storageaccount_sas: str
     blob_container_input: str
+    blob_storageaccount_sas_enabled: bool
+    blob_storageaccount_sas: str
     blob_logtable_enabled: bool
     blob_logtable_uri: str
     blob_logtable_name: str
@@ -54,6 +55,7 @@ class Config(BaseSettings):
     sftp_username: str
     sftp_url: str
     sftp_port: int
+    var_localfolder_enabled: bool
     var_localfolder_directory: str
     var_unzip_directory: str
     var_sample_size: int

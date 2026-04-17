@@ -63,12 +63,12 @@ def run_azurefunction_processor(triagepackage_source: str, mode: str, messageque
         #    run_zip_processor(managers, source_name, zipfile, sessionid, start)
 
 
-def run_localdevice(triagepackage_source: str) -> None:
+def run_localdevice() -> None:
 
     sessionid = setup_logging(Config.var_loglocation, Config.var_loglevel)
-    managers = init(triagepackage_source, sessionid)
-    zipfiles = list_zipfiles(managers, triagepackage_source, Config)
-
+    managers = init(sessionid)
+    zipfiles = list_zipfiles(managers, Config)
+    
     from concurrent.futures import ThreadPoolExecutor, as_completed
     futures = []
 
@@ -78,11 +78,12 @@ def run_localdevice(triagepackage_source: str) -> None:
             executor.submit(
                 run_zip_processor,
                 managers,
-                triagepackage_source,
+                source_name,
                 zipfile,
                 sessionid,
                 None,
             )
+            for source_name, zipfiles in zipfiles.items()
             for zipfile in zipfiles
         ]
 
