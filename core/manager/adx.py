@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from datetime import timedelta
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
+from azure.kusto.data.exceptions import KustoApiError
 from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel
 from azure.kusto.ingest.status import KustoIngestStatusQueues
 from datetime import datetime
@@ -647,6 +648,15 @@ class AdxManager:
             self.kusto_client.execute_mgmt(self.adx_database_name, cmd_createmergetable)
             log.info(f'Successfully launched command: {cmd_createmergetable}')
             return True
+
+        except KustoApiError as e:
+            if 'does not support column data type change' in str(e):
+                # Error will not be sent to standard output as there is not impact 
+                return True
+            else:
+                log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
+                return False
+
         except Exception as e:
             log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
             return False
