@@ -37,7 +37,7 @@ class Status:
     FINISHED = 'finished'
     UPLOADDISABLED = 'uploaddisabled'
 
-def update_status_in_log(managers, Config, processing_status, start, status_data):
+def update_status_in_log(managers, Config, processing_status, starttime, status_data):
     '''
     Update the processing status in the Table Storage log.
 
@@ -48,13 +48,12 @@ def update_status_in_log(managers, Config, processing_status, start, status_data
         managers: Container holding authenticated service managers.
         Config: variables defined in .env file
         processing_status (str): New status value to store.
-        start (datetime): Start time used by the table manager to compute duration.
         status_data (dict): Metadata used to build the log entity.
     '''
 
     if Config.blob_logtable_enabled:
 
-        managers.table.update_status_in_log(processing_status, start, status_data)
+        managers.table.update_status_in_log(processing_status, starttime, status_data)
 
 def write_logentry_if_new(managers, Config, processing_status, status_data):
     '''

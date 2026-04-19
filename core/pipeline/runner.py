@@ -1,67 +1,72 @@
 import logging
 from core.utils.log import setup_logging
-from core.pipeline.orchestrator import (init, 
-                                run_zip_processor, 
-                                write_logentry_if_new, 
-                                determine_if_needs_processing)
+from core.pipeline.orchestrator import init, run_zip_processor
 from core.utils.zip import list_zipfiles
-from core.utils.status import Status
+from core.utils.status import Status, write_logentry_if_new, determine_if_needs_processing, add_summary_info_to_status
 from core.utils.config import load_config
+from core.utils.summary import define_results_dict
 from core.utils.queue import send_to_queue, get_message_in_queue, update_status_unqueued
 from typing import Optional
+from datetime import datetime
 
 Config = load_config()
 
 log = logging.getLogger(__name__)
 
-def run_azurefunction_watcher(triagepackage_source: str) -> None:
+def run_azurefunction_watcher() -> None:
 
     sessionid = setup_logging(Config.var_loglocation, Config.var_loglevel)
-    managers = init(triagepackage_source, sessionid)
-    zipfiles = list_zipfiles(managers, triagepackage_source, Config)
+    managers = init(sessionid)
+    zipfiles = list_zipfiles(managers, Config)
 
-    results = []
-    for zipfile in zipfiles:
+    final = []
 
-        write_logentry_if_new(managers, triagepackage_source, zipfile, sessionid, Status.NEW)
+    for source_name, zipfiles in zipfiles.items():
+        for zipfile in zipfiles:
 
-        needs_processing = determine_if_needs_processing(managers, zipfile)
+            start = datetime.now()
 
-        if needs_processing:
-            results.append(send_to_queue(managers, triagepackage_source, zipfile, sessionid))
+            results = define_results_dict()
+            results = add_summary_info_to_status(results, zipfile, sessionid, source_name, start)
 
-    if results:
-        log.info(f'Sent {len(results)} zip file(s) to queue.')
+            write_logentry_if_new(managers, Config, Status.NEW, results)
+
+            needs_processing = determine_if_needs_processing(managers, Config, zipfile)
+
+            if needs_processing:
+                final.append(send_to_queue(managers, Config, source_name, zipfile, results))
+
+    if not final:
+        log.info('No new triage packages found.')
     else:
-        log.info('No new zip files. All are already sent to queue.')
+        log.info(f'Found {len(final)} triage packages.')
 
-def run_azurefunction_processor(triagepackage_source: str, mode: str, messagequeue: Optional[object] = None) -> None:
+
+def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None) -> None:
     
     sessionid = setup_logging(Config.var_loglocation, Config.var_loglevel)
-    managers = init(triagepackage_source, sessionid)
+    managers = init(sessionid)
 
     if mode == 'manual':
         messagequeue = managers.queue.receive_messages()
 
     if not messagequeue:
+        log.info('No new messages in queue.')
         return
 
     for message in messagequeue:
 
         source_name, zipfile = get_message_in_queue(message)
 
-        update_status_unqueued(managers, source_name, zipfile, sessionid)
+        start = datetime.now()
+        results = define_results_dict()
+        results = add_summary_info_to_status(results, zipfile, sessionid, source_name, start)
+
+        update_status_unqueued(managers, Config, zipfile, start, results)
 
         run_zip_processor(managers, source_name, zipfile, sessionid, message)
 
-        #process_from_queue = should_process_from_queue()
-
-        #update_table()
-
-        #if process_from_queue:
-        #    start = datetime.now()
-        #    run_zip_processor(managers, source_name, zipfile, sessionid, start)
-
+        managers.queue.delete_message(message)
 
 def run_localdevice() -> None:
 
@@ -89,6 +94,5 @@ def run_localdevice() -> None:
 
         for fut in as_completed(futures):
             fut.result()
-            #run_zip_processor(managers, triagepackage_source, zipfile, sessionid)
 
     log.info('Script finished')
