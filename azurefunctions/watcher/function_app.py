@@ -6,4 +6,4 @@ app = func.FunctionApp()
 @app.timer_trigger(schedule="*/1 * * * *", arg_name="mytimer")
 def run_every_minute(mytimer: func.TimerRequest) -> None:
     
-    run_azurefunction_watcher(triagepackage_source='blob')
+    run_azurefunction_watcher()
