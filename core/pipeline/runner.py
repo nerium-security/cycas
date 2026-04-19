@@ -56,6 +56,9 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
 
     for message in messagequeue:
 
+        if message.dequeue_count > Config.var_max_retry:
+            managers.queue.delete_message(message)
+
         source_name, zipfile = get_message_in_queue(message)
 
         start = datetime.now()
@@ -64,9 +67,15 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
 
         update_status_unqueued(managers, Config, zipfile, start, results)
 
-        run_zip_processor(managers, source_name, zipfile, sessionid, message)
+        try:
 
-        managers.queue.delete_message(message)
+            run_zip_processor(managers, source_name, zipfile, sessionid, message)
+
+        except Exception as e:
+            log.error(
+                f'Processing failed for {zipfile} '
+                f'(attempt {message.dequeue_count}/{Config.var_max_retry}): {e}'
+                )
 
 def run_localdevice() -> None:
 
