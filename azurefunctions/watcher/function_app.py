@@ -1,5 +1,5 @@
 import azure.functions as func
-from sharedlib.pipeline.runner import run_azurefunction_watcher
+from core.pipeline.runner import run_azurefunction_watcher
 
 app = func.FunctionApp()
 
