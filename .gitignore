@@ -433,6 +433,8 @@ core.egg-info
 */build/*
 *.json
 *.csf
+build/
+cycas.egg-info/
 
 cycas.egg-info/*
 
