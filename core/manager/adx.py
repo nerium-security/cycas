@@ -13,9 +13,11 @@ import os
 import logging as log
 import pandas as pd
 import fileinput
+import sys
 from pathlib import Path
 from datetime import timedelta
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
+from azure.kusto.data.exceptions import KustoApiError
 from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel
 from azure.kusto.ingest.status import KustoIngestStatusQueues
 from datetime import datetime
@@ -80,7 +82,7 @@ class AdxManager:
         '''
         Run a short test query against the configured ADX database.
 
-        Executes a management query ('.show operations | limit 1') with a short
+        Executes a management query ('.show database dfir principals') with a short
         timeout to validate connectivity to the cluster and database.
 
         Returns:
@@ -93,15 +95,18 @@ class AdxManager:
         log.info(f'Running a test query against the database: {self.adx_database_name}')
         try:
 
-            query_test = '.show operations | limit 1'
+            query_test = f'.show database {self.adx_database_name} principals'
             properties = ClientRequestProperties()
             properties.set_option(properties.request_timeout_option_name, timedelta(seconds=5))
             self.kusto_client.execute(self.adx_database_name, query_test, properties=properties)
             log.info(f'Successfully launched query: {query_test}')
             return True
         except Exception as e:
-            log.error(f'Running test-query failed. Error: {e}')
-            return False
+            log.error(
+                f'Exiting script as running test-query failed. Try to add \'AllDatabasesAdmin\' '
+                f'to the Azure Data Explorer cluster as RBAC role.')
+            log.debug(f'Error: {e}')
+            sys.exit(1)
 
     def convert_to_dataframe(self, f, nrows, chunksize):
         '''
@@ -643,6 +648,15 @@ class AdxManager:
             self.kusto_client.execute_mgmt(self.adx_database_name, cmd_createmergetable)
             log.info(f'Successfully launched command: {cmd_createmergetable}')
             return True
+
+        except KustoApiError as e:
+            if 'does not support column data type change' in str(e):
+                # Error will not be sent to standard output as there is not impact 
+                return True
+            else:
+                log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
+                return False
+
         except Exception as e:
             log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
             return False

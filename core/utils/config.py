@@ -34,8 +34,9 @@ class Config(BaseSettings):
 
     blob_storageaccount_enabled: bool
     blob_storageaccount_uri: str
-    blob_storageaccount_sas: str
     blob_container_input: str
+    blob_storageaccount_sas_enabled: bool
+    blob_storageaccount_sas: str
     blob_logtable_enabled: bool
     blob_logtable_uri: str
     blob_logtable_name: str
@@ -54,6 +55,7 @@ class Config(BaseSettings):
     sftp_username: str
     sftp_url: str
     sftp_port: int
+    var_localfolder_enabled: bool
     var_localfolder_directory: str
     var_unzip_directory: str
     var_sample_size: int
@@ -61,16 +63,13 @@ class Config(BaseSettings):
     var_download_directory: str
     var_loglocation: str
     var_webhook_url: str
-    var_removezip: bool
     var_zipfile_prefix: str
     var_zipfile_suffix: str
     var_location_ignorelist: str
-    var_retryfailed: bool
+    var_max_retry: int
     var_verifyuploads: bool
     var_loglevel: str
-    var_delete_processedzipfiles: bool
     var_localdevice_concurrency: int
-    var_add_hostname: bool
     var_artifact_summary_filename: str
     var_master_summary_filename: str
     velociraptor_enabled: bool

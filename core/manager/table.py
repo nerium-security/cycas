@@ -9,11 +9,13 @@ Azure Table Storage table.
 from azure.data.tables import EntityProperty, EdmType
 from azure.data.tables import TableServiceClient
 from datetime import datetime
+import uuid
 import pandas as pd
 import logging as log
 import socket
 import hashlib
 import os
+import sys
 
 log = log.getLogger(__name__)
 
@@ -50,12 +52,96 @@ class TablestorageManager:
 
         log.info(f'Attempting to authenticate with blob storage table: {self.table_endpoint}')
         try:
+
             self.table_service = TableServiceClient(endpoint=self.table_endpoint, credential=self.credential)
             log.info('Successfully authenticated.')
         except Exception as e:
             log.error(f'Could not authenticate. Error: {e}')
 
-        self.table_client = self.table_service.create_table_if_not_exists(table_name=self.table_name)
+        self.create_table_if_not_exists()
+
+        self.has_write_access()        
+
+    def create_table_if_not_exists(self) -> bool:
+        '''
+        Create the configured table in Azure Table Storage if it does not
+        already exist.
+
+        Attempts to create the table and initializes self.table_client for
+        subsequent read/write operations. If the table already exists, the
+        existing table is used. If creation fails due to permissions or
+        connectivity issues, the process exits.
+
+        Returns:
+            bool: True if the table exists or was successfully created.
+        '''
+
+        try:
+            log.info(f"Creating table '{self.table_name}' if it does not already exist.")
+            self.table_client = self.table_service.create_table_if_not_exists(
+                table_name=self.table_name
+            )
+            log.info(f"Table '{self.table_name}' is ready.")
+            return True
+        except Exception as e:
+            if e.status_code == 403:
+                log.error(
+                    f"Permission denied: could not create table '{self.table_name}'. "
+                    f"Ensure 'Storage Table Data Contributor' is assigned to the "
+                    f"identity on the storage account."
+                )
+                log.debug(f'Error: {e}')
+            else:
+                log.error(
+                    f"HTTP error while creating table '{self.table_name}'. "
+                    f"Error: {e}"
+                )
+            sys.exit(1)
+        except Exception as e:
+            log.error(
+                f"Unexpected error while creating table '{self.table_name}'. "
+                f"Error: {e}"
+            )
+            sys.exit(1)
+
+    def has_write_access(self) -> bool:
+        '''
+        Test whether write access is enabled for the configured table.
+
+        This method attempts to insert and then delete a temporary entity.
+        If both operations succeed, write access is confirmed.
+
+        Returns:
+            bool: True if write access is available, False otherwise.
+        '''
+        test_entity = {
+            'PartitionKey': 'write_test',
+            'RowKey': str(uuid.uuid4()),
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+        try:
+            # Try to insert
+            self.table_client.create_entity(entity=test_entity)
+
+            # Cleanup (delete test entity)
+            self.table_client.delete_entity(
+                partition_key=test_entity['PartitionKey'],
+                row_key=test_entity['RowKey']
+            )
+
+            log.info('Write access to table confirmed.')
+            return True
+
+        except Exception as e:
+
+            log.error(
+                f"Write access to table '{self.table_name}' failed. "
+                f"Ensure 'Storage Table Data Contributor' permissions are "
+                f"provided to the storage account."
+                )
+            log.debu(f'Error: {e}')
+            sys.exit(1)
 
     def hash_filename(self, filename):
         '''
@@ -91,7 +177,7 @@ class TablestorageManager:
         '''
 
         # Convert size to int64 as otherwise a limit might be reached for entry in table
-        size_int32 = status_data.get('zipfile_size', '')
+        size_int32 = status_data.get('zipfile_size', 0)
         size = EntityProperty(value=int(size_int32), edm_type=EdmType.INT64)
 
         return {
@@ -229,8 +315,9 @@ class TablestorageManager:
             status_data (dict): Zipfile metadata and statistics.
         '''
 
-        zipfile = status_data['summary'][0].get('zipfile_fullpath')
-
+        status_data = status_data['summary'][0]
+        zipfile = status_data.get('zipfile_fullpath')
+        
         zipfile = os.path.basename(zipfile)
 
         duration = self.calculate_duration(starttime)

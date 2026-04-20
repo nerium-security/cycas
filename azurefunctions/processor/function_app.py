@@ -1,5 +1,5 @@
 import azure.functions as func
-from sharedlib.pipeline.runner import run_azurefunction_processor
+from core.pipeline.runner import run_azurefunction_processor
 
 app = func.FunctionApp()
 
@@ -7,4 +7,4 @@ app = func.FunctionApp()
                                connection="AzureWebJobsStorage") 
 def queue_trigger(azqueue: func.QueueMessage):
     message = azqueue.get_body().decode('utf-8')
-    run_azurefunction_processor(triagepackage_source='blob', mode='azurefunction', messagequeue = [message])
+    run_azurefunction_processor(mode='azurefunction', messagequeue = [message])

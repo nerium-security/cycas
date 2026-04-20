@@ -16,6 +16,7 @@ from datetime import datetime
 import logging as log
 import base64
 import json
+import uuid
 
 log = log.getLogger(__name__)
 
@@ -51,17 +52,76 @@ class QueueManager:
             queue_endpoint = f'{self.queue_url}/{self.queue_name}'
             log.info(f'Authenticating with storage queue: {queue_endpoint}')
             self.queue_client = QueueClient(self.queue_url, self.queue_name, self.credential)
-            
-            # create the queue
-            self.create_queue_if_not_exists(self.queue_name)
 
-            # Test the connection
-            self.queue_client.get_queue_properties()
-            log.info(f'Successfully authenticated.')
-            return True
+            # Test permissions
+            permissions_ok = self.check_permissions()
+
+            if permissions_ok:
+                # create the queue
+                self.create_queue_if_not_exists(self.queue_name)
+
+                log.info(f'Successfully authenticated.')
+                
+                return True
         except AzureError as e:
-            log.info(f'Authentication failed: {e}')
+            log.info('Authentication failed.')
+            log.debug(f'Error: {e}')
             return False
+
+    def check_permissions(self) -> bool:
+        '''
+        Validate permissions by performing a full message lifecycle test:
+        creates a test queue, sends a message, reads it, deletes it,
+        and removes the test queue.
+        Returns:
+            bool: True if all operations succeed, otherwise False.
+        '''
+
+        test_queue_name = f'permission-test-{uuid.uuid4().hex[:8]}'
+        test_message = 'permission-check'
+
+        try:
+            log.info(f'Running permissions check with test queue: {test_queue_name}')
+            test_client = QueueClient(self.queue_url, test_queue_name, self.credential)
+
+            # 1. Create queue — requires "Storage Queue Data Contributor"
+            test_client.create_queue()
+            log.debug('Create queue')
+
+            # 2. Send message — requires "Storage Queue Data Sender" or higher
+            test_client.send_message(test_message)
+            log.debug('Send message')
+
+            # 3. Receive message — requires "Storage Queue Data Reader" or higher
+            messages = test_client.receive_messages(messages_per_page=1)
+            message = next(messages)
+            assert message.content == test_message, 'Message content mismatch'
+            log.debug('Receive message')
+
+            # 4. Delete message — requires "Storage Queue Data Contributor"
+            test_client.delete_message(message)
+            log.debug('Delete message')
+
+            # 5. Delete queue — requires "Storage Queue Data Contributor"
+            test_client.delete_queue()
+            log.debug('Delete queue')
+
+            log.info(f'Permissions check for {self.queue_name} passed.')
+            return True
+
+        except Exception as e:
+            log.error(
+                'Permission check failed. '
+                'Did you add "Storage Queue Data Contributor" permissions '
+                f'to {self.queue_url} ?'
+                )
+
+        finally:
+            # Best-effort cleanup in case of mid-test failure
+            try:
+                test_client.delete_queue()
+            except Exception:
+                pass
 
     def create_queue_if_not_exists(self, queue_name: str):
         '''

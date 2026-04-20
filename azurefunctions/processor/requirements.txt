@@ -20,4 +20,7 @@ pandas==2.2.3
 paramiko==3.5.1
 dotenv==0.9.9
 pyzipper==0.3.6
-./sharedlib
+pydantic==2.12.5
+pydantic_core==2.41.5
+pydantic_settings==2.13.0
+./core

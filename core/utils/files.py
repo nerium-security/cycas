@@ -38,7 +38,7 @@ def list_files_in_directory(directory):
             if fullpath.endswith('.zip'):
                 file_list.append(fullpath)
                 log.debug('Found file %s' %file)
-    log.info(f'Found {len(file_list)} zip file(s).')
+
     return file_list
 
 def split_jsonl_by_size(path, target_bytes=1_000_000_000, encoding='utf-8'):
@@ -136,7 +136,7 @@ def create_directory_if_not_exists(dest_path):
     except Exception as e:
         log.error(f'Could not create directory: {dest_path} Error: {e}')
 
-def filter_triage_packages(files, prefix, suffix):
+def filter_triage_packages(all_files, prefix, suffix):
     '''
     Filter a list of file paths by filename prefix and suffix.
 
@@ -144,7 +144,7 @@ def filter_triage_packages(files, prefix, suffix):
     are returned.
 
     Args:
-        files (list[str]): List of file paths to filter.
+        all_files (dict[list]]): List of file paths to filter.
         prefix (str): Required prefix of the filename (basename).
         suffix (str): Required suffix of the filename (basename).
 
@@ -155,17 +155,17 @@ def filter_triage_packages(files, prefix, suffix):
     log.debug('Filter prefix: %s' %prefix)
     log.debug('Filter suffix: %s' %suffix)
     file_list = []
-    for file in files:
-        file_basename = os.path.basename(file)
 
-        if file_basename.startswith(prefix) and file_basename.endswith(suffix):
-            file_list.append(file)
-            log.debug('Found triage package: %s' %file)
+    for source, files in all_files.items():
+        all_files[source] = [
+            file for file in files
+            if os.path.basename(file).startswith(prefix) and os.path.basename(file).endswith(suffix)
+        ]
 
-    if len(file_list) == 0:
-        log.info('Found no files.')
+        if len(files) == 0:
+            log.info(f'Found no files in {source}.')
 
-    return file_list
+    return all_files
 
 def delete_file(filepath):
     '''
