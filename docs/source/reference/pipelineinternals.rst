@@ -42,112 +42,38 @@ updated automatically based on the file contents. A detailed status record is
 written to ADX on completion, and an optional webhook notification is sent.
 
 
-Initialisation
---------------
+Phases
+------
 
-Before any ZIP files are processed, ``init()`` runs once per session:
+Discover
+~~~~~~~~
 
-- Creates required local directories (log, unzip, local folder) if they do
-  not already exist.
-- Generates a unique session ID that is attached to all log entries for the run.
-- Instantiates and authenticates all service managers (ADX, Table Storage,
-  Key Vault, Blob, SFTP) based on the enabled flags in ``.env``.
+Before any ZIP files are processed, ``init()`` runs once per session to
+create required local directories, generate a unique session ID, and
+authenticate all service managers (ADX, Table Storage, Key Vault, Blob, SFTP)
+based on the enabled flags in ``.env``. Only managers required for the
+selected input source are authenticated — disabled services are bypassed.
 
-Only the managers required for the selected input source are authenticated.
-Disabled services are skipped and log a message confirming they were bypassed.
-
-
-ZIP processing lifecycle
-------------------------
-
-Each ZIP file goes through the following stages inside ``run_zip_processor()``.
-
-1. Status: NEW
-~~~~~~~~~~~~~~
-
-A log entry is written to Azure Table Storage when the ZIP is first seen.
-If an entry already exists and ``VAR_MAX_RETRY`` has not been exceeded, the
-ZIP is skipped and processing stops here. This prevents double-processing when
-the script is run multiple times against the same source.
-
-2. Status: DOWNLOADING
-~~~~~~~~~~~~~~~~~~~~~~
-
-For remote sources (blob, SAS, SFTP), the ZIP is downloaded to
-``VAR_DOWNLOAD_DIRECTORY`` before extraction. The status is updated to
-``DOWNLOADING`` at the start and transitions to either ``DOWNLOADED`` or
-``DOWNLOADFAILED`` depending on the outcome. This step is skipped entirely
-for the local folder source.
-
-3. Extraction
-~~~~~~~~~~~~~
-
-The ZIP is extracted to a subdirectory of ``VAR_UNZIP_DIRECTORY``. Two
-scenarios are handled:
-
-- **Unencrypted ZIP** — extracted directly.
-- **Encrypted ZIP** — the password is read from Key Vault when
-  ``KEYVAULT_ENABLED=true``. If Key Vault is disabled, the password is
-  read from the ``ZIP_PASSWORD`` environment variable or prompted
-  interactively.
-
-Velociraptor triage packages commonly contain a nested ``data.zip`` inside
-the outer archive. This inner ZIP is detected and extracted automatically.
-
-4. Velociraptor post-processing *(optional)*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-When ``VELOCIRAPTOR_ENABLED=true``, the orchestrator checks whether the ZIP
-contains raw artifacts by looking for an ``uploads/`` directory inside the
-archive. If raw artifacts are found, the following steps run:
-
-- The Velociraptor binary is downloaded from ``VELOCIRAPTOR_URL`` if it is
-  not already present at ``VELOCIRAPTOR_BINARY``.
-- A remapping file is generated that allows Velociraptor to read directly
-  from the extracted ZIP without fully unpacking it.
-- The hostname is extracted from the ``SYSTEM`` registry hive inside the ZIP
-  via the remapping file.
-- Artifact queries are loaded from ``VELOCIRAPTOR_ARTIFACTSLIST`` and
-  filtered to the configured subset (``essential`` or ``full``).
-- Each artifact query is executed in sequence. Output is written to disk in
-  the format specified by ``VELOCIRAPTOR_OUTPUTFORMAT`` (``jsonl``, ``json``,
-  or ``csv``).
-- Each output file is immediately queued for ADX ingestion, then deleted from
-  disk.
-
-If the ZIP does not contain raw artifacts, this stage is skipped and the
-pipeline proceeds directly to JSON extraction.
-
-5. JSON extraction and ingestion
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Every JSON and JSONL file inside the extracted ZIP is processed in turn:
-
-- Files matching patterns in ``VAR_LOCATION_IGNORELIST`` are recorded in the
-  status output but not uploaded.
-- Each file is extracted to ``VAR_UNZIP_DIRECTORY``, enriched with a
-  ``hostname`` column derived from the ZIP filename, and queued for ADX
-  ingestion.
-- Files larger than 6 GB are automatically split into smaller chunks before
-  upload to stay within the ADX ingestion limit.
-- After ingestion is initiated, the local file is deleted from disk.
-
-The ADX table name is derived from the filename of each JSON/JSONL file.
-If the table does not yet exist, it is created automatically with a schema
-inferred from the file contents. If it already exists, the schema is merged.
-
-6. Status: FINISHED
-~~~~~~~~~~~~~~~~~~~~
-
-Once all files have been processed, the status is updated to ``FINISHED`` in
-Table Storage. A detailed status record — including per-file upload results,
-post-processing metadata, hostname, and timing — is written to the ``_status``
-table in ADX. If ``VAR_WEBHOOK_URL`` is set, a summary message is posted to
-that URL.
+The pipeline then connects to the configured source and lists all files
+matching ``VAR_ZIPFILE_PREFIX`` and ``VAR_ZIPFILE_SUFFIX``. Each discovered
+ZIP is written to Table Storage with status ``NEW`` on first sight. ZIPs that
+already have a ``PROCESSING`` or ``FINISHED`` status entry are skipped,
+preventing double-processing when the script is run multiple times against the
+same source. Set ``VAR_MAX_RETRY`` to allow previously failed ZIPs to be
+retried automatically.
 
 
-Status transitions
-------------------
+Download
+~~~~~~~~
+
+For remote sources (blob, SAS, SFTP), the ZIP is fetched and saved to
+``VAR_DOWNLOAD_DIRECTORY``. The Table Storage status transitions from
+``DOWNLOADING`` at the start to ``DOWNLOADED`` on success or
+``DOWNLOADFAILED`` on error. A failed download causes the ZIP to be skipped
+for the remainder of the run.
+
+For the local folder source no download occurs — the file is already on disk
+and the pipeline moves directly to extraction.
 
 .. list-table::
    :widths: 20 80
@@ -168,15 +94,79 @@ Status transitions
    * - ``FINISHED``
      - All extraction, post-processing, and ingestion steps completed.
 
-ZIPs already in ``PROCESSING`` or ``FINISHED`` state are skipped on subsequent
-runs. Set ``VAR_MAX_RETRY`` to allow failed ZIPs to be retried.
+
+Extract
+~~~~~~~
+
+The ZIP is extracted to a subdirectory of ``VAR_UNZIP_DIRECTORY``. Two
+scenarios are handled:
+
+- **Unencrypted ZIP** — extracted directly.
+- **Encrypted ZIP** — the password is read from Key Vault when
+  ``KEYVAULT_ENABLED=true``. If Key Vault is disabled, the password is
+  read from the ``ZIP_PASSWORD`` environment variable or prompted
+  interactively.
+
+Velociraptor triage packages commonly contain a nested ``data.zip`` inside
+the outer archive. This inner ZIP is detected and extracted automatically.
+
+
+Post-process
+~~~~~~~~~~~~
+
+When ``VELOCIRAPTOR_ENABLED=true``, the orchestrator checks whether the ZIP
+contains raw artifacts by looking for an ``uploads/`` directory inside the
+archive. If raw artifacts are found, the following steps run:
+
+- The Velociraptor binary is downloaded from ``VELOCIRAPTOR_URL`` if it is
+  not already present at ``VELOCIRAPTOR_BINARY``.
+- A remapping file is generated (see below) so that Velociraptor can read
+  directly from the ZIP without fully unpacking it.
+- The hostname is extracted from the ``SYSTEM`` registry hive inside the ZIP
+  via the remapping file.
+- Artifact queries are loaded from ``VELOCIRAPTOR_ARTIFACTSLIST`` and
+  filtered to the configured subset (``essential`` or ``full``).
+- Each artifact query is executed in sequence. Output is written to disk in
+  the format specified by ``VELOCIRAPTOR_OUTPUTFORMAT`` (``jsonl``, ``json``,
+  or ``csv``).
+- Each output file is immediately queued for ADX ingestion, then deleted from
+  disk.
+
+If the ZIP does not contain raw artifacts, this phase is skipped and the
+pipeline proceeds directly to ingestion.
+
+
+Ingest
+~~~~~~
+
+Every JSON and JSONL file — whether produced by Velociraptor or already
+present in the ZIP — is processed in turn:
+
+- Files matching patterns in ``VAR_LOCATION_IGNORELIST`` are recorded in the
+  status output but not uploaded.
+- Each file is extracted to ``VAR_UNZIP_DIRECTORY``, enriched with a
+  ``hostname`` column derived from the ZIP filename, and queued for ADX
+  ingestion.
+- Files larger than 6 GB are automatically split into smaller chunks before
+  upload to stay within the ADX ingestion limit.
+- After ingestion is initiated, the local file is deleted from disk.
+
+The ADX table name is derived from the filename of each JSON/JSONL file.
+If the table does not yet exist, it is created automatically with a schema
+inferred from the file contents. If it already exists, the schema is merged.
+
+Once all files have been ingested, the status is updated to ``FINISHED`` in
+Table Storage. A detailed status record — including per-file upload results,
+post-processing metadata, hostname, and timing — is written to the ``_status``
+table in ADX. If ``VAR_WEBHOOK_URL`` is set, a summary message is posted to
+that URL.
 
 
 Concurrency
 -----------
 
-``run_localdevice()`` uses a ``ThreadPoolExecutor`` to process multiple ZIP
-files in parallel. The pool size is controlled by ``VAR_LOCALDEVICE_CONCURRENCY``.
+The pipeline uses a ``ThreadPoolExecutor`` to process multiple ZIP files in
+parallel. The pool size is controlled by ``VAR_LOCALDEVICE_CONCURRENCY``.
 Each ZIP runs in its own thread and is fully isolated — a failure in one ZIP
 does not affect others. Set the value to ``1`` to process ZIPs sequentially,
 which is useful for debugging.
@@ -184,17 +174,30 @@ which is useful for debugging.
 
 Module structure
 ----------------
-
+ 
+Pipeline
+~~~~~~~~
+ 
 .. list-table::
    :widths: 40 60
    :header-rows: 1
-
+ 
    * - Module
      - Responsibility
    * - ``core/pipeline/runner.py``
      - Entry point. Discovers ZIPs and manages the thread pool.
    * - ``core/pipeline/orchestrator.py``
      - Coordinates the full lifecycle of a single ZIP file.
+ 
+Utils
+~~~~~
+ 
+.. list-table::
+   :widths: 40 60
+   :header-rows: 1
+ 
+   * - Module
+     - Responsibility
    * - ``core/utils/auth.py``
      - Authenticates and initialises all service managers.
    * - ``core/utils/config.py``
@@ -207,6 +210,22 @@ Module structure
      - Table Storage status reads and writes.
    * - ``core/utils/summary.py``
      - Results dictionary construction and summary output.
+   * - ``core/utils/files.py``
+     - File size checks, JSONL splitting, and local file deletion.
+   * - ``core/utils/misc.py``
+     - Shared helpers: download flag resolution and webhook dispatch.
+   * - ``core/utils/log.py``
+     - Logging setup and session ID generation.
+ 
+Managers
+~~~~~~~~
+ 
+.. list-table::
+   :widths: 40 60
+   :header-rows: 1
+ 
+   * - Module
+     - Responsibility
    * - ``core/manager/adx.py``
      - ADX table management and file ingestion.
    * - ``core/manager/blob.py``
@@ -219,5 +238,7 @@ Module structure
      - Key Vault secret retrieval.
    * - ``core/manager/table.py``
      - Azure Table Storage read and write.
+   * - ``core/manager/azure.py``
+     - Azure credential and subscription management.
    * - ``core/manager/queue.py``
      - Azure Queue Storage (Azure Functions variant only).

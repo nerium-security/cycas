@@ -4,6 +4,16 @@ Supported artifacts
 All Velociraptor artifacts that can be used by Cycas to post-process raw
 evidence are listed below.
 
+.. note::
+    Velociraptor artifacts are designed to run against a live Windows system.
+    To run them against a collected ZIP containing raw evidence instead, Cycas
+    generates a *remapping file* — a YAML configuration that instructs Velociraptor
+    to treat the ZIP's contents as if they were a live machine, redirecting
+    filesystem and registry paths into the archive.
+
+    The remapping file is dynamically generated for each ZIP using the base
+    configuration in ``velociraptor/artifacts/Custom.Generic.Utils.ZipRemap.yaml``.
+
 
 Standard artifacts
 ------------------
