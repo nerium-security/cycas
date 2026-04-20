@@ -17,6 +17,7 @@ from core.manager.queue import decode_message
 from datetime import datetime
 import logging as log
 import json
+import os
 
 log = log.getLogger(__name__)
 
@@ -47,7 +48,7 @@ def should_send_to_queue(managers, Config, zipfile):
             log.info('Is processed or processing.')
         return False
     
-def send_to_queue(managers, source_name, zipfile, sessionid):
+def send_to_queue(managers, Config, source_name, zipfile, status_data):
     '''
     Send a zipfile reference to the processing queue and update its status.
 
@@ -58,7 +59,7 @@ def send_to_queue(managers, source_name, zipfile, sessionid):
         managers: Container holding authenticated service managers.
         source_name (str): Source identifier associated with the zipfile.
         zipfile (str): Zipfile basename to send to the queue.
-        sessionid (str): Session identifier for the current run.
+        status_data (dict): Metadata used to build the log entity.
 
     Returns:
         bool: Result of the queue send operation.
@@ -68,7 +69,7 @@ def send_to_queue(managers, source_name, zipfile, sessionid):
 
     send_to_queue = managers.queue.send_message(zipfile, source_name)
 
-    update_status_in_log(managers, Config, Status.QUEUED, zipfile, source_name, sessionid, start)
+    update_status_in_log(managers, Config, Status.QUEUED, start, status_data)
 
     return send_to_queue
 
@@ -101,7 +102,7 @@ def get_message_in_queue(message):
         log.error(f'Could not load message from queue: {e}')
         return None, None
     
-def update_status_unqueued(managers, source_name, zipfile, sessionid):
+def update_status_unqueued(managers, Config, zipfile, start, status_data):
     '''
     Update the status of a zipfile to UNQUEUED if it has not started processing.
 
@@ -110,17 +111,15 @@ def update_status_unqueued(managers, source_name, zipfile, sessionid):
 
     Args:
         managers: Container holding authenticated service managers.
-        source_name (str): Source identifier associated with the zipfile.
-        zipfile (str): Zipfile basename used for status updates.
-        sessionid (str): Session identifier for the current run.
+        Config: variables defined in .env file
+        zipfile (str): basename of zipfile
+        status_data (dict): Metadata used to build the log entity.
     '''
-
-    start = datetime.now()
 
     message_not_yet_processed = is_message_not_yet_processing(managers, zipfile)
 
     if message_not_yet_processed:
-        update_status_in_log(managers, Config, Status.UNQUEUED, zipfile, source_name, sessionid, start)
+        update_status_in_log(managers, Config, Status.UNQUEUED, start, status_data)
 
 def is_message_not_yet_processing(managers, zipfile) -> bool:
     '''
@@ -138,7 +137,8 @@ def is_message_not_yet_processing(managers, zipfile) -> bool:
         Returns None implicitly if no status entry exists.
     '''
 
-    status_all = managers.table.get_status_zipfile(zipfile)
+    zip_basename = os.path.basename(zipfile)
+    status_all = managers.table.get_status_zipfile(zip_basename)
     
     if status_all:
         status = status_all.get('Status')

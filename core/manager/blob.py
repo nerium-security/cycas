@@ -95,8 +95,13 @@ class BlobManager:
                 log.error('No blob found.')
             return blob_names
         except Exception as e:
-            log.error(f'Failed to list blobs in container {container_name}. Error: {str(e)}', exc_info=True)
-            return []
+            log.error(  
+                f'Failed to list blobs in container {container_name}. '
+                'Try adding Storage Blob Data Contributor as a role to the storage account. '
+                'Exiting script.'
+            )
+            log.debug(f'Error: {str(e)}', exc_info=True)
+            sys.exit(1)
 
     def set_metadata(self, container_name, blob_name, metadata):
         '''

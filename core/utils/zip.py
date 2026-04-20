@@ -35,14 +35,18 @@ def is_zip_encrypted(zipfile):
     Returns:
         bool: True if the ZIP contains an encrypted entry, otherwise False.
     '''
+    
+    try:
+        with pyzipper.AESZipFile(zipfile) as zf:
 
-    with pyzipper.AESZipFile(zipfile) as zf:
-        for info in zf.infolist():
+            for info in zf.infolist():
 
-            if info.flag_bits & 0x1 or getattr(info, 'is_encrypted', False):
-                return True
-            else:
-                return False
+                if info.flag_bits & 0x1 or getattr(info, 'is_encrypted', False):
+                    return True
+                else:
+                    return False
+    except:
+        return None
 
 def get_hostname_from_filename(fullpath):
     ''' 
@@ -485,7 +489,7 @@ def get_password_from_env_or_prompt(source_name, unextracted_zip):
 
     return None, None
 
-def list_zipfiles(managers, source_name, Config):
+def list_zipfiles(managers, Config):
     '''
     List and filter ZIP files from a configured data source.
 
@@ -496,8 +500,6 @@ def list_zipfiles(managers, source_name, Config):
     Args:
         managers: Container holding authenticated service managers
             for the enabled data sources.
-        source_name (str): Name of the data source to query.
-            Supported values: 'blob', 'sas', 'sftp', 'localfolder'.
         Config: contains inputparameters from .env file
 
     Returns:
@@ -505,30 +507,42 @@ def list_zipfiles(managers, source_name, Config):
         prefix and suffix.
     '''
 
-    log.info(f'Attempting to find zip files in datasource: {source_name}')
+    log.info(f'Attempting to find zip files in datasources set in .env configuration file')
+    
+    all_files = { }
 
-    try:
+    if managers.blob:
+        try:
+            all_files['blob'] = managers.blob.list_blobs(Config.blob_container_input)
+        except Exception as e:
+            log.error(f'Could not list files from "blob". Error: {e}')
 
-        if source_name == 'blob':
+    if managers.sas:
+        try:
+            all_files['sas'] = managers.sas.list_blobs_from_sas()
+        except Exception as e:
+            log.error(
+                'Could not list files from "sas". '
+                'Ensure you have set "List" permissions when generating the SAS key. '
+                f'Error: {e}'
+            )
 
-            all_files = managers.blob.list_blobs(Config.blob_container_input)
+    if managers.sftp:
+        try:
+            all_files['sftp'] = managers.sftp.list_files_recursive('/')
+        except Exception as e:
+            log.error(f'Could not list files from "sftp". Error: {e}')
 
-        if source_name == 'sas':
-
-            all_files = managers.sas.list_blobs_from_sas()
-
-        if source_name == 'sftp':
-
-            all_files = managers.sftp.list_files_recursive('/')
-
-        if source_name == 'localfolder':
-
-            all_files = list_files_in_directory(Config.var_localfolder_directory)
-
-    except:
-        log.error(f'Could not list files in: {source_name}. Was this source enabled in .env file?')
-        return []
+    if Config.var_localfolder_enabled:
+        try:
+            all_files['localfolder'] = list_files_in_directory(Config.var_localfolder_directory)
+        except Exception as e:
+            log.error(f'Could not list files from "localfolder". Error: {e}')
 
     filtered_files = filter_triage_packages(all_files, Config.var_zipfile_prefix, Config.var_zipfile_suffix)
+
+    for source, files in filtered_files.items():
+
+        log.info(f'Found {len(files)} zip files in {source}.')
 
     return filtered_files

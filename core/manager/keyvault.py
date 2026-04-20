@@ -43,10 +43,49 @@ class KeyvaultManager:
             log.info(f'Authenticating with Azure Key Vault: {self.vault_url}')
             self.client = SecretClient(vault_url=self.vault_url, credential=self.credential)
             log.info('Successfully authenticated.')
+            
+            self.verify_secret_read_permissions()
+
             return True
         except Exception as e:
             log.error(f'Authentication with Key Vault failed: {e}')
             return False
+
+    def verify_secret_read_permissions(self):
+        '''
+        Verify that the authenticated credential has permission to read secrets
+        from Azure Key Vault.
+        
+        Attempts to list secrets in the vault to confirm read access. This is a
+        lightweight permission check that does not retrieve secret values.
+        
+        Returns:
+            bool: True if read permissions are confirmed, otherwise False.
+        '''
+
+        try:
+            log.info(f'Verifying secret read permissions for vault: {self.vault_url}')
+            
+            # Attempt to list secrets — requires 'secrets/list' permission.
+            secrets = self.client.list_properties_of_secrets()
+            next(iter(secrets), None)
+            
+            log.info('Secret read permissions verified successfully.')
+            return True
+            
+        except HttpResponseError as e:
+            if e.status_code == 403:
+                log.error(
+                    f'Permission denied: credential lacks secret read access '
+                    f'to vault "{self.vault_url}". '
+                    f'Ensure the identity has a Key Vault Secrets User role or '
+                    f'an access policy granting "list" and "get" permissions. '
+                    f'Details: {e.message}'
+                )
+            else:
+                log.error(f'HTTP error while verifying permissions: {e}')
+            return False
+
 
     def read_creds(self, secret_name):
         '''

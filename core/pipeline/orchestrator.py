@@ -33,7 +33,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
 
     Args:
         managers: Container holding authenticated service managers.
-        source_name (str): Data source identifier (e.g. 'blob', 'sas', 'sftp', 'localfolder').
+        source_name (str): Contains the source: blob, sftp, etc
         zipfile (str): Zipfile path or remote identifier depending on source.
         sessionid (str): Session identifier for the current run.
         message: Queue message object associated with this zipfile (if applicable).
@@ -95,7 +95,6 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
 
     zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
 
-
     # ----------------------------------------------------------------------
     # Post-process raw artifacts and upload it's results (json)
     # ----------------------------------------------------------------------
@@ -103,7 +102,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, message):
                                                   extracted_zip, 
                                                   zipfilecontent,
                                                   results)
-
+    
     # ----------------------------------------------------------------------
     # Extract jsons from zip and upload
     # ----------------------------------------------------------------------
@@ -292,7 +291,7 @@ def extract_all_json_from_zip_and_upload(managers,
         if upload_dict.get('ignored_upload'):
             results['uploads'].append(upload_dict)
             continue
-        
+
         extracted_file = extract_single_file(extracted_zip, file_in_zip, extract_path, zip_password)
 
         if not extracted_file:
@@ -319,6 +318,14 @@ def extract_all_json_from_zip_and_upload(managers,
             
             if file_is_split:
                 delete_file(extracted_file)
+
+        if not hostname:
+            
+            upload_dict.update(_upload_file_to_adx(managers, extracted_file))
+
+            results['uploads'].append(upload_dict)
+
+            delete_file(extracted_file)
 
     return results
 
@@ -448,7 +455,7 @@ def _send_webhook_message(webhook_url, results):
         
         send_webhook(webhook_url, message)
 
-def init(source_name, sessionid):
+def init(sessionid):
     '''
     Initialize the pipeline runtime and authenticate all required services.
 
@@ -456,8 +463,6 @@ def init(source_name, sessionid):
     and authenticates all service managers needed for the selected data source.
 
     Args:
-        source_name (str): Name of the data source being processed
-            (e.g. 'blob', 'sas', 'sftp', 'localfolder').
         sessionid (str): Unique identifier for the current pipeline run.
 
     Returns:
@@ -472,10 +477,10 @@ def init(source_name, sessionid):
     except Exception as e:
         log.error(f'Could not create directory: {e}')
 
-    log.info(f'Starting {source_name}2adx pipeline...')
+    log.info(f'Starting pipeline...')
     log.info(f'Session id: {sessionid}')
 
-    auth = Authenticator(Config, source_name)
+    auth = Authenticator(Config)
 
     managers = auth.authenticate_all()
 

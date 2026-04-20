@@ -42,7 +42,7 @@ class AuthManagers:
 
 
 class Authenticator:
-    def __init__(self, config, source) -> AuthManagers:
+    def __init__(self, config) -> AuthManagers:
         '''
         Initialize the Authenticator.
 
@@ -50,15 +50,11 @@ class Authenticator:
         for authenticating all enabled services.
 
         Args:
-            config: Configuration object returned`.
-            source (str): Identifier of the data source to use (e.g. 'sas',
-                'sftp', 'blob'). Used to conditionally enable source-specific
-                managers.
+            config: Configuration object returned`
         '''
 
         self.azure_manager = AzureManager()
         self.config = config
-        self.source = source
 
         self.blob_logtable_uri          = config.blob_logtable_uri
         self.blob_logtable_name         = config.blob_logtable_name
@@ -106,7 +102,7 @@ class Authenticator:
             adx=self.authenticate_adx() if self.config.adx_cluster_enabled else False,
             sftp=self.authenticate_sftp() if self.config.sftp_enabled else False,
             blob=self.authenticate_blob() if self.config.blob_storageaccount_enabled else False,
-            sas=self.authenticate_blob_sas() if self.source == 'sas' else False
+            sas=self.authenticate_blob_sas() if self.config.blob_storageaccount_sas_enabled else False
         )
 
     def authenticate_azure(self):

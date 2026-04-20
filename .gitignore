@@ -422,6 +422,7 @@ blog.md
 #.env file
 .env
 .env*
+!.env_example
 
 #MacFile
 .DS_Store
@@ -433,4 +434,8 @@ core.egg-info
 *.json
 *.csf
 
+cycas.egg-info/*
+
 README-GITUSAGE.md
+
+build/*

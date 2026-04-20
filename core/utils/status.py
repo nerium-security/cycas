@@ -37,7 +37,7 @@ class Status:
     FINISHED = 'finished'
     UPLOADDISABLED = 'uploaddisabled'
 
-def update_status_in_log(managers, Config, processing_status, start, status_data):
+def update_status_in_log(managers, Config, processing_status, starttime, status_data):
     '''
     Update the processing status in the Table Storage log.
 
@@ -48,13 +48,12 @@ def update_status_in_log(managers, Config, processing_status, start, status_data
         managers: Container holding authenticated service managers.
         Config: variables defined in .env file
         processing_status (str): New status value to store.
-        start (datetime): Start time used by the table manager to compute duration.
         status_data (dict): Metadata used to build the log entity.
     '''
 
     if Config.blob_logtable_enabled:
 
-        managers.table.update_status_in_log(processing_status, start, status_data)
+        managers.table.update_status_in_log(processing_status, starttime, status_data)
 
 def write_logentry_if_new(managers, Config, processing_status, status_data):
     '''
@@ -159,12 +158,15 @@ def upload_detailed_status_to_adx(managers, Config, results, tablename):
 
         dict_status = {
 
-            'postprocessing': tablename + '_postprocessing',
             'uploads': tablename + '_uploads',
             'summary': tablename + '_summary'
 
         }
-        
+
+        if results.get('postprocessing'):
+
+            dict_status['postprocessing'] = tablename + '_postprocessing'
+
         for key, tablename in dict_status.items():
             results_prepared = _prepare_dictionary_for_upload_to_adx(results, key)
             managers.adx.upload_detailed_status(results_prepared, Config, tablename)
@@ -187,11 +189,11 @@ def add_summary_info_to_status(results, zipfile, sessionid, source_name, start):
     Returns:
         dict: Updated results dictionary.
     '''
-    
+
     results['summary'].append({
         'zipfile_basename': os.path.basename(zipfile),
         'zipfile_fullpath': zipfile,
-        'zipfile_size': os.path.getsize(zipfile),
+        'zipfile_size': os.path.getsize(zipfile) if os.path.exists(zipfile) else 0,
         'sessionid': sessionid,
         'uploadid': 'id' + generate_sessionid(),
         'source_name': source_name,
