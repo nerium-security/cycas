@@ -26,12 +26,6 @@ Idea:
 | `sftp` | SFTP server |
 | `localfolder` | Local directory on the machine running the script |
 
-## How collected ZIPs are processed offline
-
-Velociraptor artifacts are designed to run against a live Windows system. To run them against a collected ZIP containing raw evidence instead, Cycas generates a remapping file, which is a YAML configuration that tells Velociraptor how to treat the ZIP's contents as if they were a live machine.
-
-The remapping file is dynamically generated against each ZIP file using the YAML configuration that is found here: [Custom.Generic.Utils.ZipRemap.yaml](velociraptor/artifacts/Custom.Generic.Utils.ZipRemap.yaml)
-
 
 ### Supported Artefacts
  
@@ -69,49 +63,6 @@ The following Velociraptor artifacts work as well, but it required (in some case
 | `Custom.Windows.Registry.RecentDocs` | Recently opened documents from the registry |
 | `Custom.Windows.Registry.UserAssist` | Programs run by each user, with run counts, from UserAssist registry keys |
 | `Custom.Windows.Sys.Users` | Local user accounts |
-
-
-## Setting up the automated ingestion pipeline
-
-This section walks you through the setup of 
-
-
-- Create ADX 
-    - create a database named 'ir'. This is set via the variable ADX_DATABASE_NAME in .env
-    - provide a user with permissions AllDatabaseAdmin
-- add all urls to .env config file
-    - ADX_CLUSTER_URI
-    - ADX_CLUSTER_INGESTION_URI 
-    - BLOB_LOGTABLE_URI
-    - BLOB_STORAGEACCOUNT_URI
-    - BLOB_QUEUE_URL
-    - KEYVAULT_URL 
-- Install sharedlib (pip install ./sharedlib)
-
-## Instruction for ad-hoc analysis
-
-For ad-hoc analysis on a local system, you can run the following script to post-process ZIPs and output the results:
-
-`python3 scripts/standalone/process_with_velo.py -i /opt/collected_evidence/Collection-DPP000458-2026-02-03T20_35_20Z.zip`
-
-By-default it outputs the results to the same folder 
-
-- Windows.EventLogs.Evtx.csv
-- Windows.NTFS.MFT.csv
-- Custom.Windows.Registry.UserAssist.csv
-- etc
-
-
-### Building a standalone executable
-
-To distribute the post-processing script as a standalone executable (no Python required):
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --collect-all core scripts/standalone/process_with_velo.py
-```
-
-The executable will be available in the `dist/` folder.
 
 
 
