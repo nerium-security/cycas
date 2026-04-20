@@ -432,3 +432,5 @@ core.egg-info
 */build/*
 *.json
 *.csf
+
+README-GITUSAGE.md
