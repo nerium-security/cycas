@@ -1,5 +1,5 @@
-Standalone
-==========
+Post-processing raw artifacts
+=============================
 
 The Python script :file:`scripts/standalone/process_with_velo.py` post-processes ZIP files
 containing raw artifact files collected with Velociraptor. For each ZIP file

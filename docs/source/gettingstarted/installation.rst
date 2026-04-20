@@ -83,6 +83,7 @@ To configure the script to locate the ZIP files in a Blob containing forensic pa
 
  .. code-block:: ini
  
+   BLOB_STORAGEACCOUNT_SAS_ENABLED=true
    BLOB_STORAGEACCOUNT_SAS=https://<resourcename>.blob.core.windows.net/uploads?sp=racwl&st=2026-04-01T07:45:25Z&se=2026-04-15T16:00:25Z&spr=https&sv=2024-11-04&sr=c&sig=<OBFUSCATED>
 
 To configure the script to track the status (mandatory):
