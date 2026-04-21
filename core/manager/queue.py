@@ -11,10 +11,10 @@ Azure Queue Storage message requirements.
 
 from azure.storage.queue import QueueClient, QueueMessage
 from azure.core.exceptions import AzureError
+from core.utils.queue import encode_messsage
 from typing import Optional, List
 from datetime import datetime
 import logging as log
-import base64
 import json
 import uuid
 
@@ -181,12 +181,7 @@ class QueueManager:
 
         messages = self.queue_client.receive_messages(messages_per_page=max_messages)
 
-        undecoded_messages = []
-        for message in messages:
-
-            undecoded_messages.append(message)
-
-        return undecoded_messages
+        return list(messages)
 
     def delete_message(self, message):
         '''
@@ -235,45 +230,3 @@ class QueueManager:
         except AzureError as e:
             log.info(f'Failed to send message to queue: {e}')
             return False
-
-def decode_message(message):
-    '''
-    Decode a Base64-encoded queue message.
-
-    Args:
-        message (dict): Queue message containing a Base64-encoded
-            'content' field.
-
-    Returns:
-        str: Decoded message content as an ASCII string.
-    '''
-
-    message_content = message.get('content')
-    message_content_decoded = base64.b64decode(message_content)
-    message_content_decoded_ascii = message_content_decoded.decode('ascii')
-
-    return message_content_decoded_ascii
-
-def encode_messsage(zipfile: str, source_name: str):
-    '''
-    Encode a message for sending to Azure Queue Storage.
-
-    The message content is serialized as JSON and Base64-encoded
-    to comply with Azure Queue Storage requirements.
-
-    Args:
-        zipfile (str): Zipfile name to include in the message.
-        source_name (str): Source name to include in the message.
-
-    Returns:
-        tuple[str, str]: Tuple containing:
-            - Base64-encoded message string.
-            - Original JSON message content.
-    '''
-
-    content = json.dumps({'triagepackage': zipfile, 'source_name' : source_name})
-    message_bytes = content.encode('utf-8')
-    base64_bytes = base64.b64encode(message_bytes)
-    message_output = base64_bytes.decode('utf-8')
-
-    return message_output, content

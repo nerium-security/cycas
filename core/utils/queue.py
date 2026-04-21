@@ -13,8 +13,8 @@ status tracking to support idempotent processing.
 
 from core.utils.config import load_config
 from core.utils.status import Status, update_status_in_log
-from core.manager.queue import decode_message
 from datetime import datetime
+import base64
 import logging as log
 import json
 import os
@@ -72,35 +72,6 @@ def send_to_queue(managers, Config, source_name, zipfile, status_data):
     update_status_in_log(managers, Config, Status.QUEUED, start, status_data)
 
     return send_to_queue
-
-def get_message_in_queue(message):
-    '''
-    Decode and extract fields from a queue message.
-
-    Decodes the Base64-encoded queue message payload, parses it as JSON,
-    and extracts the source name and triage package name.
-
-    Args:
-        message: Queue message object as received from the queue client.
-
-    Returns:
-        tuple[str | None, str | None]: Tuple containing:
-            - source_name
-            - triagepackage
-        Returns (None, None) if decoding or parsing fails.
-    '''
-
-    try:
-        decoded_message = json.loads(decode_message(message))
-
-        triagepackage = decoded_message.get('triagepackage')
-        source_name = decoded_message.get('source_name')
-
-        return source_name, triagepackage
-    
-    except Exception as e:
-        log.error(f'Could not load message from queue: {e}')
-        return None, None
     
 def update_status_unqueued(managers, Config, zipfile, start, status_data):
     '''
@@ -155,3 +126,47 @@ def is_message_not_yet_processing(managers, zipfile) -> bool:
             return False
     else:
         return
+
+def decode_message(message) -> dict:
+    '''
+    Decode a queue message from either an Azure Function trigger
+    or the Azure Storage Queue SDK.
+
+    Args:
+        message: QueueMessage from azure.functions or azure.storage.queue.
+
+    Returns:
+        dict: Decoded message content.
+    '''
+    if hasattr(message, 'get_body'):
+        # func.QueueMessage (from Azure Function trigger)
+        content = message.get_body().decode('utf-8')
+    else:
+        # azure.storage.queue.QueueMessage (from SDK receive_messages)
+        content = base64.b64decode(message.content).decode('utf-8')
+
+    return json.loads(content)
+
+def encode_messsage(zipfile: str, source_name: str):
+    '''
+    Encode a message for sending to Azure Queue Storage.
+
+    The message content is serialized as JSON and Base64-encoded
+    to comply with Azure Queue Storage requirements.
+
+    Args:
+        zipfile (str): Zipfile name to include in the message.
+        source_name (str): Source name to include in the message.
+
+    Returns:
+        tuple[str, str]: Tuple containing:
+            - Base64-encoded message string.
+            - Original JSON message content.
+    '''
+
+    content = json.dumps({'triagepackage': zipfile, 'source_name' : source_name})
+    message_bytes = content.encode('utf-8')
+    base64_bytes = base64.b64encode(message_bytes)
+    message_output = base64_bytes.decode('utf-8')
+
+    return message_output, content

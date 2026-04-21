@@ -5,7 +5,7 @@ from core.utils.zip import list_zipfiles
 from core.utils.status import Status, write_logentry_if_new, determine_if_needs_processing, add_summary_info_to_status
 from core.utils.config import load_config
 from core.utils.summary import define_results_dict
-from core.utils.queue import send_to_queue, get_message_in_queue, update_status_unqueued
+from core.utils.queue import send_to_queue, update_status_unqueued, decode_message, encode_messsage
 from typing import Optional
 from datetime import datetime
 
@@ -43,7 +43,7 @@ def run_azurefunction_watcher() -> None:
 
 
 def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None) -> None:
-    
+
     sessionid = setup_logging(Config.var_loglocation, Config.var_loglevel)
     managers = init(sessionid)
 
@@ -57,9 +57,14 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
     for message in messagequeue:
 
         if message.dequeue_count > Config.var_max_retry:
+            
             managers.queue.delete_message(message)
+            continue
 
-        source_name, zipfile = get_message_in_queue(message)
+        decoded_message = decode_message(message)
+        
+        zipfile = decoded_message.get('triagepackage')
+        source_name = decoded_message.get('source_name')
 
         start = datetime.now()
         results = define_results_dict()
