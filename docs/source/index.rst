@@ -36,3 +36,12 @@ Cycas is a solution for post-processing raw forensic artefacts collected with `V
    /reference/pipelineinternals
 
    /reference/supportedartifacts
+
+.. toctree::
+   :maxdepth: 2
+   :hidden:
+   :caption: Project
+
+   /project/faq
+
+   /project/aboutus
