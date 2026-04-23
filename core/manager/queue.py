@@ -13,9 +13,7 @@ from azure.storage.queue import QueueClient, QueueMessage
 from azure.core.exceptions import AzureError
 from core.utils.queue import encode_messsage
 from typing import Optional, List
-from datetime import datetime
 import logging as log
-import json
 import uuid
 
 log = log.getLogger(__name__)
@@ -37,7 +35,7 @@ class QueueManager:
         self.queue_name = queue_name
         self.queue_client: Optional[QueueClient] = None
 
-    def authenticate(self) -> bool:
+    def authenticate(self, verify_enabled) -> bool:
         '''
         Authenticate and initialize the Azure Queue client.
 
@@ -53,16 +51,21 @@ class QueueManager:
             log.info(f'Authenticating with storage queue: {queue_endpoint}')
             self.queue_client = QueueClient(self.queue_url, self.queue_name, self.credential)
 
-            # Test permissions
-            permissions_ok = self.check_permissions()
+            if verify_enabled:
 
-            if permissions_ok:
-                # create the queue
-                self.create_queue_if_not_exists(self.queue_name)
+                # Test permissions
+                permissions_ok = self.check_permissions()
 
-                log.info(f'Successfully authenticated.')
+                if permissions_ok:
+                    # create the queue
+                    self.create_queue_if_not_exists(self.queue_name)
+
+                    log.info(f'Successfully authenticated.')
                 
-                return True
+            else:
+                log.info('Skipping permissions check for Azure Queue as configured in .env with VAR_VERIFY_ENABLED.')
+
+            return True
         except AzureError as e:
             log.info('Authentication failed.')
             log.debug(f'Error: {e}')

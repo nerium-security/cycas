@@ -40,7 +40,7 @@ class TablestorageManager:
         self.computername = self.get_computername()
         self.partitionkey = 'pipeline-uploads'
 
-    def authenticate(self):
+    def authenticate(self, verify_enabled):
         '''
         Authenticate to Azure Table Storage and create the log table if it
         does not already exists.
@@ -59,8 +59,10 @@ class TablestorageManager:
             log.error(f'Could not authenticate. Error: {e}')
 
         self.create_table_if_not_exists()
-
-        self.has_write_access()        
+        if verify_enabled:
+            self.has_write_access()
+        else:
+            log.info('Skipping write access check for Azure Storage Account Table as configured in .env with VAR_VERIFY_ENABLED.')
 
     def create_table_if_not_exists(self) -> bool:
         '''

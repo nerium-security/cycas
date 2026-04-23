@@ -45,7 +45,7 @@ class AdxManager:
         self.kusto_client = None
         self.kusto_queued = None
 
-    def authenticate(self):
+    def authenticate(self, verify_enabled):
         '''
         Authenticate to Azure Data Explorer and initialize clients.
 
@@ -72,6 +72,12 @@ class AdxManager:
             self.kusto_queued = QueuedIngestClient(kcsb_queued)
 
             log.info('Successfully authenticated.')
+
+            if verify_enabled:
+                self.query_db_test()
+            else:
+                log.info('Skipping query check for Azure Data Explorer as configured in .env with VAR_VERIFY_ENABLED')
+
             return True
 
         except Exception as e:

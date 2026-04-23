@@ -24,7 +24,7 @@ class KeyvaultManager:
         self.vault_url = vault_url
         self.credentials = None
         
-    def authenticate(self, credential):
+    def authenticate(self, credential, verify_enabled):
         '''
         Authenticate with Azure Key Vault.
 
@@ -43,8 +43,10 @@ class KeyvaultManager:
             log.info(f'Authenticating with Azure Key Vault: {self.vault_url}')
             self.client = SecretClient(vault_url=self.vault_url, credential=self.credential)
             log.info('Successfully authenticated.')
-            
-            self.verify_secret_read_permissions()
+            if verify_enabled:
+                self.verify_secret_read_permissions()
+            else:
+                log.info('Skipping key vault read as configured in .env with VAR_VERIFY_ENABLED.')
 
             return True
         except Exception as e:

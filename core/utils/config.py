@@ -72,6 +72,7 @@ class Config(BaseSettings):
     var_localdevice_concurrency: int
     var_artifact_summary_filename: str
     var_master_summary_filename: str
+    var_verify_enabled: bool
     velociraptor_enabled: bool
     velociraptor_url: str
     velociraptor_remappingdir: str
