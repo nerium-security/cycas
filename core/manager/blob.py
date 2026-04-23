@@ -244,8 +244,8 @@ class BlobManager:
 
         blob_client = self.get_client(container_name, blob_name)
         
-        temp_dir = os.path.join(download_path, blob_name)
-        p = Path(temp_dir)
+        temp_dir = Path(os.path.join(download_path, blob_name))
+        temp_dir.parent.mkdir(parents=True, exist_ok=True)
 
         try:
             with open(temp_dir, 'wb') as download_file:
