@@ -7,6 +7,7 @@ create containers, delete blobs, and initiate server-side blob copies.
 '''
 
 from azure.storage.blob import BlobServiceClient
+from pathlib import Path
 import logging as log
 import os
 
@@ -244,6 +245,7 @@ class BlobManager:
         blob_client = self.get_client(container_name, blob_name)
         
         temp_dir = os.path.join(download_path, blob_name)
+        p = Path(temp_dir)
 
         try:
             with open(temp_dir, 'wb') as download_file:
@@ -252,5 +254,6 @@ class BlobManager:
             log.info(f'Successfully downloaded blob {blob_name} from container {container_name} to {download_path}')
             return temp_dir
         except Exception as e:
+            
             log.error(f'Failed to download blob {blob_name} from container {container_name}. Error: {str(e)}', exc_info=True)
             return False

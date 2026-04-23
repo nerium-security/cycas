@@ -11,7 +11,6 @@ These helpers integrate queue operations with Table Storage–based
 status tracking to support idempotent processing.
 '''
 
-from core.utils.config import load_config
 from core.utils.status import Status, update_status_in_log
 from datetime import datetime
 import base64

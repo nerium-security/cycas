@@ -16,9 +16,12 @@ log = logging.getLogger(__name__)
 def run_azurefunction_watcher() -> None:
 
     sessionid = setup_logging(Config.var_loglocation, Config.var_loglevel)
-    managers = init(sessionid)
-    zipfiles = list_zipfiles(managers, Config)
 
+    Config.adx_cluster_enabled = False
+    
+    managers = init(sessionid, Config)
+    zipfiles = list_zipfiles(managers, Config)
+    
     final = []
 
     for source_name, zipfiles in zipfiles.items():
@@ -45,7 +48,7 @@ def run_azurefunction_watcher() -> None:
 def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None) -> None:
 
     sessionid = setup_logging(Config.var_loglocation, Config.var_loglevel)
-    managers = init(sessionid)
+    managers = init(sessionid, Config)
 
     if mode == 'manual':
         messagequeue = managers.queue.receive_messages()
@@ -74,7 +77,7 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
 
         try:
 
-            run_zip_processor(managers, source_name, zipfile, sessionid, message)
+            run_zip_processor(managers, source_name, zipfile, sessionid, Config)
 
         except Exception as e:
             log.error(
@@ -85,7 +88,7 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
 def run_localdevice() -> None:
 
     sessionid = setup_logging(Config.var_loglocation, Config.var_loglevel)
-    managers = init(sessionid)
+    managers = init(sessionid, Config)
     zipfiles = list_zipfiles(managers, Config)
     
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -100,7 +103,7 @@ def run_localdevice() -> None:
                 source_name,
                 zipfile,
                 sessionid,
-                None,
+                Config,
             )
             for source_name, zipfiles in zipfiles.items()
             for zipfile in zipfiles
