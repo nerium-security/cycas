@@ -60,12 +60,12 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
     for message in messagequeue:
 
         if message.dequeue_count > Config.var_max_retry:
-            
-            managers.queue.delete_message(message)
+            if mode == 'manual':
+                managers.queue.delete_message(message)
             continue
 
         decoded_message = decode_message(message)
-        
+
         zipfile = decoded_message.get('triagepackage')
         source_name = decoded_message.get('source_name')
 
@@ -78,7 +78,8 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
         try:
 
             run_zip_processor(managers, source_name, zipfile, sessionid, Config)
-            managers.queue.delete_message(message)
+            if mode == 'manual':
+                managers.queue.delete_message(message)
 
         except Exception as e:
             log.error(

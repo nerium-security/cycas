@@ -143,13 +143,15 @@ def download_velociraptor(binary, url):
         response = requests.get(url, stream=True)
         response.raise_for_status()
 
-        with open(binary, 'wb') as f:
+        tmp = binary + '.tmp'
+        with open(tmp, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
-        
-        set_executepermissions(binary)
-        
+
+        set_executepermissions(tmp)
+        os.replace(tmp, binary)
+
         log.info(f'Downloaded {url} -> {binary}')
     except Exception as e:
         log.error(f'Could not download {url} to {binary}. Error: {e}')
