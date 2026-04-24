@@ -78,6 +78,7 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
         try:
 
             run_zip_processor(managers, source_name, zipfile, sessionid, Config)
+            managers.queue.delete_message(message)
 
         except Exception as e:
             log.error(

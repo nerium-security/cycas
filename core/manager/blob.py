@@ -252,7 +252,7 @@ class BlobManager:
                 blob_client.download_blob(max_concurrency=4).readinto(download_file)
 
             log.info(f'Successfully downloaded blob {blob_name} from container {container_name} to {download_path}')
-            return temp_dir
+            return str(temp_dir)
         except Exception as e:
             
             log.error(f'Failed to download blob {blob_name} from container {container_name}. Error: {str(e)}', exc_info=True)
