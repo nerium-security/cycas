@@ -95,11 +95,11 @@ class SasManager:
                 os.makedirs(os.path.dirname(blob_path), exist_ok=True)
 
                 with open(blob_path, 'wb') as file:
-                    stream = self._container_client.download_blob(blob.name)
-                    file.write(stream.readall())
+                    self._container_client.download_blob(blob.name, max_concurrency=4).readinto(file)
 
                 log.info(f'Downloaded blob: {blob.name}')
-                return blob_path
+
+            return blob_path
         except Exception as e:
             log.error(f'Error downloading blobs: {e}')
 
@@ -127,8 +127,7 @@ class SasManager:
             blob_client = self._container_client.get_blob_client(zip)
 
             with open(blob_path, 'wb') as file:
-                stream = blob_client.download_blob()
-                file.write(stream.readall())
+                blob_client.download_blob(max_concurrency=4).readinto(file)
             
             log.info(f'Downloaded blob: {blob_path}')
 

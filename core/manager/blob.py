@@ -246,10 +246,10 @@ class BlobManager:
         
         temp_dir = Path(os.path.join(download_path, blob_name))
         temp_dir.parent.mkdir(parents=True, exist_ok=True)
-
+        log.info(f'Starting to download blob "{blob_name}" from storage account.')
         try:
             with open(temp_dir, 'wb') as download_file:
-                download_file.write(blob_client.download_blob().readall())
+                blob_client.download_blob(max_concurrency=4).readinto(download_file)
 
             log.info(f'Successfully downloaded blob {blob_name} from container {container_name} to {download_path}')
             return temp_dir
