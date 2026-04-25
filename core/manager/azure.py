@@ -6,7 +6,8 @@ selection via stdin for subscription, cluster, and database selection.
 '''
 
 from azure.identity import DefaultAzureCredential
-from azure.mgmt.resource import SubscriptionClient
+from azure.mgmt.resource import SubscriptionClient, ResourceManagementClient
+from azure.mgmt.resource.resources.models import ResourceGroup
 from azure.mgmt.kusto import KustoManagementClient
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 from azure.core.exceptions import ClientAuthenticationError
@@ -281,3 +282,60 @@ class AzureManager:
                     print(f'Please enter a number between 1 and {len(databases)}.')
             except ValueError:
                 print('Invalid input. Please enter a number.')
+
+    def list_locations(self, subscription_id):
+        '''
+        List all Azure regions available to a subscription, sorted by display name.
+
+        Args:
+            subscription_id (str): Azure subscription ID.
+
+        Returns:
+            list[dict]: List of dicts with 'name' (slug) and 'display_name' keys.
+        '''
+
+        client = SubscriptionClient(self.credential)
+        locations = [
+            {'name': loc.name, 'display_name': loc.display_name}
+            for loc in client.subscriptions.list_locations(subscription_id)
+        ]
+        return sorted(locations, key=lambda l: l['display_name'])
+
+    def list_resource_groups(self, subscription_id):
+        '''
+        List all resource groups in a subscription.
+
+        Args:
+            subscription_id (str): Azure subscription ID.
+
+        Returns:
+            list[dict]: List of dicts with 'name' and 'location' keys.
+        '''
+
+        client = ResourceManagementClient(self.credential, subscription_id)
+        return [
+            {'name': rg.name, 'location': rg.location}
+            for rg in client.resource_groups.list()
+        ]
+
+    def create_resource_group(self, subscription_id, resource_group, location):
+        '''
+        Create a resource group.
+
+        Args:
+            subscription_id (str): Azure subscription ID.
+            resource_group (str): Resource group name to create.
+            location (str): Azure region (e.g. "westeurope").
+
+        Returns:
+            ResourceGroup: The created resource group object.
+        '''
+
+        client = ResourceManagementClient(self.credential, subscription_id)
+        log.info(f"Creating resource group '{resource_group}' in '{location}'...")
+        result = client.resource_groups.create_or_update(
+            resource_group,
+            ResourceGroup(location=location)
+        )
+        log.info(f"Resource group '{resource_group}' ready.")
+        return result

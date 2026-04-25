@@ -7,6 +7,8 @@ create containers, delete blobs, and initiate server-side blob copies.
 '''
 
 from azure.storage.blob import BlobServiceClient
+from azure.mgmt.storage import StorageManagementClient
+from azure.mgmt.storage.models import StorageAccountCreateParameters, Sku, Kind
 from pathlib import Path
 import logging as log
 import os
@@ -257,3 +259,33 @@ class BlobManager:
             
             log.error(f'Failed to download blob {blob_name} from container {container_name}. Error: {str(e)}', exc_info=True)
             return False
+
+    def provision_storage_account(self, subscription_id, resource_group, location, account_name):
+        '''
+        Create a storage account if it does not already exist.
+
+        Args:
+            subscription_id (str): Azure subscription ID.
+            resource_group (str): Resource group name.
+            location (str): Azure region.
+            account_name (str): Storage account name (3-24 lowercase alphanumeric).
+
+        Returns:
+            StorageAccount: The created or existing storage account object.
+        '''
+
+        mgmt = StorageManagementClient(self.credential, subscription_id)
+
+        log.info(f"Provisioning storage account '{account_name}'...")
+        result = mgmt.storage_accounts.begin_create(
+            resource_group,
+            account_name,
+            StorageAccountCreateParameters(
+                sku=Sku(name='Standard_LRS'),
+                kind=Kind.STORAGE_V2,
+                location=location,
+                allow_blob_public_access=False,
+            )
+        ).result()
+        log.info(f"Storage account '{account_name}' ready.")
+        return result
