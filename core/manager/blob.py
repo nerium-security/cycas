@@ -276,6 +276,13 @@ class BlobManager:
 
         mgmt = StorageManagementClient(self.credential, subscription_id)
 
+        try:
+            existing = mgmt.storage_accounts.get_properties(resource_group, account_name)
+            log.info(f"Storage account '{account_name}' already exists, skipping creation.")
+            return existing
+        except Exception:
+            pass
+
         log.info(f"Provisioning storage account '{account_name}'...")
         result = mgmt.storage_accounts.begin_create(
             resource_group,

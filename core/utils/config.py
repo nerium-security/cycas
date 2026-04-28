@@ -68,7 +68,6 @@ class Config(BaseSettings):
     var_zipfile_suffix: str
     var_location_ignorelist: str
     var_max_retry: int
-    var_verifyuploads: bool
     var_loglevel: str
     var_localdevice_concurrency: int
     var_artifact_summary_filename: str

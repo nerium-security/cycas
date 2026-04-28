@@ -51,17 +51,16 @@ class QueueManager:
             log.info(f'Authenticating with storage queue: {queue_endpoint}')
             self.queue_client = QueueClient(self.queue_url, self.queue_name, self.credential)
 
+            self.create_queue_if_not_exists(self.queue_name)
+
             if verify_enabled:
 
                 # Test permissions
                 permissions_ok = self.check_permissions()
 
                 if permissions_ok:
-                    # create the queue
-                    self.create_queue_if_not_exists(self.queue_name)
-
                     log.info(f'Successfully authenticated.')
-                
+
             else:
                 log.info('Skipping permissions check for Azure Queue as configured in .env with VAR_VERIFY_ENABLED.')
 

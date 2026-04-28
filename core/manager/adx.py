@@ -11,6 +11,7 @@ import json
 import time
 import os
 import logging as log
+from azure.core.exceptions import ResourceNotFoundError
 import pandas as pd
 import fileinput
 import sys
@@ -24,7 +25,7 @@ from azure.kusto.data.exceptions import KustoApiError
 from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel
 from azure.kusto.ingest.status import KustoIngestStatusQueues
 from azure.mgmt.kusto import KustoManagementClient
-from azure.mgmt.kusto.models import Cluster, AzureSku, ReadWriteDatabase, DatabasePrincipalAssignment
+from azure.mgmt.kusto.models import Cluster, AzureSku, ReadWriteDatabase, ClusterPrincipalAssignment
 
 log = log.getLogger(__name__)
 
@@ -758,12 +759,28 @@ class AdxManager:
         '''
 
         mgmt = KustoManagementClient(self.credential, subscription_id)
-        cluster = Cluster(location=location, sku=AzureSku(name=sku_name, capacity=1, tier=sku_tier))
-
-        log.info(f"Provisioning ADX cluster '{cluster_name}' (this may take several minutes)...")
-        result = mgmt.clusters.begin_create_or_update(resource_group, cluster_name, cluster).result()
-        log.info(f"Cluster ready: {result.uri}")
         self._mgmt = mgmt
+
+        try:
+            existing = mgmt.clusters.get(resource_group, cluster_name)
+            if existing.state in ('Running', 'Starting'):
+                log.info(f"Cluster '{cluster_name}' already exists ({existing.state}), skipping creation.")
+                return existing
+        except Exception:
+            pass
+
+        cluster = Cluster(location=location, sku=AzureSku(name=sku_name, capacity=1, tier=sku_tier))
+        log.info(f"Provisioning ADX cluster '{cluster_name}' (this may take several minutes)...")
+        for attempt in range(1, 4):
+            try:
+                result = mgmt.clusters.begin_create_or_update(resource_group, cluster_name, cluster).result()
+                break
+            except Exception as e:
+                if attempt == 3 or 'InternalServerError' not in str(e):
+                    raise
+                log.warning(f"Transient error on attempt {attempt}/3, retrying in 30 s: {e}")
+                import time; time.sleep(30)
+        log.info(f"Cluster ready: {result.uri}")
         return result
 
     def provision_database(self, resource_group, cluster_name, database_name, location):
@@ -780,6 +797,14 @@ class AdxManager:
             ReadWriteDatabase: The created database object.
         '''
 
+        try:
+            existing = self._mgmt.databases.get(resource_group, cluster_name, database_name)
+            if existing is not None:
+                log.info(f"Database '{database_name}' already exists, skipping creation.")
+                return existing
+        except ResourceNotFoundError:
+            pass
+
         db = ReadWriteDatabase(
             location=location,
             soft_delete_period=timedelta(days=365),
@@ -793,37 +818,36 @@ class AdxManager:
         log.info(f"Database '{database_name}' created.")
         return result
 
-    def assign_database_admin(self, resource_group, cluster_name, database_name, principal_id, principal_type='User'):
+    def AllDatabasesAdmin(self, resource_group, cluster_name, principal_id, principal_type='User'):
         '''
-        Grant the Admin role on an ADX database to a principal.
+        Grant the AllDatabasesAdmin role on an ADX cluster to a principal.
 
         Args:
             resource_group (str): Resource group name.
             cluster_name (str): ADX cluster name.
-            database_name (str): Database name.
             principal_id (str): Object ID of the user or service principal.
             principal_type (str): "User" or "App".
 
         Returns:
-            DatabasePrincipalAssignment: The created assignment.
+            ClusterPrincipalAssignment: The created assignment.
         '''
 
-        assignment = DatabasePrincipalAssignment(
+        assignment = ClusterPrincipalAssignment(
             principal_id=principal_id,
             principal_type=principal_type,
-            role='Admin'
+            role='AllDatabasesAdmin'
         )
 
-        log.info(f"Granting Admin on '{database_name}' to '{principal_id}' ({principal_type})...")
+        log.info(f"Granting AllDatabasesAdmin on '{cluster_name}' to '{principal_id}' ({principal_type})...")
         try:
-            result = self._mgmt.database_principal_assignments.begin_create_or_update(
-                resource_group, cluster_name, database_name, 'cycas-admin', assignment
+            result = self._mgmt.cluster_principal_assignments.begin_create_or_update(
+                resource_group, cluster_name, 'cycas-admin', assignment
             ).result()
             log.info("Permissions assigned.")
             return result
         except Exception as e:
             if 'already exists' in str(e):
-                log.info("Principal already has Admin on this database, skipping.")
+                log.info("Principal already has AllDatabasesAdmin on this cluster, skipping.")
                 return None
             raise
 
