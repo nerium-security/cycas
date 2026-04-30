@@ -26,6 +26,7 @@ from core.manager.blob import BlobManager
 from core.manager.table import TablestorageManager
 from core.manager.queue import QueueManager
 from core.manager.functions import FunctionsManager, build_function_zip
+from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 
 logging.basicConfig(level=logging.WARNING, format='%(message)s')
 
@@ -49,6 +50,7 @@ def step(msg):      print(f'  >> {msg}')
 def info(msg):      print(f'     {msg}')
 def success(msg):   print(f'  [OK] {msg}')
 def error(msg):     print(f'  [ERROR] {msg}', file=sys.stderr); sys.exit(1)
+def rand6():        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
 
 def prompt(label, default=None):
@@ -152,7 +154,7 @@ def load_state():
             'cluster_name', 'database_name', 'sku_name', 'sku_tier',
             'admin_users', 'account_name', 'table_name', 'queue_name',
             'container', 'watcher_app', 'watcher_sa', 'processor_app', 'processor_sa',
-            'keyvault_name',
+            'keyvault_name', 'keyvault_password_location',
         }
         return data if required.issubset(data) else None
     except (FileNotFoundError, json.JSONDecodeError):
@@ -199,7 +201,12 @@ def collect_adx_config(defaults, resource_group):
     section('Step 3/5 — Azure Data Explorer')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
-    cluster_name  = prompt('Cluster name (lowercase letters and numbers)', default=f'{rg_slug}-adx01')
+    default_cluster = (rg_slug[:13] + 'adx' + rand6())  # max 22 chars, no hyphens allowed
+    while True:
+        cluster_name = prompt('Cluster name (4-22 lowercase letters and numbers, no hyphens)', default=default_cluster)
+        if re.fullmatch(r'[a-z][a-z0-9]{3,21}', cluster_name):
+            break
+        print('  Invalid name: must be 4-22 characters, start with a letter, only lowercase letters and numbers.')
     database_name = prompt('Database name', default=defaults.get('adx_database_name', 'dfir'))
 
     print('\nSKU:')
@@ -256,32 +263,52 @@ def collect_admin_users(adx):
 
 
 def collect_functions_config(resource_group):
-    section('Step 5/5 — Azure Functions')
+    section('Step 5/6 — Azure Functions')
 
     info('Each function app gets its own dedicated storage account (Azure best practice).')
     print()
 
-    watcher_app   = prompt('Watcher function app name',   default=f'{resource_group}-watcher-af')
+    watcher_app   = prompt('Watcher function app name',   default=f'{resource_group[:43]}-watcher-{rand6()}')
     watcher_clean = re.sub(r'[^a-z0-9]', '', watcher_app.lower())
     watcher_sa    = prompt('Watcher storage account name (3-24 alphanumeric)',
-                           default=watcher_clean[:18] + ''.join(random.choices(string.ascii_lowercase + string.digits, k=6)))
+                           default=watcher_clean[:18] + rand6())
 
-    processor_app = prompt('Processor function app name', default=f'{resource_group}-processor-af')
+    processor_app = prompt('Processor function app name', default=f'{resource_group[:41]}-processor-{rand6()}')
     processor_clean = re.sub(r'[^a-z0-9]', '', processor_app.lower())
     processor_sa  = prompt('Processor storage account name (3-24 alphanumeric)',
-                           default=processor_clean[:18] + ''.join(random.choices(string.ascii_lowercase + string.digits, k=6)))
+                           default=processor_clean[:18] + rand6())
 
+    return watcher_app, watcher_sa, processor_app, processor_sa
+
+
+def collect_keyvault_config(resource_group):
+    section('Step 6/6 — Key Vault (optional)')
+
+    info('A Key Vault is only required if triage packages collected with Velociraptor')
+    info('are protected with a ZIP password. You can skip this step if packages are')
+    info('not password-protected.')
     print()
-    keyvault_name = input('Optional: Key Vault name for storing password of zip files with triagedata (press Enter to skip): ').strip()
 
-    return watcher_app, watcher_sa, processor_app, processor_sa, keyvault_name
+    create_kv = input('  Create a Key Vault for ZIP password storage? [y/N]: ').strip().lower()
+    if create_kv not in ('y', 'yes'):
+        return None, None, None
+
+    import getpass
+    rg_slug   = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
+    kv_suffix = f'-{rand6()}-keyvault'
+    kv_default = rg_slug[:24 - len(kv_suffix)] + kv_suffix
+    keyvault_name     = prompt('Key Vault name', default=kv_default)
+    password_location = prompt('Location for the ZIP password in Key Vault', default='velo-password')
+    zip_password      = getpass.getpass('  ZIP password to store in Key Vault: ')
+
+    return keyvault_name, password_location, zip_password
 
 
 def collect_storage_config(defaults, resource_group):
     section('Step 4/5 — Storage Account')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
-    account_name = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'zip')[:18] + ''.join(random.choices(string.ascii_lowercase + string.digits, k=6)))
+    account_name = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'zip')[:18] + rand6())
     table_name   = prompt('Status table name',       default=defaults.get('blob_logtable_name', 'statusupdate'))
     queue_name   = prompt('Queue name',              default=defaults.get('blob_queue_name', 'triagepackages'))
     container    = prompt('Blob container for uploads', default=defaults.get('blob_container_input', 'uploads'))
@@ -298,7 +325,7 @@ def confirm_plan(resource_group, location, new_rg,
                  admin_users,
                  account_name, table_name, queue_name, container,
                  watcher_app, watcher_sa, processor_app, processor_sa,
-                 keyvault_name):
+                 keyvault_name, keyvault_password_location):
 
     section('Summary — Review before provisioning')
 
@@ -323,11 +350,48 @@ def confirm_plan(resource_group, location, new_rg,
     info(f'Watcher  : {watcher_app}  (storage: {watcher_sa})')
     info(f'Processor: {processor_app}  (storage: {processor_sa})')
     if keyvault_name:
-        info(f'Key Vault: {keyvault_name}')
+        info(f'Key Vault: {keyvault_name}  (secret: {keyvault_password_location})')
 
     print()
     confirm = input('Proceed with provisioning? [Y/n]: ').strip().lower()
     return confirm in ('', 'y', 'yes')
+
+
+# ---------------------------------------------------------------------------
+# Phase 2b: Key Vault provisioning (optional)
+# ---------------------------------------------------------------------------
+
+def provision_keyvault(credential, subscription_id, resource_group, location,
+                       vault_name, password_location, zip_password,
+                       principal_id):
+
+    section('Provisioning — Key Vault')
+
+    step(f"Creating Key Vault '{vault_name}'...")
+    vault_uri = KeyvaultManager.provision_vault(
+        credential, subscription_id, resource_group, vault_name, location
+    )
+    success(f"Key Vault ready: {vault_uri}")
+
+    step(f"Granting current user Secrets Officer on '{vault_name}'...")
+    KeyvaultManager.assign_role(
+        credential, subscription_id, resource_group, vault_name,
+        principal_id, ROLE_SECRETS_OFFICER
+    )
+    success('Secrets Officer role assigned.')
+
+    step(f"Uploading ZIP password as secret '{password_location}'...")
+    kv = KeyvaultManager(vault_uri)
+    kv.authenticate(credential, verify_enabled=False)
+    kv.set_secret(password_location, zip_password)
+    success(f"Secret '{password_location}' uploaded.")
+
+    write_env_values({
+        'KEYVAULT_ENABLED':          'true',
+        'KEYVAULT_URL':              vault_uri,
+        'KEYVAULT_PASSWORDLOCATION': password_location,
+    })
+    success('.env updated with Key Vault settings.')
 
 
 # ---------------------------------------------------------------------------
@@ -349,43 +413,43 @@ def provision_all(azure, credential, subscription_id,
 
     adx = AdxManager(credential, adx_cluster_uri='', adx_cluster_ingestion_uri='', adx_database_name=database_name)
 
-    step('Creating ADX cluster (this may take more than 10 minutes)...')
+    step('Ensuring ADX cluster exists (may take 10+ minutes if new)...')
     cluster = adx.provision_cluster(subscription_id, resource_group, location, cluster_name, sku_name, sku_tier)
     success(f'Cluster ready: {cluster.uri}')
 
-    step(f"Creating database '{database_name}'...")
+    step(f"Ensuring database '{database_name}' exists...")
     adx.provision_database(resource_group, cluster_name, database_name, location)
-    success(f"Database '{database_name}' created.")
+    success(f"Database '{database_name}' ready.")
 
-    step('Assigning AllDatabasesAdmin to current user...')
+    step('Ensuring current user has AllDatabasesAdmin...')
     principal_id, principal_type = adx.get_current_user_id()
     adx.AllDatabasesAdmin(resource_group, cluster_name, principal_id, principal_type)
-    success('Current user assigned as cluster AllDatabasesAdmin.')
+    success('AllDatabasesAdmin ready for current user.')
 
     for user in admin_users:
-        step(f"Assigning AllDatabasesAdmin to '{user['displayName']}'...")
+        step(f"Ensuring AllDatabasesAdmin for '{user['displayName']}'...")
         assignment_name = f'cycas-admin-{user["id"][:8]}'
         adx.assign_cluster_admin(resource_group, cluster_name, user['id'], 'User', assignment_name)
-        success(f"'{user['displayName']}' assigned as cluster admin.")
+        success(f"'{user['displayName']}' has AllDatabasesAdmin.")
 
     blob_uri       = f'https://{account_name}.blob.core.windows.net'
     table_endpoint = f'https://{account_name}.table.core.windows.net'
     queue_url      = f'https://{account_name}.queue.core.windows.net'
 
-    step(f"Creating storage account '{account_name}'...")
+    step(f"Ensuring storage account '{account_name}' exists...")
     blob_mgr = BlobManager(credential, blob_uri)
     blob_mgr.provision_storage_account(subscription_id, resource_group, location, account_name)
     success(f"Storage account '{account_name}' ready.")
 
-    step(f"Creating table '{table_name}'...")
+    step(f"Ensuring table '{table_name}' exists...")
     TablestorageManager(credential, table_endpoint, table_name).authenticate(verify_enabled=False)
     success(f"Table '{table_name}' ready.")
 
-    step(f"Creating queue '{queue_name}'...")
+    step(f"Ensuring queue '{queue_name}' exists...")
     QueueManager(credential, queue_url, queue_name).authenticate(verify_enabled=False)
     success(f"Queue '{queue_name}' ready.")
 
-    step(f"Creating blob container '{container}'...")
+    step(f"Ensuring blob container '{container}' exists...")
     blob_mgr.authenticate()
     blob_mgr.create_container(container)
     success(f"Container '{container}' ready.")
@@ -430,13 +494,13 @@ def provision_functions(credential, subscription_id,
     funcs = FunctionsManager(credential, subscription_id)
 
     # Dedicated storage accounts (one per function app — Azure best practice)
-    step(f"Creating watcher storage account '{watcher_sa}'...")
+    step(f"Ensuring watcher storage account '{watcher_sa}' exists...")
     BlobManager(credential, f'https://{watcher_sa}.blob.core.windows.net').provision_storage_account(
         subscription_id, resource_group, location, watcher_sa
     )
     success(f"'{watcher_sa}' ready.")
 
-    step(f"Creating processor storage account '{processor_sa}'...")
+    step(f"Ensuring processor storage account '{processor_sa}' exists...")
     BlobManager(credential, f'https://{processor_sa}.blob.core.windows.net').provision_storage_account(
         subscription_id, resource_group, location, processor_sa
     )
@@ -446,7 +510,7 @@ def provision_functions(credential, subscription_id,
     processor_conn = funcs.get_storage_connection_string(resource_group, processor_sa)
 
     # Deployment containers (Flex Consumption runs directly from a blob container)
-    step("Creating deployment containers...")
+    step("Ensuring deployment containers exist...")
     funcs.create_deployment_container(watcher_conn)
     funcs.create_deployment_container(processor_conn)
     success("Deployment containers ready.")
@@ -458,53 +522,53 @@ def provision_functions(credential, subscription_id,
     watcher_plan_name   = f'{watcher_app}-plan'
     processor_plan_name = f'{processor_app}-plan'
 
-    step(f"Creating App Service Plan '{watcher_plan_name}'...")
+    step(f"Ensuring App Service Plan '{watcher_plan_name}' exists...")
     watcher_plan = funcs.provision_app_service_plan(resource_group, watcher_plan_name, location)
     success(f"Plan '{watcher_plan_name}' ready.")
 
-    step(f"Creating App Service Plan '{processor_plan_name}'...")
+    step(f"Ensuring App Service Plan '{processor_plan_name}' exists...")
     processor_plan = funcs.provision_app_service_plan(resource_group, processor_plan_name, location)
     success(f"Plan '{processor_plan_name}' ready.")
 
     # Function apps (watcher: 512 MB — light work; processor: 2048 MB — heavy work)
-    step(f"Creating watcher function app '{watcher_app}' (512 MB)...")
+    step(f"Ensuring watcher function app '{watcher_app}' exists (512 MB)...")
     watcher_result = funcs.provision_function_app(
         resource_group, watcher_app, location, watcher_plan['id'],
         instance_memory_mb=512,
         deployment_container_url=watcher_deploy_url,
         conn_str=watcher_conn,
     )
-    success(f"'{watcher_app}' created.")
+    success(f"'{watcher_app}' ready.")
 
-    step(f"Creating processor function app '{processor_app}' (2048 MB)...")
+    step(f"Ensuring processor function app '{processor_app}' exists (2048 MB)...")
     processor_result = funcs.provision_function_app(
         resource_group, processor_app, location, processor_plan['id'],
         instance_memory_mb=2048,
         deployment_container_url=processor_deploy_url,
         conn_str=processor_conn,
     )
-    success(f"'{processor_app}' created.")
+    success(f"'{processor_app}' ready.")
 
     watcher_principal   = watcher_result.get('identity', {}).get('principalId')
     processor_principal = processor_result.get('identity', {}).get('principalId')
 
     # RBAC: grant both apps access to the data storage account
-    step("Assigning data storage roles to watcher managed identity...")
+    step("Ensuring data storage roles for watcher managed identity...")
     funcs.assign_data_storage_roles(resource_group, data_account, watcher_principal)
-    success('Watcher storage roles assigned.')
+    success('Watcher storage roles ready.')
 
-    step("Assigning data storage roles to processor managed identity...")
+    step("Ensuring data storage roles for processor managed identity...")
     funcs.assign_data_storage_roles(resource_group, data_account, processor_principal)
-    success('Processor storage roles assigned.')
+    success('Processor storage roles ready.')
 
     if keyvault_name:
-        step(f"Assigning Key Vault Secrets User to watcher on '{keyvault_name}'...")
+        step(f"Ensuring Key Vault Secrets User for watcher on '{keyvault_name}'...")
         funcs.assign_keyvault_roles(resource_group, keyvault_name, watcher_principal)
-        success('Watcher Key Vault role assigned.')
+        success('Watcher Key Vault role ready.')
 
-        step(f"Assigning Key Vault Secrets User to processor on '{keyvault_name}'...")
+        step(f"Ensuring Key Vault Secrets User for processor on '{keyvault_name}'...")
         funcs.assign_keyvault_roles(resource_group, keyvault_name, processor_principal)
-        success('Processor Key Vault role assigned.')
+        success('Processor Key Vault role ready.')
 
     # App settings: read the final .env and convert to Azure app settings
     env_raw      = read_env_defaults(ENV_FILE)
@@ -563,6 +627,18 @@ def provision_functions(credential, subscription_id,
 
 def main():
     section('Cycas Install')
+    print('  This wizard provisions all Azure infrastructure required to run Cycas')
+    print('  and configures it by writing the connection strings to your .env file.')
+    print()
+    print('  What will be created:')
+    print('    - Azure Data Explorer cluster + database')
+    print('    - Storage account (blob container, queue, table)')
+    print('    - Two Azure Function Apps (watcher + processor)')
+    print('    - (Optional) Key Vault for ZIP password storage')
+    print()
+    print('  Progress is saved automatically. If the script is interrupted,')
+    print('  re-run it and choose to resume the saved session.')
+    print()
 
     section('Step 1/5 — Authentication')
     azure      = AzureManager()
@@ -570,14 +646,19 @@ def main():
 
     saved = load_state()
     if saved:
-        section('Saved session found')
+        completed = saved.get('completed', False)
+        section('Previous installation found' if completed else 'Saved session found')
         info(f'Subscription : {saved["subscription_id"]}')
         info(f'Resource group: {saved["resource_group"]} ({saved["location"]})')
         info(f'ADX cluster  : {saved["cluster_name"]} / {saved["database_name"]}')
         info(f'Storage      : {saved["account_name"]}')
         info(f'Functions    : {saved["watcher_app"]}, {saved["processor_app"]}')
         print()
-        resume = input('  Resume from saved session? [Y/n]: ').strip().lower()
+        if completed:
+            prompt_text = '  Re-run with this configuration? [Y/n]: '
+        else:
+            prompt_text = '  Resume from saved session? [Y/n]: '
+        resume = input(prompt_text).strip().lower()
         if resume not in ('n', 'no'):
             subscription_id = saved['subscription_id']
             resource_group  = saved['resource_group']
@@ -596,7 +677,12 @@ def main():
             watcher_sa      = saved['watcher_sa']
             processor_app   = saved['processor_app']
             processor_sa    = saved['processor_sa']
-            keyvault_name   = saved['keyvault_name']
+            keyvault_name          = saved['keyvault_name']
+            keyvault_password_location = saved['keyvault_password_location']
+            zip_password           = None  # not stored in state
+            if keyvault_name:
+                import getpass
+                zip_password = getpass.getpass(f'  Re-enter ZIP password for Key Vault secret upload: ')
         else:
             clear_state()
             saved = None
@@ -615,27 +701,30 @@ def main():
 
         account_name, table_name, queue_name, container = collect_storage_config(defaults, resource_group)
 
-        watcher_app, watcher_sa, processor_app, processor_sa, keyvault_name = collect_functions_config(resource_group)
+        watcher_app, watcher_sa, processor_app, processor_sa = collect_functions_config(resource_group)
+
+        keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group)
 
         save_state({
-            'subscription_id': subscription_id,
-            'resource_group':  resource_group,
-            'location':        location,
-            'new_rg':          new_rg,
-            'cluster_name':    cluster_name,
-            'database_name':   database_name,
-            'sku_name':        sku_name,
-            'sku_tier':        sku_tier,
-            'admin_users':     admin_users,
-            'account_name':    account_name,
-            'table_name':      table_name,
-            'queue_name':      queue_name,
-            'container':       container,
-            'watcher_app':     watcher_app,
-            'watcher_sa':      watcher_sa,
-            'processor_app':   processor_app,
-            'processor_sa':    processor_sa,
-            'keyvault_name':   keyvault_name,
+            'subscription_id':           subscription_id,
+            'resource_group':            resource_group,
+            'location':                  location,
+            'new_rg':                    new_rg,
+            'cluster_name':              cluster_name,
+            'database_name':             database_name,
+            'sku_name':                  sku_name,
+            'sku_tier':                  sku_tier,
+            'admin_users':               admin_users,
+            'account_name':              account_name,
+            'table_name':                table_name,
+            'queue_name':                queue_name,
+            'container':                 container,
+            'watcher_app':               watcher_app,
+            'watcher_sa':                watcher_sa,
+            'processor_app':             processor_app,
+            'processor_sa':              processor_sa,
+            'keyvault_name':             keyvault_name,
+            'keyvault_password_location': keyvault_password_location,
         })
 
     if not confirm_plan(resource_group, location, new_rg,
@@ -643,7 +732,7 @@ def main():
                         admin_users,
                         account_name, table_name, queue_name, container,
                         watcher_app, watcher_sa, processor_app, processor_sa,
-                        keyvault_name):
+                        keyvault_name, keyvault_password_location):
         print('Aborted.')
         sys.exit(0)
 
@@ -653,6 +742,13 @@ def main():
                   admin_users,
                   account_name, table_name, queue_name, container)
 
+    if keyvault_name:
+        adx_tmp = AdxManager(credential, '', '', '')
+        principal_id, _ = adx_tmp.get_current_user_id()
+        provision_keyvault(credential, subscription_id, resource_group, location,
+                           keyvault_name, keyvault_password_location, zip_password,
+                           principal_id)
+
     provision_functions(credential, subscription_id,
                         resource_group, location,
                         account_name,
@@ -660,7 +756,10 @@ def main():
                         processor_app, processor_sa,
                         keyvault_name)
 
-    clear_state()
+    state = load_state()
+    if state:
+        state['completed'] = True
+        save_state(state)
     print()
     success('Installation complete. Review your .env before running Cycas.')
 

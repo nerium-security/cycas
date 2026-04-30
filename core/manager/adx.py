@@ -776,7 +776,8 @@ class AdxManager:
                 result = mgmt.clusters.begin_create_or_update(resource_group, cluster_name, cluster).result()
                 break
             except Exception as e:
-                if attempt == 3 or 'InternalServerError' not in str(e):
+                transient = any(t in str(e) for t in ('InternalServerError', 'GatewayTimeout', 'ServiceUnavailable'))
+                if attempt == 3 or not transient:
                     raise
                 log.warning(f"Transient error on attempt {attempt}/3, retrying in 30 s: {e}")
                 import time; time.sleep(30)
