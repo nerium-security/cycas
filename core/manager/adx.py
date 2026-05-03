@@ -170,27 +170,6 @@ class AdxManager:
             log.error(f'Error converting {f} to dataframe: {e}')
             return pd.DataFrame()
 
-    def convert_dict_to_json(self, df, dyn_columns):
-        '''
-        Convert Python dictionaries in selected DataFrame columns into JSON strings.
-
-        For each column listed in `dyn_columns`, values that are dictionaries are
-        serialized using `json.dumps()`.
-
-        Args:
-            df (pandas.DataFrame): DataFrame to modify in place.
-            dyn_columns (list[str]): Column names that may contain dict values.
-        '''
-
-        log.debug('Entered function to convert dictionaries in the dataframe to json.')
-
-        if dyn_columns:
-            for dyn_column in dyn_columns:
-                try:
-                    df[dyn_column] = df[dyn_column].apply(lambda x: json.dumps(x) if isinstance(x, dict) else x)
-                except Exception as e:
-                    log.error(f'Could not convert column {dyn_column} of dataframe to json. Error: {e}')
-
     def prepare_string_with_columnames(self, schema):
         ''' 
         Prepares the string with columnames and determines columntypes.
@@ -669,51 +648,6 @@ class AdxManager:
 
         except Exception as e:
             log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
-            return False
-
-    def check_ingestion_status(self, max_wait_seconds=180) -> bool:
-        '''
-        Monitors the ingestion status queue to verify whether ingestion succeeded.
-        Requires ReportLevel.FailuresAndSuccesses and ReportMethod.Queue.
-
-        Returns:
-            True if success message is received
-            False if failure message is received or timeout
-        '''
-
-        if not self.kusto_queued:
-            log.error('No Kusto queued ingest client available.')
-            return False
-
-        try:
-            qs = KustoIngestStatusQueues(self.kusto_queued)
-
-            backoff = 1
-            total_wait = 0
-
-            while total_wait < max_wait_seconds:
-                if not qs.success.is_empty():
-                    success_messages = qs.success.pop(32)
-                    for msg in success_messages:
-                        log.info(f'Ingested: {msg.IngestionSourcePath}')
-                    return True
-
-                if not qs.failure.is_empty():
-                    failure_messages = qs.failure.pop(32)
-                    for msg in failure_messages:
-                        log.error(f'Ingestion failed: {msg.IngestionSourcePath} - {msg.Details}')
-                    return False
-
-                log.debug(f'Waiting for ingestion status... ({backoff}s)')
-                time.sleep(backoff)
-                total_wait += backoff
-                backoff = min(backoff * 2, 30)  # Exponential backoff capped at 30s
-
-            log.warning('Ingestion status check timed out.')
-            return False
-
-        except Exception as e:
-            log.error(f'Error while checking ingestion status: {e}')
             return False
 
     def get_current_user_id(self):
