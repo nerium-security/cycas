@@ -25,7 +25,7 @@ from core.manager.adx import AdxManager
 from core.manager.blob import BlobManager
 from core.manager.table import TablestorageManager
 from core.manager.queue import QueueManager
-from core.manager.functions import FunctionsManager, build_function_zip
+from core.manager.functions import FunctionsManager
 from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 
 logging.basicConfig(level=logging.WARNING, format='%(message)s')
@@ -154,7 +154,7 @@ def load_state():
             'cluster_name', 'database_name', 'sku_name', 'sku_tier',
             'admin_users', 'account_name', 'table_name', 'queue_name',
             'container', 'watcher_app', 'watcher_sa', 'processor_app', 'processor_sa',
-            'keyvault_name', 'keyvault_password_location',
+            'keyvault_name', 'keyvault_password_location', 'insights_name',
         }
         return data if required.issubset(data) else None
     except (FileNotFoundError, json.JSONDecodeError):
@@ -278,7 +278,10 @@ def collect_functions_config(resource_group):
     processor_sa  = prompt('Processor storage account name (3-24 alphanumeric)',
                            default=processor_clean[:18] + rand6())
 
-    return watcher_app, watcher_sa, processor_app, processor_sa
+    rg_slug       = re.sub(r'[^a-z0-9]', '', resource_group.lower())
+    insights_name = prompt('Application Insights name', default=f'{rg_slug[:50]}-insights')
+
+    return watcher_app, watcher_sa, processor_app, processor_sa, insights_name
 
 
 def collect_keyvault_config(resource_group):
@@ -487,11 +490,15 @@ def provision_functions(credential, subscription_id,
                         data_account,
                         watcher_app, watcher_sa,
                         processor_app, processor_sa,
-                        keyvault_name):
+                        keyvault_name, insights_name):
 
     section('Provisioning — Azure Functions')
 
     funcs = FunctionsManager(credential, subscription_id)
+
+    step(f"Ensuring Application Insights '{insights_name}' exists...")
+    ai_conn_str = funcs.provision_app_insights(resource_group, insights_name, location)
+    success(f"Application Insights '{insights_name}' ready.")
 
     # Dedicated storage accounts (one per function app — Azure best practice)
     step(f"Ensuring watcher storage account '{watcher_sa}' exists...")
@@ -536,7 +543,6 @@ def provision_functions(credential, subscription_id,
         resource_group, watcher_app, location, watcher_plan['id'],
         instance_memory_mb=512,
         deployment_container_url=watcher_deploy_url,
-        conn_str=watcher_conn,
     )
     success(f"'{watcher_app}' ready.")
 
@@ -545,7 +551,6 @@ def provision_functions(credential, subscription_id,
         resource_group, processor_app, location, processor_plan['id'],
         instance_memory_mb=2048,
         deployment_container_url=processor_deploy_url,
-        conn_str=processor_conn,
     )
     success(f"'{processor_app}' ready.")
 
@@ -577,16 +582,18 @@ def provision_functions(credential, subscription_id,
     queue_service_uri = f'https://{data_account}.queue.core.windows.net'
 
     watcher_settings = {
-        'AzureWebJobsStorage':  watcher_conn,
-        'CYCAS_DEPLOY_STORAGE': watcher_conn,
+        'AzureWebJobsStorage':                    watcher_conn,
+        'CYCAS_DEPLOY_STORAGE':                   watcher_conn,
+        'APPLICATIONINSIGHTS_CONNECTION_STRING':   ai_conn_str,
         **env_settings,
     }
     # Processor also needs the managed-identity connection for its queue trigger
     processor_settings = {
-        'AzureWebJobsStorage':                processor_conn,
-        'CYCAS_DEPLOY_STORAGE':               processor_conn,
-        'CYCAS_DATASTORAGE__queueServiceUri': queue_service_uri,
-        'CYCAS_DATASTORAGE__credential':      'managedidentity',
+        'AzureWebJobsStorage':                    processor_conn,
+        'CYCAS_DEPLOY_STORAGE':                   processor_conn,
+        'CYCAS_DATASTORAGE__queueServiceUri':      queue_service_uri,
+        'CYCAS_DATASTORAGE__credential':           'managedidentity',
+        'APPLICATIONINSIGHTS_CONNECTION_STRING':   ai_conn_str,
         **env_settings,
     }
 
@@ -601,19 +608,12 @@ def provision_functions(credential, subscription_id,
     # Deploy code (ZIP includes function files + core/ package)
     root     = Path(__file__).parent
     core_dir = root / 'core'
-
-    step('Building watcher deployment ZIP...')
-    watcher_zip = build_function_zip(root / 'azurefunctions' / 'watcher', core_dir)
     step(f"Deploying watcher to '{watcher_app}'...")
-    funcs.deploy_zip(resource_group, watcher_app, watcher_zip, watcher_conn, 512)
-    os.unlink(watcher_zip)
+    funcs.deploy(watcher_app, root / 'azurefunctions' / 'watcher', core_dir)
     success('Watcher deployed.')
 
-    step('Building processor deployment ZIP...')
-    processor_zip = build_function_zip(root / 'azurefunctions' / 'processor', core_dir)
     step(f"Deploying processor to '{processor_app}'...")
-    funcs.deploy_zip(resource_group, processor_app, processor_zip, processor_conn, 2048)
-    os.unlink(processor_zip)
+    funcs.deploy(processor_app, root / 'azurefunctions' / 'processor', core_dir)
     success('Processor deployed.')
 
     info('')
@@ -677,9 +677,10 @@ def main():
             watcher_sa      = saved['watcher_sa']
             processor_app   = saved['processor_app']
             processor_sa    = saved['processor_sa']
-            keyvault_name          = saved['keyvault_name']
+            keyvault_name              = saved['keyvault_name']
             keyvault_password_location = saved['keyvault_password_location']
-            zip_password           = None  # not stored in state
+            insights_name              = saved['insights_name']
+            zip_password               = None  # not stored in state
             if keyvault_name:
                 import getpass
                 zip_password = getpass.getpass(f'  Re-enter ZIP password for Key Vault secret upload: ')
@@ -701,7 +702,7 @@ def main():
 
         account_name, table_name, queue_name, container = collect_storage_config(defaults, resource_group)
 
-        watcher_app, watcher_sa, processor_app, processor_sa = collect_functions_config(resource_group)
+        watcher_app, watcher_sa, processor_app, processor_sa, insights_name = collect_functions_config(resource_group)
 
         keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group)
 
@@ -725,6 +726,7 @@ def main():
             'processor_sa':              processor_sa,
             'keyvault_name':             keyvault_name,
             'keyvault_password_location': keyvault_password_location,
+            'insights_name':             insights_name,
         })
 
     if not confirm_plan(resource_group, location, new_rg,
@@ -754,7 +756,7 @@ def main():
                         account_name,
                         watcher_app, watcher_sa,
                         processor_app, processor_sa,
-                        keyvault_name)
+                        keyvault_name, insights_name)
 
     state = load_state()
     if state:

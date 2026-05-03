@@ -3,17 +3,15 @@ Module for provisioning and deploying Azure Function Apps.
 
 Provides FunctionsManager for creating Flex Consumption App Service Plans,
 Function Apps, assigning RBAC roles to managed identities, configuring app
-settings, and deploying code via the ARM onedeploy endpoint.
-
-Also provides build_function_zip(), which bundles a function directory with
-the shared core/ package into a deployment ZIP.
+settings, and deploying code via the Azure Functions Core Tools CLI.
 '''
 
 import os
+import shutil
+import subprocess
 import tempfile
 import time
 import uuid
-import zipfile as zipfile_module
 import requests
 import logging as log
 from pathlib import Path
@@ -32,46 +30,7 @@ ROLE_QUEUE_DATA_CONTRIBUTOR  = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
 ROLE_TABLE_DATA_CONTRIBUTOR  = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 ROLE_KEYVAULT_SECRETS_USER   = '4633458b-17de-408a-b874-0445c86b69e6'
 
-_EXCLUDE_DIRS  = {'.venv', '__pycache__', '.git', '.vscode', 'test'}
-_EXCLUDE_FILES = {'local.settings.json', '.gitignore', '.funcignore'}
-_EXCLUDE_EXT   = {'.pyc'}
-
-
-def build_function_zip(function_dir: Path, core_dir: Path) -> str:
-    '''
-    Build a deployment ZIP for an Azure Function app.
-
-    Includes all function files (honouring .funcignore exclusions) and
-    the shared core/ package copied from the project root.
-
-    Returns the path to a temporary ZIP file — caller is responsible for
-    deleting it after deployment.
-    '''
-    tmp = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
-    tmp.close()
-
-    with zipfile_module.ZipFile(tmp.name, 'w', zipfile_module.ZIP_DEFLATED) as zf:
-        for path in sorted(function_dir.rglob('*')):
-            if not path.is_file():
-                continue
-            if set(path.parts) & _EXCLUDE_DIRS:
-                continue
-            if path.name in _EXCLUDE_FILES:
-                continue
-            if path.suffix in _EXCLUDE_EXT:
-                continue
-            zf.write(path, path.relative_to(function_dir))
-
-        for path in sorted(core_dir.rglob('*')):
-            if not path.is_file():
-                continue
-            if set(path.parts) & _EXCLUDE_DIRS:
-                continue
-            if path.suffix in _EXCLUDE_EXT:
-                continue
-            zf.write(path, Path('core') / path.relative_to(core_dir))
-
-    return tmp.name
+_STAGE_IGNORE = shutil.ignore_patterns('.venv', '__pycache__', '.git', '.vscode', 'test')
 
 
 class FunctionsManager:
@@ -88,14 +47,14 @@ class FunctionsManager:
     def _token(self):
         return self.credential.get_token('https://management.azure.com/.default').token
 
-    def _arm(self, method, path, **kwargs):
+    def _arm(self, method, path, api_version=None, **kwargs):
         '''
         Make an authenticated ARM REST request and poll async operations
         to completion. For PUT requests, re-fetches the final resource
         after the async operation succeeds so callers always get the
         full resource body (including identity.principalId).
         '''
-        url = f'https://management.azure.com{path}?api-version={_ARM_API}'
+        url = f'https://management.azure.com{path}?api-version={api_version or _ARM_API}'
         headers = {
             'Authorization': f'Bearer {self._token()}',
             'Content-Type': 'application/json',
@@ -146,9 +105,9 @@ class FunctionsManager:
     def _rg_path(self, resource_group):
         return f'/subscriptions/{self.subscription_id}/resourceGroups/{resource_group}'
 
-    def _arm_get(self, path):
+    def _arm_get(self, path, api_version=None):
         '''GET an ARM resource, returning None if it does not exist (404).'''
-        url = f'https://management.azure.com{path}?api-version={_ARM_API}'
+        url = f'https://management.azure.com{path}?api-version={api_version or _ARM_API}'
         resp = requests.get(url, headers={'Authorization': f'Bearer {self._token()}'}, timeout=30)
         if resp.status_code == 404:
             return None
@@ -183,6 +142,26 @@ class FunctionsManager:
             else:
                 raise
 
+    def provision_app_insights(self, resource_group, name, location):
+        '''Create an Application Insights resource and return its connection string.'''
+        _AI_API = '2020-02-02'
+        path = f'{self._rg_path(resource_group)}/providers/microsoft.insights/components/{name}'
+        existing = self._arm_get(path, api_version=_AI_API)
+        if existing:
+            log.info(f"Application Insights '{name}' already exists, skipping creation.")
+            return existing['properties']['ConnectionString']
+        result = self._arm(
+            'PUT', path, api_version=_AI_API,
+            json={
+                'location': location,
+                'kind': 'web',
+                'properties': {'Application_Type': 'web'},
+            },
+        )
+        conn_str = result['properties']['ConnectionString']
+        log.info(f"Application Insights '{name}' created.")
+        return conn_str
+
     # ------------------------------------------------------------------
     # Provisioning
     # ------------------------------------------------------------------
@@ -208,7 +187,7 @@ class FunctionsManager:
         return result
 
     def provision_function_app(self, resource_group, app_name, location, plan_id,
-                               instance_memory_mb, deployment_container_url, conn_str):
+                               instance_memory_mb, deployment_container_url):
         '''
         Create a Flex Consumption Python 3.12 Function App with system-assigned
         managed identity.
@@ -234,12 +213,8 @@ class FunctionsManager:
                 'identity': {'type': 'SystemAssigned'},
                 'properties': {
                     'serverFarmId': plan_id,
-                    'siteConfig': {
-                        'appSettings': [
-                            {'name': 'AzureWebJobsStorage',  'value': conn_str},
-                            {'name': 'CYCAS_DEPLOY_STORAGE', 'value': conn_str},
-                        ],
-                    },
+                    'httpsOnly': True,
+                    'autoGeneratedDomainNameLabelScope': 'TenantReuse',
                     'functionAppConfig': {
                         'deployment': {
                             'storage': {
@@ -255,7 +230,7 @@ class FunctionsManager:
                             'instanceMemoryMB': instance_memory_mb,
                             'maximumInstanceCount': 100,
                         },
-                        'runtime': {'name': 'python', 'version': '3.12'},
+                        'runtime': {'name': 'python', 'version': '3.13'},
                     },
                 },
             },
@@ -327,51 +302,39 @@ class FunctionsManager:
     # Deployment
     # ------------------------------------------------------------------
 
-    def deploy_zip(self, resource_group, app_name, zip_path, conn_str, instance_memory_mb):
+    def deploy(self, app_name, function_dir: Path, core_dir: Path):
         '''
-        Deploy a ZIP to a Flex Consumption Function App.
+        Deploy a Function App using the Azure Functions Core Tools CLI.
 
-        Uploads the package to the app's dedicated deployments blob container,
-        then PATCHes the function app config to point to the new blob URL.
+        Stages function files and the shared core/ package in a temp directory,
+        then runs: func azure functionapp publish <app_name>
+
+        Installs azure-functions-core-tools via npm if func is not found.
         '''
-        from azure.storage.blob import BlobServiceClient
-
-        blob_service = BlobServiceClient.from_connection_string(conn_str)
-        with open(zip_path, 'rb') as f:
-            blob_service.get_container_client('deployments').upload_blob(
-                'app.zip', f, overwrite=True
+        if not shutil.which('func'):
+            log.info('func not found — installing azure-functions-core-tools via npm...')
+            result = subprocess.run(
+                ['npm', 'install', '-g', 'azure-functions-core-tools@4', '--unsafe-perm', 'true'],
+                capture_output=True, text=True,
             )
+            if result.returncode != 0 or not shutil.which('func'):
+                raise RuntimeError(
+                    f'Failed to install azure-functions-core-tools:\n{result.stderr}'
+                )
 
-        sa_name = next(
-            part.split('=', 1)[1]
-            for part in conn_str.split(';')
-            if part.startswith('AccountName=')
-        )
-        blob_url = f'https://{sa_name}.blob.core.windows.net/deployments/app.zip'
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            shutil.copytree(function_dir, tmp_dir, dirs_exist_ok=True, ignore=_STAGE_IGNORE)
+            shutil.copytree(core_dir, Path(tmp_dir) / 'core', dirs_exist_ok=True, ignore=_STAGE_IGNORE)
 
-        self._arm(
-            'PATCH',
-            f'{self._rg_path(resource_group)}/providers/Microsoft.Web/sites/{app_name}',
-            json={
-                'properties': {
-                    'functionAppConfig': {
-                        'deployment': {
-                            'storage': {
-                                'type': 'blobContainer',
-                                'value': blob_url,
-                                'authentication': {
-                                    'type': 'StorageAccountConnectionString',
-                                    'storageAccountConnectionStringName': 'CYCAS_DEPLOY_STORAGE',
-                                },
-                            }
-                        },
-                        'runtime': {'name': 'python', 'version': '3.12'},
-                        'scaleAndConcurrency': {
-                            'instanceMemoryMB': instance_memory_mb,
-                            'maximumInstanceCount': 100,
-                        },
-                    }
-                }
-            },
-        )
-        log.info(f'ZIP deployed to {app_name} from {blob_url}.')
+            result = subprocess.run(
+                ['func', 'azure', 'functionapp', 'publish', app_name],
+                cwd=tmp_dir,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f'func azure functionapp publish failed for {app_name}')
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        log.info(f'{app_name} deployed.')
