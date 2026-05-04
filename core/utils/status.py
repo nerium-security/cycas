@@ -25,17 +25,11 @@ class Status:
     DOWNLOADING = 'downloading'
     DOWNLOADED = 'downloaded'
     DOWNLOADFAILED = 'downloadfailed'
-    EXTRACTING = 'extracting'
-    EXTRACTED = 'extracted'
-    EXTRACTIONFAILED = 'extractionfailed'
     UPLOADING = 'uploading'
     FAILED = 'failed'
-    UPLOADFAILED = 'uploadfailed'
     QUEUED = 'queued'
     UNQUEUED = 'unqueued'
-    UNKNOWNERROR = 'unknownerror'
     FINISHED = 'finished'
-    UPLOADDISABLED = 'uploaddisabled'
 
 def update_status_in_log(managers, Config, processing_status, starttime, status_data):
     '''

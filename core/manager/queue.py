@@ -11,11 +11,9 @@ Azure Queue Storage message requirements.
 
 from azure.storage.queue import QueueClient, QueueMessage
 from azure.core.exceptions import AzureError
+from core.utils.queue import encode_message
 from typing import Optional, List
-from datetime import datetime
 import logging as log
-import base64
-import json
 import uuid
 
 log = log.getLogger(__name__)
@@ -37,7 +35,7 @@ class QueueManager:
         self.queue_name = queue_name
         self.queue_client: Optional[QueueClient] = None
 
-    def authenticate(self) -> bool:
+    def authenticate(self, verify_enabled) -> bool:
         '''
         Authenticate and initialize the Azure Queue client.
 
@@ -53,16 +51,20 @@ class QueueManager:
             log.info(f'Authenticating with storage queue: {queue_endpoint}')
             self.queue_client = QueueClient(self.queue_url, self.queue_name, self.credential)
 
-            # Test permissions
-            permissions_ok = self.check_permissions()
+            self.create_queue_if_not_exists(self.queue_name)
 
-            if permissions_ok:
-                # create the queue
-                self.create_queue_if_not_exists(self.queue_name)
+            if verify_enabled:
 
-                log.info(f'Successfully authenticated.')
-                
-                return True
+                # Test permissions
+                permissions_ok = self.check_permissions()
+
+                if permissions_ok:
+                    log.info(f'Successfully authenticated.')
+
+            else:
+                log.info('Skipping permissions check for Azure Queue as configured in .env with VAR_VERIFY_ENABLED.')
+
+            return True
         except AzureError as e:
             log.info('Authentication failed.')
             log.debug(f'Error: {e}')
@@ -181,12 +183,7 @@ class QueueManager:
 
         messages = self.queue_client.receive_messages(messages_per_page=max_messages)
 
-        undecoded_messages = []
-        for message in messages:
-
-            undecoded_messages.append(message)
-
-        return undecoded_messages
+        return list(messages)
 
     def delete_message(self, message):
         '''
@@ -204,16 +201,12 @@ class QueueManager:
 
         self.queue_client.delete_message(message)
 
-    def send_message(self, zipfile: str, source_name: str) -> bool:
+    def send_message(self, items: list[tuple[str, str]]) -> bool:
         '''
-        Send a message to the queue. Message content (must be <= 64KB)
-
-        The message payload is encoded as a Base64-encoded JSON string
-        containing the zipfile name and source name.
+        Send one or more (zipfile, source_name) pairs as a single queue message.
 
         Args:
-            zipfile (str): Name of the zipfile to include in the message.
-            source_name (str): Source identifier to include in the message.
+            items: List of (zipfile, source_name) tuples to bundle in one message.
 
         Returns:
             bool: True if the message is sent successfully, otherwise False.
@@ -226,54 +219,11 @@ class QueueManager:
             raise ValueError('Queue client not authenticated. Call authenticate() first.')
 
         try:
-            base64_message, content = encode_messsage(zipfile, source_name)
+            base64_message, content = encode_message(items)
             self.queue_client.send_message(base64_message)
-            log.info(f'Sent to queue: {self.queue_name}.')
-
+            log.info(f'Sent {len(items)} item(s) to queue: {self.queue_name}.')
             log.debug(f'Sent message to queue: {content}')
             return True
         except AzureError as e:
             log.info(f'Failed to send message to queue: {e}')
             return False
-
-def decode_message(message):
-    '''
-    Decode a Base64-encoded queue message.
-
-    Args:
-        message (dict): Queue message containing a Base64-encoded
-            'content' field.
-
-    Returns:
-        str: Decoded message content as an ASCII string.
-    '''
-
-    message_content = message.get('content')
-    message_content_decoded = base64.b64decode(message_content)
-    message_content_decoded_ascii = message_content_decoded.decode('ascii')
-
-    return message_content_decoded_ascii
-
-def encode_messsage(zipfile: str, source_name: str):
-    '''
-    Encode a message for sending to Azure Queue Storage.
-
-    The message content is serialized as JSON and Base64-encoded
-    to comply with Azure Queue Storage requirements.
-
-    Args:
-        zipfile (str): Zipfile name to include in the message.
-        source_name (str): Source name to include in the message.
-
-    Returns:
-        tuple[str, str]: Tuple containing:
-            - Base64-encoded message string.
-            - Original JSON message content.
-    '''
-
-    content = json.dumps({'triagepackage': zipfile, 'source_name' : source_name})
-    message_bytes = content.encode('utf-8')
-    base64_bytes = base64.b64encode(message_bytes)
-    message_output = base64_bytes.decode('utf-8')
-
-    return message_output, content

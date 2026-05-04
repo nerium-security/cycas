@@ -1,7 +1,11 @@
-Installation
-============
+Manual installation
+===================
 
-
+The manual installation gives you full control over Azure resource creation.
+You provision the resources yourself and configure Cycas by filling in the
+``.env`` file by hand. Use this if you already have existing Azure resources
+or prefer to manage infrastructure through your own tooling (Terraform, Bicep,
+Azure Portal, etc.).
 
 
 Azure Data Explorer (ADX) setup guide

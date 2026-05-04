@@ -11,10 +11,9 @@ These helpers integrate queue operations with Table Storage–based
 status tracking to support idempotent processing.
 '''
 
-from core.utils.config import load_config
 from core.utils.status import Status, update_status_in_log
-from core.manager.queue import decode_message
 from datetime import datetime
+import base64
 import logging as log
 import json
 import os
@@ -67,40 +66,11 @@ def send_to_queue(managers, Config, source_name, zipfile, status_data):
 
     start = datetime.now()
 
-    send_to_queue = managers.queue.send_message(zipfile, source_name)
+    send_to_queue = managers.queue.send_message([(zipfile, source_name)])
 
     update_status_in_log(managers, Config, Status.QUEUED, start, status_data)
 
     return send_to_queue
-
-def get_message_in_queue(message):
-    '''
-    Decode and extract fields from a queue message.
-
-    Decodes the Base64-encoded queue message payload, parses it as JSON,
-    and extracts the source name and triage package name.
-
-    Args:
-        message: Queue message object as received from the queue client.
-
-    Returns:
-        tuple[str | None, str | None]: Tuple containing:
-            - source_name
-            - triagepackage
-        Returns (None, None) if decoding or parsing fails.
-    '''
-
-    try:
-        decoded_message = json.loads(decode_message(message))
-
-        triagepackage = decoded_message.get('triagepackage')
-        source_name = decoded_message.get('source_name')
-
-        return source_name, triagepackage
-    
-    except Exception as e:
-        log.error(f'Could not load message from queue: {e}')
-        return None, None
     
 def update_status_unqueued(managers, Config, zipfile, start, status_data):
     '''
@@ -155,3 +125,45 @@ def is_message_not_yet_processing(managers, zipfile) -> bool:
             return False
     else:
         return
+
+def decode_message(message) -> list[dict]:
+    '''
+    Decode a queue message into a list of triage package items.
+
+    Handles both the current batch format and the legacy single-item format
+    so messages already in the queue are processed correctly.
+
+    Args:
+        message: QueueMessage from azure.functions or azure.storage.queue.
+
+    Returns:
+        list[dict]: Each dict contains 'triagepackage' and 'source_name'.
+    '''
+    if hasattr(message, 'get_body'):
+        content = message.get_body().decode('utf-8')
+    else:
+        content = base64.b64decode(message.content).decode('utf-8')
+
+    data = json.loads(content)
+
+    if 'triagepackages' in data:
+        return data['triagepackages']
+
+    # Legacy single-item format
+    return [data]
+
+
+def encode_message(items: list[tuple[str, str]]) -> tuple[str, str]:
+    '''
+    Encode one or more (zipfile, source_name) pairs for Azure Queue Storage.
+
+    Args:
+        items: List of (zipfile, source_name) tuples to bundle in one message.
+
+    Returns:
+        tuple[str, str]: (Base64-encoded message, original JSON string).
+    '''
+    payload = [{'triagepackage': zf, 'source_name': src} for zf, src in items]
+    content = json.dumps({'triagepackages': payload})
+    message_output = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+    return message_output, content

@@ -1,9 +1,7 @@
 {
   "essential": [
     "Custom.Windows.Registry.UserAssist()",
-    "Custom.Windows.Sys.Users()"
-  ],
-  "full": [
+    "Custom.Windows.Sys.Users()",
     "Windows.Forensics.SRUM()",
     "Windows.Forensics.Usn(USNFile='C:\\\\$Extend\\\\$UsnJrnl%3A$J', MFTFile='C:\\\\$MFT', Accessor='ntfs')",
     "Windows.Sys.AppcompatShims()",
@@ -27,6 +25,8 @@
     "Windows.NTFS.MFT()",
     "Windows.Forensics.JumpLists()",
     "Windows.Forensics.Timeline()"
+  ],
+  "full": [
   ],
   "skip":[
     "Generic.Forensic.SQLiteHunter()"

@@ -48,6 +48,61 @@ def send_webhook(url: str, message: str) -> bool:
 
     return False
 
+def prepare_and_send_webhook_message(webhook_url, results):
+    '''
+    Send a completion message to a webhook endpoint.
+
+    Builds a human-readable summary message based on processing results
+    and sends it to the configured webhook URL.
+    '''
+
+    if not webhook_url:
+        return
+
+    # Retrieve count of successful uploads
+    nr_uploads = 0
+    for f in results['uploads']:
+        if not isinstance(f, dict):
+            continue
+
+        if not f.get('upload_initiated'):
+            continue
+
+        if f.get('upload_error') is not None:
+            continue
+
+        if not isinstance(f.get('basename'), str):
+            continue
+
+        nr_uploads += 1
+
+    # Retrieve count of postprocessed artefacts
+    nr_postprocessed = 0
+    for f in results['postprocessing']:
+        if not isinstance(f, dict):
+            continue
+
+        if not f.get('success'):
+            continue
+
+        if f.get('error') is not None:
+            continue
+
+        if not isinstance(f.get('basename'), str):
+            continue
+
+        nr_postprocessed += 1
+
+    if webhook_url:
+        basename = results['summary'][0].get('zipfile_basename')
+        message = (
+            f'{basename} finished.'
+            f'Postprocessed {nr_postprocessed} artifacts. '
+            f'Upload in total {nr_uploads} json files.'
+        )
+        
+        send_webhook(webhook_url, message)
+
 def adding_seconds(summary):
     '''
     Append a human-readable "seconds" unit to timing values.

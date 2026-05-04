@@ -78,6 +78,22 @@ class SasManager:
             log.error(f'Error listing blobs: {e}')
             return []
 
+    def list_blobs_from_sas_with_sizes(self) -> list[tuple[str, int]]:
+        '''
+        List all blobs in the SAS container together with their sizes in bytes.
+
+        Returns:
+            list[tuple[str, int]]: List of (blob_name, size_bytes) pairs.
+        '''
+        log.info(f'Listing blobs from domain: {self.parsed_url.netloc}')
+        try:
+            blobs = [(blob.name, blob.size or 0) for blob in self._container_client.list_blobs()]
+            log.info(f'Found {len(blobs)} blobs.')
+            return blobs
+        except Exception as e:
+            log.error(f'Error listing blobs: {e}')
+            return []
+
     def download_all(self, download_path: str) -> None:
         '''
         Download all blobs from the container represented by a SAS URL.
@@ -95,11 +111,11 @@ class SasManager:
                 os.makedirs(os.path.dirname(blob_path), exist_ok=True)
 
                 with open(blob_path, 'wb') as file:
-                    stream = self._container_client.download_blob(blob.name)
-                    file.write(stream.readall())
+                    self._container_client.download_blob(blob.name, max_concurrency=4).readinto(file)
 
                 log.info(f'Downloaded blob: {blob.name}')
-                return blob_path
+
+            return blob_path
         except Exception as e:
             log.error(f'Error downloading blobs: {e}')
 
@@ -127,8 +143,7 @@ class SasManager:
             blob_client = self._container_client.get_blob_client(zip)
 
             with open(blob_path, 'wb') as file:
-                stream = blob_client.download_blob()
-                file.write(stream.readall())
+                blob_client.download_blob(max_concurrency=4).readinto(file)
             
             log.info(f'Downloaded blob: {blob_path}')
 

@@ -423,6 +423,7 @@ blog.md
 .env
 .env*
 !.env_example
+.install_state.json
 
 #MacFile
 .DS_Store

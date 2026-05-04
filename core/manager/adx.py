@@ -11,17 +11,21 @@ import json
 import time
 import os
 import logging as log
+from azure.core.exceptions import ResourceNotFoundError
 import pandas as pd
 import fileinput
 import sys
+import base64
+import requests
 from pathlib import Path
-from datetime import timedelta
+from datetime import timedelta, datetime
+from collections import Counter
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
 from azure.kusto.data.exceptions import KustoApiError
 from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel
 from azure.kusto.ingest.status import KustoIngestStatusQueues
-from datetime import datetime
-from collections import Counter
+from azure.mgmt.kusto import KustoManagementClient
+from azure.mgmt.kusto.models import Cluster, AzureSku, ReadWriteDatabase, ClusterPrincipalAssignment
 
 log = log.getLogger(__name__)
 
@@ -45,7 +49,7 @@ class AdxManager:
         self.kusto_client = None
         self.kusto_queued = None
 
-    def authenticate(self):
+    def authenticate(self, verify_enabled):
         '''
         Authenticate to Azure Data Explorer and initialize clients.
 
@@ -72,6 +76,12 @@ class AdxManager:
             self.kusto_queued = QueuedIngestClient(kcsb_queued)
 
             log.info('Successfully authenticated.')
+
+            if verify_enabled:
+                self.query_db_test()
+            else:
+                log.info('Skipping query check for Azure Data Explorer as configured in .env with VAR_VERIFY_ENABLED')
+
             return True
 
         except Exception as e:
@@ -159,27 +169,6 @@ class AdxManager:
         except Exception as e:
             log.error(f'Error converting {f} to dataframe: {e}')
             return pd.DataFrame()
-
-    def convert_dict_to_json(self, df, dyn_columns):
-        '''
-        Convert Python dictionaries in selected DataFrame columns into JSON strings.
-
-        For each column listed in `dyn_columns`, values that are dictionaries are
-        serialized using `json.dumps()`.
-
-        Args:
-            df (pandas.DataFrame): DataFrame to modify in place.
-            dyn_columns (list[str]): Column names that may contain dict values.
-        '''
-
-        log.debug('Entered function to convert dictionaries in the dataframe to json.')
-
-        if dyn_columns:
-            for dyn_column in dyn_columns:
-                try:
-                    df[dyn_column] = df[dyn_column].apply(lambda x: json.dumps(x) if isinstance(x, dict) else x)
-                except Exception as e:
-                    log.error(f'Could not convert column {dyn_column} of dataframe to json. Error: {e}')
 
     def prepare_string_with_columnames(self, schema):
         ''' 
@@ -661,47 +650,207 @@ class AdxManager:
             log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
             return False
 
-    def check_ingestion_status(self, max_wait_seconds=180) -> bool:
+    def get_current_user_id(self):
         '''
-        Monitors the ingestion status queue to verify whether ingestion succeeded.
-        Requires ReportLevel.FailuresAndSuccesses and ReportMethod.Queue.
+        Return the object ID and principal type of the currently authenticated identity.
+
+        Tries the Microsoft Graph /me endpoint first (interactive user). Falls back
+        to extracting the object ID from the token claims when running as a service
+        principal or managed identity.
 
         Returns:
-            True if success message is received
-            False if failure message is received or timeout
+            tuple[str, str]: (principal_id, principal_type) where principal_type
+            is "User" or "App".
         '''
 
-        if not self.kusto_queued:
-            log.error('No Kusto queued ingest client available.')
-            return False
+        token = self.credential.get_token('https://graph.microsoft.com/.default').token
+        response = requests.get(
+            'https://graph.microsoft.com/v1.0/me',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        if response.status_code == 200:
+            return response.json()['id'], 'User'
+
+        payload = token.split('.')[1]
+        payload += '=' * (-len(payload) % 4)
+        claims = json.loads(base64.b64decode(payload))
+        return claims['oid'], 'App'
+
+    def provision_cluster(self, subscription_id, resource_group, location, cluster_name, sku_name, sku_tier):
+        '''
+        Create or update an ADX cluster and wait for provisioning to complete.
+
+        Args:
+            subscription_id (str): Azure subscription ID.
+            resource_group (str): Resource group name.
+            location (str): Azure region (e.g. "westeurope").
+            cluster_name (str): Cluster name (lowercase letters and numbers only).
+            sku_name (str): SKU name (e.g. "Dev(No SLA)_Standard_E2a_v4").
+            sku_tier (str): SKU tier ("Basic" or "Standard").
+
+        Returns:
+            Cluster: The provisioned cluster object with uri and dataIngestionUri set.
+        '''
+
+        mgmt = KustoManagementClient(self.credential, subscription_id)
+        self._mgmt = mgmt
+
+        _NON_TERMINAL = {'Creating', 'Updating', 'Starting', 'Stopping', 'Migrating', 'Scaling', 'Deleting'}
+        try:
+            existing = mgmt.clusters.get(resource_group, cluster_name)
+            if existing.state in _NON_TERMINAL:
+                log.warning(f"Cluster '{cluster_name}' is in state '{existing.state}' from a previous operation, waiting for it to complete...")
+                while existing.state in _NON_TERMINAL:
+                    time.sleep(30)
+                    existing = mgmt.clusters.get(resource_group, cluster_name)
+                    log.warning(f"  Current state: {existing.state}...")
+            if existing.state == 'Running':
+                log.info(f"Cluster '{cluster_name}' already exists and is running, skipping creation.")
+                return existing
+        except Exception:
+            pass
+
+        cluster = Cluster(location=location, sku=AzureSku(name=sku_name, capacity=1, tier=sku_tier))
+        log.info(f"Provisioning ADX cluster '{cluster_name}' (this may take several minutes)...")
+        for attempt in range(1, 4):
+            try:
+                result = mgmt.clusters.begin_create_or_update(resource_group, cluster_name, cluster).result()
+                break
+            except Exception as e:
+                transient = any(t in str(e) for t in ('InternalServerError', 'GatewayTimeout', 'ServiceUnavailable'))
+                if attempt == 3 or not transient:
+                    raise
+                log.warning(f"Transient error on attempt {attempt}/3, retrying in 30 s: {e}")
+                import time; time.sleep(30)
+        log.info(f"Cluster ready: {result.uri}")
+        return result
+
+    def provision_database(self, resource_group, cluster_name, database_name, location):
+        '''
+        Create or update a read-write ADX database.
+
+        Args:
+            resource_group (str): Resource group name.
+            cluster_name (str): ADX cluster name.
+            database_name (str): Database name to create.
+            location (str): Azure region.
+
+        Returns:
+            ReadWriteDatabase: The created database object.
+        '''
 
         try:
-            qs = KustoIngestStatusQueues(self.kusto_queued)
+            existing = self._mgmt.databases.get(resource_group, cluster_name, database_name)
+            if existing is not None:
+                log.info(f"Database '{database_name}' already exists, skipping creation.")
+                return existing
+        except ResourceNotFoundError:
+            pass
 
-            backoff = 1
-            total_wait = 0
+        db = ReadWriteDatabase(
+            location=location,
+            soft_delete_period=timedelta(days=365),
+            hot_cache_period=timedelta(days=31)
+        )
 
-            while total_wait < max_wait_seconds:
-                if not qs.success.is_empty():
-                    success_messages = qs.success.pop(32)
-                    for msg in success_messages:
-                        log.info(f'Ingested: {msg.IngestionSourcePath}')
-                    return True
+        log.info(f"Creating database '{database_name}'...")
+        result = self._mgmt.databases.begin_create_or_update(
+            resource_group, cluster_name, database_name, db
+        ).result()
+        log.info(f"Database '{database_name}' created.")
+        return result
 
-                if not qs.failure.is_empty():
-                    failure_messages = qs.failure.pop(32)
-                    for msg in failure_messages:
-                        log.error(f'Ingestion failed: {msg.IngestionSourcePath} - {msg.Details}')
-                    return False
+    def AllDatabasesAdmin(self, resource_group, cluster_name, principal_id, principal_type='User'):
+        '''
+        Grant the AllDatabasesAdmin role on an ADX cluster to a principal.
 
-                log.debug(f'Waiting for ingestion status... ({backoff}s)')
-                time.sleep(backoff)
-                total_wait += backoff
-                backoff = min(backoff * 2, 30)  # Exponential backoff capped at 30s
+        Args:
+            resource_group (str): Resource group name.
+            cluster_name (str): ADX cluster name.
+            principal_id (str): Object ID of the user or service principal.
+            principal_type (str): "User" or "App".
 
-            log.warning('Ingestion status check timed out.')
-            return False
+        Returns:
+            ClusterPrincipalAssignment: The created assignment.
+        '''
 
+        assignment = ClusterPrincipalAssignment(
+            principal_id=principal_id,
+            principal_type=principal_type,
+            role='AllDatabasesAdmin'
+        )
+
+        log.info(f"Granting AllDatabasesAdmin on '{cluster_name}' to '{principal_id}' ({principal_type})...")
+        try:
+            result = self._mgmt.cluster_principal_assignments.begin_create_or_update(
+                resource_group, cluster_name, 'cycas-admin', assignment
+            ).result()
+            log.info("Permissions assigned.")
+            return result
         except Exception as e:
-            log.error(f'Error while checking ingestion status: {e}')
-            return False
+            if 'already exists' in str(e):
+                log.info("Principal already has AllDatabasesAdmin on this cluster, skipping.")
+                return None
+            raise
+
+    def search_users(self, query):
+        '''
+        Search Azure AD users by display name or UPN prefix via Microsoft Graph.
+
+        Args:
+            query (str): Search string matched against displayName and userPrincipalName.
+
+        Returns:
+            list[dict]: List of matching users with 'id', 'displayName', and
+            'userPrincipalName' keys.
+        '''
+
+        token = self.credential.get_token('https://graph.microsoft.com/.default').token
+        params = {
+            '$filter': f"startswith(displayName,'{query}') or startswith(userPrincipalName,'{query}')",
+            '$select': 'id,displayName,userPrincipalName',
+            '$top': 20,
+        }
+        response = requests.get(
+            'https://graph.microsoft.com/v1.0/users',
+            headers={'Authorization': f'Bearer {token}'},
+            params=params
+        )
+        response.raise_for_status()
+        return response.json().get('value', [])
+
+    def assign_cluster_admin(self, resource_group, cluster_name, principal_id, principal_type,
+                             assignment_name, subscription_id=None):
+        '''
+        Grant AllDatabasesAdmin on an ADX cluster to a principal.
+
+        Args:
+            resource_group (str): Resource group name.
+            cluster_name (str): ADX cluster name.
+            principal_id (str): Object ID of the user or service principal.
+            principal_type (str): "User" or "App".
+            assignment_name (str): Unique name for this assignment resource.
+            subscription_id (str): Required when _mgmt has not been initialised yet.
+        '''
+
+        if not getattr(self, '_mgmt', None):
+            self._mgmt = KustoManagementClient(self.credential, subscription_id)
+
+        from azure.mgmt.kusto.models import ClusterPrincipalAssignment
+
+        assignment = ClusterPrincipalAssignment(
+            principal_id=principal_id,
+            principal_type=principal_type,
+            role='AllDatabasesAdmin'
+        )
+
+        try:
+            self._mgmt.cluster_principal_assignments.begin_create_or_update(
+                resource_group, cluster_name, assignment_name, assignment
+            ).result()
+            log.info(f"AllDatabasesAdmin granted to '{principal_id}'.")
+        except Exception as e:
+            if 'already exists' in str(e):
+                log.info(f"Principal '{principal_id}' already has AllDatabasesAdmin, skipping.")
+            else:
+                raise

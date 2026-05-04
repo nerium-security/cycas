@@ -6,10 +6,19 @@ to authenticate, retrieve secret values, and perform basic formatting
 fixes for secrets such as SSH private keys.
 '''
 
+import base64
+import json
+import time
+import uuid
+import requests
 from azure.keyvault.secrets import SecretClient
 import logging as log
 
 log = log.getLogger(__name__)
+
+_ARM_API = '2023-07-01'
+_AUTH_API = '2022-04-01'
+ROLE_SECRETS_OFFICER = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
 
 class KeyvaultManager:
     def __init__(self, vault_url):
@@ -24,7 +33,117 @@ class KeyvaultManager:
         self.vault_url = vault_url
         self.credentials = None
         
-    def authenticate(self, credential):
+    @staticmethod
+    def _arm_token(credential):
+        return credential.get_token('https://management.azure.com/.default').token
+
+    @staticmethod
+    def _tenant_id(credential):
+        token = KeyvaultManager._arm_token(credential)
+        payload = token.split('.')[1]
+        payload += '=' * (-len(payload) % 4)
+        return json.loads(base64.b64decode(payload))['tid']
+
+    @staticmethod
+    def provision_vault(credential, subscription_id, resource_group, vault_name, location):
+        '''
+        Create a Key Vault with RBAC authorisation if it does not exist.
+
+        Returns:
+            str: The vault URI (e.g. https://<name>.vault.azure.net/).
+        '''
+        token = KeyvaultManager._arm_token(credential)
+        url = (
+            f'https://management.azure.com/subscriptions/{subscription_id}'
+            f'/resourceGroups/{resource_group}'
+            f'/providers/Microsoft.KeyVault/vaults/{vault_name}'
+            f'?api-version={_ARM_API}'
+        )
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.ok:
+            log.info(f"Key Vault '{vault_name}' already exists.")
+            return resp.json()['properties']['vaultUri']
+
+        body = {
+            'location': location,
+            'properties': {
+                'sku': {'family': 'A', 'name': 'standard'},
+                'tenantId': KeyvaultManager._tenant_id(credential),
+                'enableRbacAuthorization': True,
+                'softDeleteRetentionInDays': 7,
+            },
+        }
+        resp = requests.put(url, headers=headers, json=body, timeout=120)
+        if resp.status_code == 409:
+            log.info(f"Key Vault '{vault_name}' already exists (409 conflict), using existing.")
+            return f'https://{vault_name}.vault.azure.net/'
+        resp.raise_for_status()
+        vault_uri = (
+            resp.json().get('properties', {}).get('vaultUri')
+            or f'https://{vault_name}.vault.azure.net/'
+        )
+        log.info(f"Key Vault '{vault_name}' created.")
+        return vault_uri
+
+    @staticmethod
+    def assign_role(credential, subscription_id, resource_group, vault_name, principal_id, role_id):
+        '''Grant an RBAC role on the Key Vault to a principal.'''
+        scope = (
+            f'/subscriptions/{subscription_id}'
+            f'/resourceGroups/{resource_group}'
+            f'/providers/Microsoft.KeyVault/vaults/{vault_name}'
+        )
+        assignment_id = str(uuid.uuid4())
+        url = (
+            f'https://management.azure.com{scope}'
+            f'/providers/Microsoft.Authorization/roleAssignments/{assignment_id}'
+            f'?api-version={_AUTH_API}'
+        )
+        body = {
+            'properties': {
+                'roleDefinitionId': (
+                    f'/subscriptions/{subscription_id}'
+                    f'/providers/Microsoft.Authorization/roleDefinitions/{role_id}'
+                ),
+                'principalId': principal_id,
+            }
+        }
+        token = KeyvaultManager._arm_token(credential)
+        resp = requests.put(
+            url,
+            headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+            json=body,
+            timeout=30,
+        )
+        if resp.status_code == 409 or 'already exists' in resp.text.lower():
+            log.info('Key Vault role already assigned.')
+            return
+        resp.raise_for_status()
+        log.info(f"Role '{role_id}' assigned to '{principal_id}' on '{vault_name}'.")
+
+    def set_secret(self, secret_name, secret_value, retries=8, delay=15):
+        '''
+        Upload a secret, retrying to absorb RBAC propagation delay.
+
+        Requires authenticate() to have been called first.
+        '''
+        for attempt in range(1, retries + 1):
+            try:
+                self.client.set_secret(secret_name, secret_value)
+                log.info(f"Secret '{secret_name}' uploaded.")
+                return
+            except Exception as e:
+                if attempt == retries:
+                    raise
+                log.warning(
+                    f"Secret upload attempt {attempt}/{retries} failed "
+                    f"(RBAC propagation?), retrying in {delay}s: {str(e).splitlines()[0]}"
+                )
+                time.sleep(delay)
+
+    def authenticate(self, credential, verify_enabled):
         '''
         Authenticate with Azure Key Vault.
 
@@ -43,8 +162,10 @@ class KeyvaultManager:
             log.info(f'Authenticating with Azure Key Vault: {self.vault_url}')
             self.client = SecretClient(vault_url=self.vault_url, credential=self.credential)
             log.info('Successfully authenticated.')
-            
-            self.verify_secret_read_permissions()
+            if verify_enabled:
+                self.verify_secret_read_permissions()
+            else:
+                log.info('Skipping key vault read as configured in .env with VAR_VERIFY_ENABLED.')
 
             return True
         except Exception as e:

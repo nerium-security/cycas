@@ -13,7 +13,9 @@ Cycas is a solution for post-processing raw forensic artefacts collected with `V
    :hidden:
    :caption: Getting started
 
-   /gettingstarted/installation
+   /gettingstarted/installationeasy
+
+   /gettingstarted/installationmanual
 
    /gettingstarted/usage
 
@@ -26,8 +28,6 @@ Cycas is a solution for post-processing raw forensic artefacts collected with `V
 
    /guides/postprocessingraw
 
-   /guides/runningatscale
-
 .. toctree::
    :maxdepth: 2
    :hidden:
@@ -36,3 +36,12 @@ Cycas is a solution for post-processing raw forensic artefacts collected with `V
    /reference/pipelineinternals
 
    /reference/supportedartifacts
+
+.. toctree::
+   :maxdepth: 2
+   :hidden:
+   :caption: Project
+
+   /project/faq
+
+   /project/aboutus

@@ -70,6 +70,7 @@ class Authenticator:
         self.adx_cluster_uri            = config.adx_cluster_uri
         self.adx_cluster_ingestion_uri  = config.adx_cluster_ingestion_uri
         self.adx_database_name          = config.adx_database_name
+        self.var_verify_enabled             = config.var_verify_enabled
   
     def authenticate_all(self) -> AuthManagers:
         '''
@@ -127,7 +128,7 @@ class Authenticator:
         '''    
 
         keyvault_manager = KeyvaultManager(self.keyvault_url)
-        keyvault_manager.authenticate(self.azure_credential)
+        keyvault_manager.authenticate(self.azure_credential, self.var_verify_enabled)
 
         return keyvault_manager
        
@@ -169,7 +170,7 @@ class Authenticator:
         '''
 
         queue_manager = QueueManager(self.azure_credential, self.blob_queue_url, self.blob_queue_name)
-        queue_manager.authenticate()
+        queue_manager.authenticate(self.var_verify_enabled)
 
         return queue_manager
 
@@ -185,7 +186,7 @@ class Authenticator:
         '''
 
         tablestorage_manager = TablestorageManager(self.azure_credential, self.blob_logtable_uri, self.blob_logtable_name)
-        tablestorage_manager.authenticate()
+        tablestorage_manager.authenticate(self.var_verify_enabled)
 
         return tablestorage_manager
 
@@ -248,8 +249,6 @@ class Authenticator:
                                 self.adx_cluster_ingestion_uri, 
                                 self.adx_database_name)
         
-        adx_manager.authenticate()
-
-        adx_manager.query_db_test()
+        adx_manager.authenticate(self.var_verify_enabled)
 
         return adx_manager

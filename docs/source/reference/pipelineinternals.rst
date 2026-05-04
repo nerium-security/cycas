@@ -171,6 +171,100 @@ Each ZIP runs in its own thread and is fully isolated — a failure in one ZIP
 does not affect others. Set the value to ``1`` to process ZIPs sequentially,
 which is useful for debugging.
 
+.. _status_tracking:
+
+Status tracking
+---------------
+
+Each ZIP file is assigned a status in Azure Storage Account table throughout its
+lifecycle. The status is updated at every phase transition, allowing
+interrupted runs to be safely resumed and providing a full audit trail
+of what happened to each file.
+
+.. note::
+   Default name of the Azure Storage Account table is ``statusupdate`` and can be configured in the .env file with ``BLOB_LOGTABLE_NAME``)
+
+
+You can inspect the status here:
+
+   .. image:: /_static/images/statustracking.png
+      :target: /_static/images/statustracking.png
+
+The following statuses are supported:
+
+.. list-table::
+   :widths: 20 80
+   :header-rows: 1
+
+   * - Status
+     - Description
+   * - ``NEW``
+     - The ZIP has been discovered for the first time. An entry is created
+       in Table Storage. The file has not yet been picked up for processing.
+   * - ``QUEUED``
+     - The extracted file has been queued for processing with Azure Functions.
+   * - ``UNQUEUED``
+     - The ZIP has been removed from the queue and picked up for processing.
+   * - ``PROCESSING``
+     - Processing has started and the ZIP has passed the deduplication check.
+   * - ``DOWNLOADING``
+     - The ZIP is being fetched from the remote source (blob, SAS, or SFTP).
+   * - ``DOWNLOADED``
+     - The download completed successfully. The file is ready for extraction.
+   * - ``DOWNLOADFAILED``
+     - The download encountered an error. The ZIP is skipped for the
+       remainder of the run. Set ``VAR_MAX_RETRY`` to allow it to be
+       retried in a subsequent run.
+   * - ``UPLOADING``
+     - The file is actively being uploaded to ADX.
+   * - ``FAILED``
+     - A general failure occurred during processing. Check the run log
+       for details. Set ``VAR_MAX_RETRY`` to allow the ZIP to be retried.
+   * - ``FINISHED``
+     - All extraction, post-processing, and ingestion steps completed
+       successfully. A detailed status record has been written to the
+       ``_status`` table in ADX.
+
+
+A typical successful run transitions through the following statuses:
+ 
+.. code-block:: none
+ 
+   NEW → QUEUED → UNQUEUED → PROCESSING → DOWNLOADING → DOWNLOADED → UPLOADING → FINISHED
+
+
+.. _adx_statustables:
+
+ADX status tables
+-----------------
+ 
+After processing of a ZIP file, three tables are updated in Azure Data Explorer providing
+a detailed breakdown of what happened during the run. All three tables share
+the ``uploadid`` and ``zipfile`` columns, making them straightforward to join
+in KQL.
+ 
+.. list-table::
+   :widths: 25 60
+   :header-rows: 1
+ 
+   * - Table
+     - Description
+   * - ``_status_summary``
+     - High-level overview of each archive — session, source, file size,
+       timing, and encryption. Use this as the starting point when
+       investigating a specific ZIP.
+   * - ``_status_uploads``
+     - Tracks every file considered for upload — what was uploaded to ADX,
+       what was post-processed by Velociraptor, and what was ignored and why.
+   * - ``_status_postprocessing``
+     - Tracks each artifact query that was run — success, duration, and any
+       errors returned. Use this to diagnose Velociraptor failures.
+
+An example of the ``_status_uploads`` is depicted here. It shows which files in the zip are uploaded, wich are ignored (and why), etc:
+
+   .. image:: /_static/images/status_uploads.png
+      :target: /_static/images/status_uploads.png
+
 
 Module structure
 ----------------

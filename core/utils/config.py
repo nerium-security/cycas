@@ -29,7 +29,8 @@ class Config(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_file=find_dotenv(),
-        env_file_encoding='utf-8'
+        env_file_encoding='utf-8',
+        extra='ignore'
     )
 
     blob_storageaccount_enabled: bool
@@ -67,11 +68,12 @@ class Config(BaseSettings):
     var_zipfile_suffix: str
     var_location_ignorelist: str
     var_max_retry: int
-    var_verifyuploads: bool
+    var_queue_batch_threshold_mb: int
     var_loglevel: str
     var_localdevice_concurrency: int
     var_artifact_summary_filename: str
     var_master_summary_filename: str
+    var_verify_enabled: bool
     velociraptor_enabled: bool
     velociraptor_url: str
     velociraptor_remappingdir: str
@@ -82,6 +84,14 @@ class Config(BaseSettings):
     velociraptor_postprocess: str
     velociraptor_duration: int
 
-def load_config() -> Config:
-    '''Return the configuration.'''
+def load_config(env_file: str = None) -> Config:
+    '''
+    Return the configuration.
+
+    Args:
+        env_file (str): Optional path to a .env file. Defaults to the
+            nearest .env found by find_dotenv().
+    '''
+    if env_file:
+        return Config(_env_file=env_file)
     return Config()

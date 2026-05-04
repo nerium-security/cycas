@@ -7,6 +7,9 @@ create containers, delete blobs, and initiate server-side blob copies.
 '''
 
 from azure.storage.blob import BlobServiceClient
+from azure.mgmt.storage import StorageManagementClient
+from azure.mgmt.storage.models import StorageAccountCreateParameters, Sku, Kind
+from pathlib import Path
 import logging as log
 import os
 
@@ -94,6 +97,39 @@ class BlobManager:
             if not blob_names:
                 log.error('No blob found.')
             return blob_names
+        except Exception as e:
+            log.error(
+                f'Failed to list blobs in container {container_name}. '
+                'Try adding Storage Blob Data Contributor as a role to the storage account. '
+                'Exiting script.'
+            )
+            log.debug(f'Error: {str(e)}', exc_info=True)
+            sys.exit(1)
+
+    def list_blobs_with_sizes(self, container_name) -> list[tuple[str, int]]:
+        '''
+        List all blobs in a container together with their sizes in bytes.
+
+        Returns:
+            list[tuple[str, int]]: List of (blob_name, size_bytes) pairs.
+        '''
+        try:
+            container_client = self.get_container_client(container_name)
+            result = []
+            for blob in container_client.list_blobs():
+                result.append((blob.name, blob.size or 0))
+                log.debug(f'Blob found: {blob.name} ({blob.size} bytes)')
+            if not result:
+                log.error('No blob found.')
+            return result
+        except Exception as e:
+            log.error(
+                f'Failed to list blobs in container {container_name}. '
+                'Try adding Storage Blob Data Contributor as a role to the storage account. '
+                'Exiting script.'
+            )
+            log.debug(f'Error: {str(e)}', exc_info=True)
+            sys.exit(1)
         except Exception as e:
             log.error(  
                 f'Failed to list blobs in container {container_name}. '
@@ -243,14 +279,53 @@ class BlobManager:
 
         blob_client = self.get_client(container_name, blob_name)
         
-        temp_dir = os.path.join(download_path, blob_name)
-
+        temp_dir = Path(os.path.join(download_path, blob_name))
+        temp_dir.parent.mkdir(parents=True, exist_ok=True)
+        log.info(f'Starting to download blob "{blob_name}" from storage account.')
         try:
             with open(temp_dir, 'wb') as download_file:
-                download_file.write(blob_client.download_blob().readall())
+                blob_client.download_blob(max_concurrency=4).readinto(download_file)
 
             log.info(f'Successfully downloaded blob {blob_name} from container {container_name} to {download_path}')
-            return temp_dir
+            return str(temp_dir)
         except Exception as e:
+            
             log.error(f'Failed to download blob {blob_name} from container {container_name}. Error: {str(e)}', exc_info=True)
             return False
+
+    def provision_storage_account(self, subscription_id, resource_group, location, account_name):
+        '''
+        Create a storage account if it does not already exist.
+
+        Args:
+            subscription_id (str): Azure subscription ID.
+            resource_group (str): Resource group name.
+            location (str): Azure region.
+            account_name (str): Storage account name (3-24 lowercase alphanumeric).
+
+        Returns:
+            StorageAccount: The created or existing storage account object.
+        '''
+
+        mgmt = StorageManagementClient(self.credential, subscription_id)
+
+        try:
+            existing = mgmt.storage_accounts.get_properties(resource_group, account_name)
+            log.info(f"Storage account '{account_name}' already exists, skipping creation.")
+            return existing
+        except Exception:
+            pass
+
+        log.info(f"Provisioning storage account '{account_name}'...")
+        result = mgmt.storage_accounts.begin_create(
+            resource_group,
+            account_name,
+            StorageAccountCreateParameters(
+                sku=Sku(name='Standard_LRS'),
+                kind=Kind.STORAGE_V2,
+                location=location,
+                allow_blob_public_access=False,
+            )
+        ).result()
+        log.info(f"Storage account '{account_name}' ready.")
+        return result

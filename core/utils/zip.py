@@ -13,7 +13,7 @@ Several functions log errors instead of raising exceptions and some may
 prompt the user for input when a password is required.
 '''
 
-from core.utils.files import list_files_in_directory, list_files_in_directory, filter_triage_packages
+from core.utils.files import list_files_in_directory, list_files_in_directory, filter_triage_packages, filter_triage_packages_with_sizes
 import logging as log
 import pyzipper
 import os
@@ -546,3 +546,47 @@ def list_zipfiles(managers, Config):
         log.info(f'Found {len(files)} zip files in {source}.')
 
     return filtered_files
+
+
+def list_zipfiles_with_sizes(managers, Config) -> dict[str, list[tuple[str, int]]]:
+    '''
+    List ZIP files from all configured sources, each paired with its size in bytes.
+
+    Returns:
+        dict[str, list[tuple[str, int]]]: Source → list of (path, size_bytes) pairs.
+    '''
+    log.info('Attempting to find zip files with sizes in configured datasources')
+
+    all_files: dict[str, list[tuple[str, int]]] = {}
+
+    if managers.blob:
+        try:
+            all_files['blob'] = managers.blob.list_blobs_with_sizes(Config.blob_container_input)
+        except Exception as e:
+            log.error(f'Could not list files from "blob". Error: {e}')
+
+    if managers.sas:
+        try:
+            all_files['sas'] = managers.sas.list_blobs_from_sas_with_sizes()
+        except Exception as e:
+            log.error(f'Could not list files from "sas". Error: {e}')
+
+    if managers.sftp:
+        try:
+            all_files['sftp'] = managers.sftp.list_files_recursive_with_sizes('/')
+        except Exception as e:
+            log.error(f'Could not list files from "sftp". Error: {e}')
+
+    if Config.var_localfolder_enabled:
+        try:
+            paths = list_files_in_directory(Config.var_localfolder_directory)
+            all_files['localfolder'] = [(p, os.path.getsize(p)) for p in paths]
+        except Exception as e:
+            log.error(f'Could not list files from "localfolder". Error: {e}')
+
+    filtered = filter_triage_packages_with_sizes(all_files, Config.var_zipfile_prefix, Config.var_zipfile_suffix)
+
+    for source, files in filtered.items():
+        log.info(f'Found {len(files)} zip files in {source}.')
+
+    return filtered

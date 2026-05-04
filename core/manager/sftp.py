@@ -128,6 +128,33 @@ class SftpManager:
         log.info(f'Found {len(file_list)} file(s) recursively in {remote_path}')
         return file_list
 
+    def list_files_recursive_with_sizes(self, remote_path: str = '.') -> list[tuple[str, int]]:
+        '''
+        Recursively list all files together with their sizes in bytes.
+
+        Returns:
+            list[tuple[str, int]]: List of (full_remote_path, size_bytes) pairs.
+        '''
+        if not self.sftp:
+            raise Exception('SFTP connection not established. Call authenticate() first.')
+
+        file_list: list[tuple[str, int]] = []
+
+        def walk(path):
+            try:
+                for entry in self.sftp.listdir_attr(path):
+                    remote_file = f'{path.rstrip("/")}/{entry.filename}'
+                    if stat.S_ISDIR(entry.st_mode):
+                        walk(remote_file)
+                    else:
+                        file_list.append((remote_file, entry.st_size or 0))
+            except Exception as e:
+                log.error(f'Failed to walk {path}: {e}')
+
+        walk(remote_path)
+        log.info(f'Found {len(file_list)} file(s) recursively in {remote_path}')
+        return file_list
+
     def download(self, local_path: str, remote_path: str) -> bool:
         '''
         Download a file from the SFTP server to the local filesystem.
