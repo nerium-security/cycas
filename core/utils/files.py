@@ -167,6 +167,26 @@ def filter_triage_packages(all_files, prefix, suffix):
 
     return all_files
 
+def filter_triage_packages_with_sizes(all_files: dict, prefix: str, suffix: str) -> dict:
+    '''
+    Filter a dict of (name, size) pairs by filename prefix and suffix.
+
+    Args:
+        all_files (dict[str, list[tuple[str, int]]]): Source → list of (path, size_bytes).
+        prefix (str): Required filename prefix.
+        suffix (str): Required filename suffix.
+
+    Returns:
+        dict[str, list[tuple[str, int]]]: Filtered dict with same structure.
+    '''
+    for source, files in all_files.items():
+        all_files[source] = [
+            (name, size) for name, size in files
+            if os.path.basename(name).startswith(prefix) and os.path.basename(name).endswith(suffix)
+        ]
+    return all_files
+
+
 def delete_file(filepath):
     '''
     Delete a file from the local filesystem if it exists.

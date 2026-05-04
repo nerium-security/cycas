@@ -139,7 +139,7 @@ class KeyvaultManager:
                     raise
                 log.warning(
                     f"Secret upload attempt {attempt}/{retries} failed "
-                    f"(RBAC propagation?), retrying in {delay}s: {e}"
+                    f"(RBAC propagation?), retrying in {delay}s: {str(e).splitlines()[0]}"
                 )
                 time.sleep(delay)
 

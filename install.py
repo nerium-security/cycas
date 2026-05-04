@@ -550,6 +550,7 @@ def provision_all(azure, credential, subscription_id,
 def provision_functions(credential, subscription_id,
                         resource_group, location,
                         data_account,
+                        cluster_name,
                         watcher_app, watcher_sa,
                         processor_app, processor_sa,
                         keyvault_name, insights_name):
@@ -628,6 +629,15 @@ def provision_functions(credential, subscription_id,
     funcs.assign_data_storage_roles(resource_group, data_account, processor_principal)
     success('Processor storage roles ready.')
 
+    step(f"Ensuring AllDatabasesAdmin for processor managed identity on '{cluster_name}'...")
+    adx_tmp = AdxManager(credential, '', '', '')
+    adx_tmp.assign_cluster_admin(
+        resource_group, cluster_name, processor_principal, 'App',
+        f'cycas-processor-{processor_principal[:8]}',
+        subscription_id=subscription_id,
+    )
+    success('Processor ADX role ready.')
+
     if keyvault_name:
         step(f"Ensuring Key Vault Secrets User for watcher on '{keyvault_name}'...")
         funcs.assign_keyvault_roles(resource_group, keyvault_name, watcher_principal)
@@ -671,10 +681,12 @@ def provision_functions(credential, subscription_id,
     root     = Path(__file__).parent
     core_dir = root / 'core'
     step(f"Deploying watcher to '{watcher_app}'...")
+    info(f'Command: func azure functionapp publish {watcher_app}')
     funcs.deploy(watcher_app, root / 'azurefunctions' / 'watcher', core_dir)
     success('Watcher deployed.')
 
     step(f"Deploying processor to '{processor_app}'...")
+    info(f'Command: func azure functionapp publish {processor_app}')
     funcs.deploy(processor_app, root / 'azurefunctions' / 'processor', core_dir)
     success('Processor deployed.')
 
@@ -827,6 +839,7 @@ def main():
     provision_functions(credential, subscription_id,
                         resource_group, location,
                         account_name,
+                        cluster_name,
                         watcher_app, watcher_sa,
                         processor_app, processor_sa,
                         keyvault_name, insights_name)

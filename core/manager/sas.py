@@ -78,6 +78,22 @@ class SasManager:
             log.error(f'Error listing blobs: {e}')
             return []
 
+    def list_blobs_from_sas_with_sizes(self) -> list[tuple[str, int]]:
+        '''
+        List all blobs in the SAS container together with their sizes in bytes.
+
+        Returns:
+            list[tuple[str, int]]: List of (blob_name, size_bytes) pairs.
+        '''
+        log.info(f'Listing blobs from domain: {self.parsed_url.netloc}')
+        try:
+            blobs = [(blob.name, blob.size or 0) for blob in self._container_client.list_blobs()]
+            log.info(f'Found {len(blobs)} blobs.')
+            return blobs
+        except Exception as e:
+            log.error(f'Error listing blobs: {e}')
+            return []
+
     def download_all(self, download_path: str) -> None:
         '''
         Download all blobs from the container represented by a SAS URL.

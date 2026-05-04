@@ -98,6 +98,39 @@ class BlobManager:
                 log.error('No blob found.')
             return blob_names
         except Exception as e:
+            log.error(
+                f'Failed to list blobs in container {container_name}. '
+                'Try adding Storage Blob Data Contributor as a role to the storage account. '
+                'Exiting script.'
+            )
+            log.debug(f'Error: {str(e)}', exc_info=True)
+            sys.exit(1)
+
+    def list_blobs_with_sizes(self, container_name) -> list[tuple[str, int]]:
+        '''
+        List all blobs in a container together with their sizes in bytes.
+
+        Returns:
+            list[tuple[str, int]]: List of (blob_name, size_bytes) pairs.
+        '''
+        try:
+            container_client = self.get_container_client(container_name)
+            result = []
+            for blob in container_client.list_blobs():
+                result.append((blob.name, blob.size or 0))
+                log.debug(f'Blob found: {blob.name} ({blob.size} bytes)')
+            if not result:
+                log.error('No blob found.')
+            return result
+        except Exception as e:
+            log.error(
+                f'Failed to list blobs in container {container_name}. '
+                'Try adding Storage Blob Data Contributor as a role to the storage account. '
+                'Exiting script.'
+            )
+            log.debug(f'Error: {str(e)}', exc_info=True)
+            sys.exit(1)
+        except Exception as e:
             log.error(  
                 f'Failed to list blobs in container {container_name}. '
                 'Try adding Storage Blob Data Contributor as a role to the storage account. '

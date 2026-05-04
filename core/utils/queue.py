@@ -66,7 +66,7 @@ def send_to_queue(managers, Config, source_name, zipfile, status_data):
 
     start = datetime.now()
 
-    send_to_queue = managers.queue.send_message(zipfile, source_name)
+    send_to_queue = managers.queue.send_message([(zipfile, source_name)])
 
     update_status_in_log(managers, Config, Status.QUEUED, start, status_data)
 
@@ -126,46 +126,44 @@ def is_message_not_yet_processing(managers, zipfile) -> bool:
     else:
         return
 
-def decode_message(message) -> dict:
+def decode_message(message) -> list[dict]:
     '''
-    Decode a queue message from either an Azure Function trigger
-    or the Azure Storage Queue SDK.
+    Decode a queue message into a list of triage package items.
+
+    Handles both the current batch format and the legacy single-item format
+    so messages already in the queue are processed correctly.
 
     Args:
         message: QueueMessage from azure.functions or azure.storage.queue.
 
     Returns:
-        dict: Decoded message content.
+        list[dict]: Each dict contains 'triagepackage' and 'source_name'.
     '''
     if hasattr(message, 'get_body'):
-        # func.QueueMessage (from Azure Function trigger)
         content = message.get_body().decode('utf-8')
     else:
-        # azure.storage.queue.QueueMessage (from SDK receive_messages)
         content = base64.b64decode(message.content).decode('utf-8')
 
-    return json.loads(content)
+    data = json.loads(content)
 
-def encode_messsage(zipfile: str, source_name: str):
+    if 'triagepackages' in data:
+        return data['triagepackages']
+
+    # Legacy single-item format
+    return [data]
+
+
+def encode_message(items: list[tuple[str, str]]) -> tuple[str, str]:
     '''
-    Encode a message for sending to Azure Queue Storage.
-
-    The message content is serialized as JSON and Base64-encoded
-    to comply with Azure Queue Storage requirements.
+    Encode one or more (zipfile, source_name) pairs for Azure Queue Storage.
 
     Args:
-        zipfile (str): Zipfile name to include in the message.
-        source_name (str): Source name to include in the message.
+        items: List of (zipfile, source_name) tuples to bundle in one message.
 
     Returns:
-        tuple[str, str]: Tuple containing:
-            - Base64-encoded message string.
-            - Original JSON message content.
+        tuple[str, str]: (Base64-encoded message, original JSON string).
     '''
-
-    content = json.dumps({'triagepackage': zipfile, 'source_name' : source_name})
-    message_bytes = content.encode('utf-8')
-    base64_bytes = base64.b64encode(message_bytes)
-    message_output = base64_bytes.decode('utf-8')
-
+    payload = [{'triagepackage': zf, 'source_name': src} for zf, src in items]
+    content = json.dumps({'triagepackages': payload})
+    message_output = base64.b64encode(content.encode('utf-8')).decode('utf-8')
     return message_output, content

@@ -819,7 +819,8 @@ class AdxManager:
         response.raise_for_status()
         return response.json().get('value', [])
 
-    def assign_cluster_admin(self, resource_group, cluster_name, principal_id, principal_type, assignment_name):
+    def assign_cluster_admin(self, resource_group, cluster_name, principal_id, principal_type,
+                             assignment_name, subscription_id=None):
         '''
         Grant AllDatabasesAdmin on an ADX cluster to a principal.
 
@@ -829,7 +830,11 @@ class AdxManager:
             principal_id (str): Object ID of the user or service principal.
             principal_type (str): "User" or "App".
             assignment_name (str): Unique name for this assignment resource.
+            subscription_id (str): Required when _mgmt has not been initialised yet.
         '''
+
+        if not getattr(self, '_mgmt', None):
+            self._mgmt = KustoManagementClient(self.credential, subscription_id)
 
         from azure.mgmt.kusto.models import ClusterPrincipalAssignment
 
