@@ -12,6 +12,7 @@ from azure.mgmt.storage.models import StorageAccountCreateParameters, Sku, Kind
 from pathlib import Path
 import logging as log
 import os
+import sys
 
 log = log.getLogger(__name__)
 

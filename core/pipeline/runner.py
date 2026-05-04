@@ -100,6 +100,7 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
                     f'Processing failed for {zipfile} '
                     f'(attempt {message.dequeue_count}/{Config.var_max_retry}): {e}'
                 )
+                update_status_in_log(managers, Config, Status.FAILED, start, results)
                 all_succeeded = False
 
         if mode == 'manual' and all_succeeded:

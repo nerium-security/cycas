@@ -25,6 +25,7 @@ class Status:
     DOWNLOADING = 'downloading'
     DOWNLOADED = 'downloaded'
     DOWNLOADFAILED = 'downloadfailed'
+    POSTPROCESSING = 'postprocessing'
     UPLOADING = 'uploading'
     FAILED = 'failed'
     QUEUED = 'queued'

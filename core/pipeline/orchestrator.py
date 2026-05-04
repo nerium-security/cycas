@@ -95,22 +95,26 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
     # ----------------------------------------------------------------------
     # Post-process raw artifacts and upload it's results (json)
     # ----------------------------------------------------------------------
+
     results = postprocess_velociraptor_and_upload(managers,
                                                   Config,
-                                                  extracted_zip, 
+                                                  extracted_zip,
                                                   zipfilecontent,
-                                                  results
+                                                  results,
+                                                  start
                                                   )
-    
+
     # ----------------------------------------------------------------------
     # Extract jsons from zip and upload
     # ----------------------------------------------------------------------
+    update_status_in_log(managers, Config, Status.UPLOADING, start, results)
+
     results = extract_all_json_from_zip_and_upload(managers,
                                                    Config,
-                                                   extracted_zip, 
-                                                   extract_path, 
-                                                   zip_password, 
-                                                   zipfilecontent, 
+                                                   extracted_zip,
+                                                   extract_path,
+                                                   zip_password,
+                                                   zipfilecontent,
                                                    results
                                                    )
 
@@ -126,7 +130,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
 
     prepare_and_send_webhook_message(Config.var_webhook_url, results)
 
-def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfilecontent, results):
+def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfilecontent, results, start):
     '''
     Post-process raw artifacts in a triage zip using Velociraptor and upload outputs to ADX.
 
@@ -160,6 +164,7 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
     if not Config.velociraptor_enabled:
         return results
 
+    update_status_in_log(managers, Config, Status.POSTPROCESSING, start, results)
 
     # ----------------------------------------------------------------------
     # Loading config for Velociraptor
