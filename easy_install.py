@@ -64,6 +64,21 @@ def prompt(label, default=None):
         print('  This field is required.')
 
 
+def collect_run_mode():
+    print('  How do you want to run the Cycas pipeline?')
+    print()
+    print('  1) Azure Functions  — automated, runs in the cloud. Recommended for large engagements. [recommended]')
+    print('  2) Local            — run the pipeline manually on this machine. Only for small engagements.')
+    print()
+    while True:
+        choice = input('Select deployment mode [1]: ').strip()
+        if not choice or choice == '1':
+            return 'azurefunction'
+        if choice == '2':
+            return 'local'
+        print('  Enter 1 or 2.')
+
+
 def read_env_defaults(env_file):
     '''Parse a .env file into a plain dict without requiring all fields.
 
@@ -149,14 +164,18 @@ def save_state(state):
 def load_state():
     try:
         data = json.loads(STATE_FILE.read_text())
-        required = {
-            'subscription_id', 'resource_group', 'location', 'new_rg',
+        base_required = {
+            'run_mode', 'subscription_id', 'resource_group', 'location', 'new_rg',
             'cluster_name', 'database_name', 'sku_name', 'sku_tier',
             'admin_users', 'account_name', 'table_name', 'queue_name',
-            'container', 'input_sources', 'watcher_app', 'watcher_sa',
-            'processor_app', 'processor_sa',
+            'container', 'input_sources',
+        }
+        azure_required = {
+            'watcher_app', 'watcher_sa', 'processor_app', 'processor_sa',
             'keyvault_name', 'keyvault_password_location', 'insights_name',
         }
+        run_mode = data.get('run_mode', 'azurefunction')
+        required = base_required | (azure_required if run_mode == 'azurefunction' else set())
         return data if required.issubset(data) else None
     except (FileNotFoundError, json.JSONDecodeError):
         return None
@@ -170,8 +189,8 @@ def clear_state():
 # Phase 1: Collect all inputs
 # ---------------------------------------------------------------------------
 
-def collect_resource_group(azure, subscription_id):
-    section('Step 2/7 — Resource Group')
+def collect_resource_group(azure, subscription_id, step_label='2/7'):
+    section(f'Step {step_label} — Resource Group')
 
     step('Fetching resource groups...')
     rgs = azure.list_resource_groups(subscription_id)
@@ -198,8 +217,8 @@ def collect_resource_group(azure, subscription_id):
         print(f'  Enter a number between 1 and {len(rgs)}, or N to create a new one.')
 
 
-def collect_adx_config(defaults, resource_group):
-    section('Step 3/7 — Azure Data Explorer')
+def collect_adx_config(defaults, resource_group, step_label='3/7'):
+    section(f'Step {step_label} — Azure Data Explorer')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
     default_cluster = (rg_slug[:13] + 'adx' + rand6())  # max 22 chars, no hyphens allowed
@@ -258,8 +277,8 @@ def collect_admin_users(adx):
     return admins
 
 
-def collect_input_sources(defaults, account_name, container):
-    section('Step 5/7 — Input Sources')
+def collect_input_sources(defaults, account_name, container, step_label='5/7'):
+    section(f'Step {step_label} — Input Sources')
 
     info('Select which input source(s) to use for triage packages.')
     info('You can enable multiple sources.')
@@ -317,8 +336,8 @@ def collect_input_sources(defaults, account_name, container):
     return sources
 
 
-def collect_functions_config(resource_group):
-    section('Step 6/7 — Azure Functions')
+def collect_functions_config(resource_group, step_label='6/7'):
+    section(f'Step {step_label} — Azure Functions')
 
     info('Each function app gets its own dedicated storage account (Azure best practice).')
     print()
@@ -339,8 +358,8 @@ def collect_functions_config(resource_group):
     return watcher_app, watcher_sa, processor_app, processor_sa, insights_name
 
 
-def collect_keyvault_config(resource_group):
-    section('Step 7/7 — Key Vault (optional)')
+def collect_keyvault_config(resource_group, step_label='7/7'):
+    section(f'Step {step_label} — Key Vault (optional)')
 
     info('A Key Vault is only required if triage packages collected with Velociraptor')
     info('are protected with a ZIP password. You can skip this step if packages are')
@@ -362,8 +381,8 @@ def collect_keyvault_config(resource_group):
     return keyvault_name, password_location, zip_password
 
 
-def collect_storage_config(defaults, resource_group):
-    section('Step 4/7 — Storage Account')
+def collect_storage_config(defaults, resource_group, step_label='4/7'):
+    section(f'Step {step_label} — Storage Account')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
     account_name = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'zip')[:18] + rand6())
@@ -378,17 +397,22 @@ def collect_storage_config(defaults, resource_group):
 # Phase 2: Confirm
 # ---------------------------------------------------------------------------
 
-def confirm_plan(resource_group, location, new_rg,
+def confirm_plan(run_mode,
+                 resource_group, location, new_rg,
                  cluster_name, database_name, sku_name,
                  admin_users,
                  account_name, table_name, queue_name, container,
                  input_sources,
-                 watcher_app, watcher_sa, processor_app, processor_sa,
-                 keyvault_name, keyvault_password_location):
+                 watcher_app=None, watcher_sa=None,
+                 processor_app=None, processor_sa=None,
+                 keyvault_name=None, keyvault_password_location=None):
 
     section('Summary — Review before provisioning')
 
-    print('  Resource group')
+    mode_label = 'Azure Functions (cloud)' if run_mode == 'azurefunction' else 'Local (manual)'
+    info(f'Deployment mode: {mode_label}')
+
+    print('\n  Resource group')
     info(f'Name     : {resource_group}  {"(will be created)" if new_rg else "(existing)"}')
     info(f'Location : {location}')
 
@@ -414,11 +438,12 @@ def confirm_plan(resource_group, location, new_rg,
         sftp = input_sources['sftp']
         info(f'SFTP : enabled  ({sftp["SFTP_USERNAME"]}@{sftp["SFTP_URL"]}:{sftp["SFTP_PORT"]})')
 
-    print('\n  Azure Functions')
-    info(f'Watcher  : {watcher_app}  (storage: {watcher_sa})')
-    info(f'Processor: {processor_app}  (storage: {processor_sa})')
-    if keyvault_name:
-        info(f'Key Vault: {keyvault_name}  (secret: {keyvault_password_location})')
+    if run_mode == 'azurefunction':
+        print('\n  Azure Functions')
+        info(f'Watcher  : {watcher_app}  (storage: {watcher_sa})')
+        info(f'Processor: {processor_app}  (storage: {processor_sa})')
+        if keyvault_name:
+            info(f'Key Vault: {keyvault_name}  (secret: {keyvault_password_location})')
 
     print()
     confirm = input('Proceed with provisioning? [Y/n]: ').strip().lower()
@@ -704,35 +729,48 @@ def main():
     print('  This wizard provisions all Azure infrastructure required to run Cycas')
     print('  and configures it by writing the connection strings to your .env file.')
     print()
+
+    # Determine run mode from saved state or by asking the user now (before auth)
+    # so that step labels and the "what will be created" list are correct.
+    saved = load_state()
+    if saved:
+        run_mode = saved.get('run_mode', 'azurefunction')
+    else:
+        section('Deployment Mode')
+        run_mode = collect_run_mode()
+
+    total = '7' if run_mode == 'azurefunction' else '5'
+
+    print()
     print('  What will be created:')
     print('    - Azure Data Explorer cluster + database')
     print('    - Storage account (blob container, queue, table)')
     print('    - Input source configuration (Blob, SAS, and/or SFTP)')
-    print('    - Two Azure Function Apps (watcher + processor)')
-    print('    - (Optional) Key Vault for ZIP password storage')
+    if run_mode == 'azurefunction':
+        print('    - Two Azure Function Apps (watcher + processor)')
+        print('    - (Optional) Key Vault for ZIP password storage')
     print()
     print('  Progress is saved automatically. If the script is interrupted,')
     print('  re-run it and choose to resume the saved session.')
     print()
 
-    section('Step 1/7 — Authentication')
+    section(f'Step 1/{total} — Authentication')
     azure      = AzureManager()
     credential = azure.authenticate()
 
-    saved = load_state()
     if saved:
         completed = saved.get('completed', False)
         section('Previous installation found' if completed else 'Saved session found')
+        mode_label = 'Azure Functions' if run_mode == 'azurefunction' else 'Local'
+        info(f'Deployment mode: {mode_label}')
         info(f'Subscription : {saved["subscription_id"]}')
         info(f'Resource group: {saved["resource_group"]} ({saved["location"]})')
         info(f'ADX cluster  : {saved["cluster_name"]} / {saved["database_name"]}')
         info(f'Storage      : {saved["account_name"]}')
-        info(f'Functions    : {saved["watcher_app"]}, {saved["processor_app"]}')
+        if run_mode == 'azurefunction':
+            info(f'Functions    : {saved["watcher_app"]}, {saved["processor_app"]}')
         print()
-        if completed:
-            prompt_text = '  Re-run with this configuration? [Y/n]: '
-        else:
-            prompt_text = '  Resume from saved session? [Y/n]: '
+        prompt_text = '  Re-run with this configuration? [Y/n]: ' if completed else '  Resume from saved session? [Y/n]: '
         resume = input(prompt_text).strip().lower()
         if resume not in ('n', 'no'):
             subscription_id = saved['subscription_id']
@@ -749,42 +787,54 @@ def main():
             queue_name      = saved['queue_name']
             container       = saved['container']
             input_sources   = saved['input_sources']
-            watcher_app     = saved['watcher_app']
-            watcher_sa      = saved['watcher_sa']
-            processor_app   = saved['processor_app']
-            processor_sa    = saved['processor_sa']
-            keyvault_name              = saved['keyvault_name']
-            keyvault_password_location = saved['keyvault_password_location']
-            insights_name              = saved['insights_name']
-            zip_password               = None  # not stored in state
-            if keyvault_name:
-                import getpass
-                zip_password = getpass.getpass(f'  Re-enter ZIP password for Key Vault secret upload: ')
+            if run_mode == 'azurefunction':
+                watcher_app                = saved['watcher_app']
+                watcher_sa                 = saved['watcher_sa']
+                processor_app              = saved['processor_app']
+                processor_sa               = saved['processor_sa']
+                keyvault_name              = saved['keyvault_name']
+                keyvault_password_location = saved['keyvault_password_location']
+                insights_name              = saved['insights_name']
+                zip_password               = None  # not stored in state
+                if keyvault_name:
+                    import getpass
+                    zip_password = getpass.getpass('  Re-enter ZIP password for Key Vault secret upload: ')
+            else:
+                watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
+                keyvault_name = keyvault_password_location = zip_password = None
         else:
             clear_state()
             saved = None
+            # User declined to resume — re-ask mode for the fresh install
+            section('Deployment Mode')
+            run_mode = collect_run_mode()
+            total = '7' if run_mode == 'azurefunction' else '5'
 
     if not saved:
         defaults = read_env_defaults(ENV_EXAMPLE)
 
         subscription_id = azure.select_subscription()
 
-        resource_group, location, new_rg = collect_resource_group(azure, subscription_id)
+        resource_group, location, new_rg = collect_resource_group(azure, subscription_id, f'2/{total}')
 
-        cluster_name, database_name, sku_name, sku_tier = collect_adx_config(defaults, resource_group)
+        cluster_name, database_name, sku_name, sku_tier = collect_adx_config(defaults, resource_group, f'3/{total}')
 
         adx = AdxManager(credential, adx_cluster_uri='', adx_cluster_ingestion_uri='', adx_database_name=database_name)
         admin_users = collect_admin_users(adx)
 
-        account_name, table_name, queue_name, container = collect_storage_config(defaults, resource_group)
+        account_name, table_name, queue_name, container = collect_storage_config(defaults, resource_group, f'4/{total}')
 
-        input_sources = collect_input_sources(defaults, account_name, container)
+        input_sources = collect_input_sources(defaults, account_name, container, f'5/{total}')
 
-        watcher_app, watcher_sa, processor_app, processor_sa, insights_name = collect_functions_config(resource_group)
+        if run_mode == 'azurefunction':
+            watcher_app, watcher_sa, processor_app, processor_sa, insights_name = collect_functions_config(resource_group, f'6/{total}')
+            keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
+        else:
+            watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
+            keyvault_name = keyvault_password_location = zip_password = None
 
-        keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group)
-
-        save_state({
+        state = {
+            'run_mode':                  run_mode,
             'subscription_id':           subscription_id,
             'resource_group':            resource_group,
             'location':                  location,
@@ -799,16 +849,21 @@ def main():
             'queue_name':                queue_name,
             'container':                 container,
             'input_sources':             input_sources,
-            'watcher_app':               watcher_app,
-            'watcher_sa':                watcher_sa,
-            'processor_app':             processor_app,
-            'processor_sa':              processor_sa,
-            'keyvault_name':             keyvault_name,
-            'keyvault_password_location': keyvault_password_location,
-            'insights_name':             insights_name,
-        })
+        }
+        if run_mode == 'azurefunction':
+            state.update({
+                'watcher_app':               watcher_app,
+                'watcher_sa':                watcher_sa,
+                'processor_app':             processor_app,
+                'processor_sa':              processor_sa,
+                'keyvault_name':             keyvault_name,
+                'keyvault_password_location': keyvault_password_location,
+                'insights_name':             insights_name,
+            })
+        save_state(state)
 
-    if not confirm_plan(resource_group, location, new_rg,
+    if not confirm_plan(run_mode,
+                        resource_group, location, new_rg,
                         cluster_name, database_name, sku_name,
                         admin_users,
                         account_name, table_name, queue_name, container,
@@ -829,27 +884,46 @@ def main():
         write_env_values(source_settings)
     success('Input source settings written.')
 
-    if keyvault_name:
-        adx_tmp = AdxManager(credential, '', '', '')
-        principal_id, _ = adx_tmp.get_current_user_id()
-        provision_keyvault(credential, subscription_id, resource_group, location,
-                           keyvault_name, keyvault_password_location, zip_password,
-                           principal_id)
+    if run_mode == 'azurefunction':
+        if keyvault_name:
+            adx_tmp = AdxManager(credential, '', '', '')
+            principal_id, _ = adx_tmp.get_current_user_id()
+            provision_keyvault(credential, subscription_id, resource_group, location,
+                               keyvault_name, keyvault_password_location, zip_password,
+                               principal_id)
 
-    provision_functions(credential, subscription_id,
-                        resource_group, location,
-                        account_name,
-                        cluster_name,
-                        watcher_app, watcher_sa,
-                        processor_app, processor_sa,
-                        keyvault_name, insights_name)
+        provision_functions(credential, subscription_id,
+                            resource_group, location,
+                            account_name,
+                            cluster_name,
+                            watcher_app, watcher_sa,
+                            processor_app, processor_sa,
+                            keyvault_name, insights_name)
 
     state = load_state()
     if state:
         state['completed'] = True
         save_state(state)
+
     print()
-    success('Installation complete. Review your .env before running Cycas.')
+    if run_mode == 'azurefunction':
+        success('Installation complete.')
+        print()
+    else:
+        success('Installation complete.')
+        print()
+        info('Run `zip2adx.py` to launch the script locally.')
+        print()
+    
+    info('Place triage ZIPs in any of the configured input sources to start processing:')
+    if 'blob' in input_sources:
+        info(f'  Blob  — {account_name} / {container}')
+    if 'sas' in input_sources:
+        info(f'  SAS   — container configured via SAS URL')
+    if 'sftp' in input_sources:
+        sftp = input_sources['sftp']
+        info(f'  SFTP  — {sftp["SFTP_USERNAME"]}@{sftp["SFTP_URL"]}:{sftp["SFTP_PORT"]}')
+    info('')
 
 
 if __name__ == '__main__':
