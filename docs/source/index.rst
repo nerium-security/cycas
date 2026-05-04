@@ -13,7 +13,9 @@ Cycas is a solution for post-processing raw forensic artefacts collected with `V
    :hidden:
    :caption: Getting started
 
-   /gettingstarted/installation
+   /gettingstarted/installationeasy
+
+   /gettingstarted/installationmanual
 
    /gettingstarted/usage
 
