@@ -153,7 +153,8 @@ def load_state():
             'subscription_id', 'resource_group', 'location', 'new_rg',
             'cluster_name', 'database_name', 'sku_name', 'sku_tier',
             'admin_users', 'account_name', 'table_name', 'queue_name',
-            'container', 'watcher_app', 'watcher_sa', 'processor_app', 'processor_sa',
+            'container', 'input_sources', 'watcher_app', 'watcher_sa',
+            'processor_app', 'processor_sa',
             'keyvault_name', 'keyvault_password_location', 'insights_name',
         }
         return data if required.issubset(data) else None
@@ -170,7 +171,7 @@ def clear_state():
 # ---------------------------------------------------------------------------
 
 def collect_resource_group(azure, subscription_id):
-    section('Step 2/5 — Resource Group')
+    section('Step 2/7 — Resource Group')
 
     step('Fetching resource groups...')
     rgs = azure.list_resource_groups(subscription_id)
@@ -198,7 +199,7 @@ def collect_resource_group(azure, subscription_id):
 
 
 def collect_adx_config(defaults, resource_group):
-    section('Step 3/5 — Azure Data Explorer')
+    section('Step 3/7 — Azure Data Explorer')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
     default_cluster = (rg_slug[:13] + 'adx' + rand6())  # max 22 chars, no hyphens allowed
@@ -221,14 +222,9 @@ def collect_adx_config(defaults, resource_group):
 def collect_admin_users(adx):
     admins = []
 
-    print()
-    add_admins = input('  Add cluster admins (AllDatabasesAdmin)? [Y/n]: ').strip().lower()
-    if add_admins in ('y', 'yes'):
-        return admins
-
     while True:
         print()
-        query = input('  Search user by name or email (or press Enter to finish): ').strip()
+        query = input('  Add cluster admin by searching for user by name or email (or press Enter to finish): ').strip()
         if not query:
             break
 
@@ -262,8 +258,67 @@ def collect_admin_users(adx):
     return admins
 
 
+def collect_input_sources(defaults, account_name, container):
+    section('Step 5/7 — Input Sources')
+
+    info('Select which input source(s) to use for triage packages.')
+    info('You can enable multiple sources.')
+    print()
+    print('  1) Blob  — Azure Blob Storage (managed identity, using the storage account provisioned above)  [recommended]')
+    print('  2) SAS   — Azure Blob Storage via Shared Access Signature (SAS) token')
+    print('  3) SFTP  — Remote file server via SSH')
+    print()
+    info('Enter one or more numbers separated by spaces (e.g. "1 3" for Blob + SFTP).')
+    print()
+
+    while True:
+        raw = input('Select input source(s) [1]: ').strip()
+        if not raw:
+            raw = '1'
+        choices = raw.split()
+        if choices and all(c in {'1', '2', '3'} for c in choices):
+            break
+        print('  Enter one or more of: 1 (Blob), 2 (SAS), 3 (SFTP).')
+
+    sources = {}
+
+    if '1' in choices:
+        blob_uri = f'https://{account_name}.blob.core.windows.net'
+        sources['blob'] = {
+            'BLOB_STORAGEACCOUNT_ENABLED': 'true',
+            'BLOB_STORAGEACCOUNT_URI':     blob_uri,
+            'BLOB_CONTAINER_INPUT':        container,
+        }
+
+    if '2' in choices:
+        print()
+        info('Paste the full SAS URL (includes container path and token query string).')
+        sas_url = prompt('SAS URL', default=defaults.get('blob_storageaccount_sas', ''))
+        sources['sas'] = {
+            'BLOB_STORAGEACCOUNT_SAS_ENABLED': 'true',
+            'BLOB_STORAGEACCOUNT_SAS':          sas_url,
+        }
+
+    if '3' in choices:
+        print()
+        info('The SFTP private key is fetched from Key Vault at runtime.')
+        sftp_url  = prompt('SFTP hostname',                              default=defaults.get('sftp_url', ''))
+        sftp_user = prompt('SFTP username',                              default=defaults.get('sftp_username', ''))
+        sftp_port = prompt('SFTP port',                                  default=defaults.get('sftp_port', '22'))
+        sftp_kv   = prompt('Key Vault secret name for SFTP private key', default=defaults.get('sftp_keyvaultsecretname', 'sftp-key'))
+        sources['sftp'] = {
+            'SFTP_ENABLED':            'true',
+            'SFTP_URL':                sftp_url,
+            'SFTP_USERNAME':           sftp_user,
+            'SFTP_PORT':               sftp_port,
+            'SFTP_KEYVAULTSECRETNAME': sftp_kv,
+        }
+
+    return sources
+
+
 def collect_functions_config(resource_group):
-    section('Step 5/6 — Azure Functions')
+    section('Step 6/7 — Azure Functions')
 
     info('Each function app gets its own dedicated storage account (Azure best practice).')
     print()
@@ -285,7 +340,7 @@ def collect_functions_config(resource_group):
 
 
 def collect_keyvault_config(resource_group):
-    section('Step 6/6 — Key Vault (optional)')
+    section('Step 7/7 — Key Vault (optional)')
 
     info('A Key Vault is only required if triage packages collected with Velociraptor')
     info('are protected with a ZIP password. You can skip this step if packages are')
@@ -308,7 +363,7 @@ def collect_keyvault_config(resource_group):
 
 
 def collect_storage_config(defaults, resource_group):
-    section('Step 4/5 — Storage Account')
+    section('Step 4/7 — Storage Account')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
     account_name = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'zip')[:18] + rand6())
@@ -327,6 +382,7 @@ def confirm_plan(resource_group, location, new_rg,
                  cluster_name, database_name, sku_name,
                  admin_users,
                  account_name, table_name, queue_name, container,
+                 input_sources,
                  watcher_app, watcher_sa, processor_app, processor_sa,
                  keyvault_name, keyvault_password_location):
 
@@ -348,6 +404,15 @@ def confirm_plan(resource_group, location, new_rg,
     info(f'Table    : {table_name}')
     info(f'Queue    : {queue_name}')
     info(f'Container: {container}')
+
+    print('\n  Input Sources')
+    if 'blob' in input_sources:
+        info(f'Blob : enabled  ({account_name} / {container})')
+    if 'sas' in input_sources:
+        info(f'SAS  : enabled')
+    if 'sftp' in input_sources:
+        sftp = input_sources['sftp']
+        info(f'SFTP : enabled  ({sftp["SFTP_USERNAME"]}@{sftp["SFTP_URL"]}:{sftp["SFTP_PORT"]})')
 
     print('\n  Azure Functions')
     info(f'Watcher  : {watcher_app}  (storage: {watcher_sa})')
@@ -467,15 +532,12 @@ def provision_all(azure, credential, subscription_id,
     })
 
     write_env_values({
-        'BLOB_LOGTABLE_ENABLED':      'true',
-        'BLOB_LOGTABLE_URI':          table_endpoint,
-        'BLOB_LOGTABLE_NAME':         table_name,
-        'BLOB_QUEUE_ENABLED':         'true',
-        'BLOB_QUEUE_URL':             queue_url,
-        'BLOB_QUEUE_NAME':            queue_name,
-        'BLOB_STORAGEACCOUNT_ENABLED': 'true',
-        'BLOB_STORAGEACCOUNT_URI':    blob_uri,
-        'BLOB_CONTAINER_INPUT':       container,
+        'BLOB_LOGTABLE_ENABLED': 'true',
+        'BLOB_LOGTABLE_URI':     table_endpoint,
+        'BLOB_LOGTABLE_NAME':    table_name,
+        'BLOB_QUEUE_ENABLED':    'true',
+        'BLOB_QUEUE_URL':        queue_url,
+        'BLOB_QUEUE_NAME':       queue_name,
     })
 
     success('.env updated.')
@@ -633,6 +695,7 @@ def main():
     print('  What will be created:')
     print('    - Azure Data Explorer cluster + database')
     print('    - Storage account (blob container, queue, table)')
+    print('    - Input source configuration (Blob, SAS, and/or SFTP)')
     print('    - Two Azure Function Apps (watcher + processor)')
     print('    - (Optional) Key Vault for ZIP password storage')
     print()
@@ -640,7 +703,7 @@ def main():
     print('  re-run it and choose to resume the saved session.')
     print()
 
-    section('Step 1/5 — Authentication')
+    section('Step 1/7 — Authentication')
     azure      = AzureManager()
     credential = azure.authenticate()
 
@@ -673,6 +736,7 @@ def main():
             table_name      = saved['table_name']
             queue_name      = saved['queue_name']
             container       = saved['container']
+            input_sources   = saved['input_sources']
             watcher_app     = saved['watcher_app']
             watcher_sa      = saved['watcher_sa']
             processor_app   = saved['processor_app']
@@ -702,6 +766,8 @@ def main():
 
         account_name, table_name, queue_name, container = collect_storage_config(defaults, resource_group)
 
+        input_sources = collect_input_sources(defaults, account_name, container)
+
         watcher_app, watcher_sa, processor_app, processor_sa, insights_name = collect_functions_config(resource_group)
 
         keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group)
@@ -720,6 +786,7 @@ def main():
             'table_name':                table_name,
             'queue_name':                queue_name,
             'container':                 container,
+            'input_sources':             input_sources,
             'watcher_app':               watcher_app,
             'watcher_sa':                watcher_sa,
             'processor_app':             processor_app,
@@ -733,6 +800,7 @@ def main():
                         cluster_name, database_name, sku_name,
                         admin_users,
                         account_name, table_name, queue_name, container,
+                        input_sources,
                         watcher_app, watcher_sa, processor_app, processor_sa,
                         keyvault_name, keyvault_password_location):
         print('Aborted.')
@@ -743,6 +811,11 @@ def main():
                   cluster_name, database_name, sku_name, sku_tier,
                   admin_users,
                   account_name, table_name, queue_name, container)
+
+    step('Writing input source settings to .env...')
+    for source_settings in input_sources.values():
+        write_env_values(source_settings)
+    success('Input source settings written.')
 
     if keyvault_name:
         adx_tmp = AdxManager(credential, '', '', '')

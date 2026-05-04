@@ -695,10 +695,17 @@ class AdxManager:
         mgmt = KustoManagementClient(self.credential, subscription_id)
         self._mgmt = mgmt
 
+        _NON_TERMINAL = {'Creating', 'Updating', 'Starting', 'Stopping', 'Migrating', 'Scaling', 'Deleting'}
         try:
             existing = mgmt.clusters.get(resource_group, cluster_name)
-            if existing.state in ('Running', 'Starting'):
-                log.info(f"Cluster '{cluster_name}' already exists ({existing.state}), skipping creation.")
+            if existing.state in _NON_TERMINAL:
+                log.warning(f"Cluster '{cluster_name}' is in state '{existing.state}' from a previous operation, waiting for it to complete...")
+                while existing.state in _NON_TERMINAL:
+                    time.sleep(30)
+                    existing = mgmt.clusters.get(resource_group, cluster_name)
+                    log.warning(f"  Current state: {existing.state}...")
+            if existing.state == 'Running':
+                log.info(f"Cluster '{cluster_name}' already exists and is running, skipping creation.")
                 return existing
         except Exception:
             pass
