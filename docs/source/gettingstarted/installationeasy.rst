@@ -72,7 +72,7 @@ Steps
 
    The wizard guides you through seven steps and saves progress automatically.
    If it is interrupted during provisioning, re-run it and choose to resume
-   the saved session. See :doc:`../guides/runningatscale` for a full walkthrough.
+   the saved session.
 
 Resuming a failed install
 -------------------------

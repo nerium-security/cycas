@@ -42,13 +42,6 @@ are needed.
    :depth: 2
 
 
-
-
-
-
-
-
-
 Input sources
 -------------
  
