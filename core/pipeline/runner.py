@@ -75,11 +75,6 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
 
     for message in messagequeue:
 
-        if message.dequeue_count > Config.var_max_retry:
-            if mode == 'manual':
-                managers.queue.delete_message(message)
-            continue
-
         items = decode_message(message)  # always a list of {triagepackage, source_name}
 
         all_succeeded = True
@@ -96,10 +91,7 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
             try:
                 run_zip_processor(managers, source_name, zipfile, sessionid, Config)
             except Exception as e:
-                log.error(
-                    f'Processing failed for {zipfile} '
-                    f'(attempt {message.dequeue_count}/{Config.var_max_retry}): {e}'
-                )
+                log.error(f'Processing failed for {zipfile}: {e}')
                 update_status_in_log(managers, Config, Status.FAILED, start, results)
                 all_succeeded = False
 
