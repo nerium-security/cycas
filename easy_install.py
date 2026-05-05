@@ -495,7 +495,8 @@ def provision_all(azure, credential, subscription_id,
                   resource_group, location, new_rg,
                   cluster_name, database_name, sku_name, sku_tier,
                   admin_users,
-                  account_name, table_name, queue_name, container):
+                  account_name, table_name, queue_name, container,
+                  defaults):
 
     section('Provisioning')
 
@@ -514,6 +515,10 @@ def provision_all(azure, credential, subscription_id,
     adx.provision_database(resource_group, cluster_name, database_name, location)
     success(f"Database '{database_name}' ready.")
 
+    adx.adx_cluster_uri           = cluster.uri
+    adx.adx_cluster_ingestion_uri = cluster.data_ingestion_uri
+    adx.authenticate(credential, verify_enabled=False)
+
     step('Ensuring current user has AllDatabasesAdmin...')
     principal_id, principal_type = adx.get_current_user_id()
     adx.AllDatabasesAdmin(resource_group, cluster_name, principal_id, principal_type)
@@ -524,6 +529,15 @@ def provision_all(azure, credential, subscription_id,
         assignment_name = f'cycas-admin-{user["id"][:8]}'
         adx.assign_cluster_admin(resource_group, cluster_name, user['id'], 'User', assignment_name)
         success(f"'{user['displayName']}' has AllDatabasesAdmin.")
+
+    step(f"Setting ingestion batching policy on '{database_name}'...")
+    adx.set_ingestion_batching_policy(
+        database_name,
+        max_time=defaults.get('adx_ingestion_batching_timespan', '00:00:30'),
+        max_items=int(defaults.get('adx_ingestion_batching_max_items', 2500)),
+        max_size_mb=int(defaults.get('adx_ingestion_batching_max_size_mb', 4096)),
+    )
+    success('Ingestion batching policy set.')
 
     blob_uri       = f'https://{account_name}.blob.core.windows.net'
     table_endpoint = f'https://{account_name}.table.core.windows.net'
@@ -872,7 +886,8 @@ def main():
                   resource_group, location, new_rg,
                   cluster_name, database_name, sku_name, sku_tier,
                   admin_users,
-                  account_name, table_name, queue_name, container)
+                  account_name, table_name, queue_name, container,
+                  defaults)
 
     step('Writing input source settings to .env...')
     for source_settings in input_sources.values():

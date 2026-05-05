@@ -650,6 +650,23 @@ class AdxManager:
             log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
             return False
 
+    def set_ingestion_batching_policy(self, database_name,
+                                       max_time='00:00:30',
+                                       max_items=2500,
+                                       max_size_mb=4096):
+        '''Set the ingestion batching policy on a database.'''
+        cmd = (
+            f'.alter database {database_name} policy ingestionbatching '
+            f'@\'{{"MaximumBatchingTimeSpan":"{max_time}",'
+            f'"MaximumNumberOfItems":{max_items},'
+            f'"MaximumRawDataSizeMB":{max_size_mb}}}\''
+        )
+        try:
+            self.kusto_client.execute_mgmt(database_name, cmd)
+            log.info(f'Ingestion batching policy set on {database_name}.')
+        except Exception as e:
+            log.error(f'Failed to set ingestion batching policy: {e}')
+
     def get_current_user_id(self):
         '''
         Return the object ID and principal type of the currently authenticated identity.

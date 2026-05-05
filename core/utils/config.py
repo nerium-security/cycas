@@ -48,6 +48,9 @@ class Config(BaseSettings):
     adx_database_name: str
     adx_cluster_uri: str
     adx_cluster_ingestion_uri: str
+    adx_ingestion_batching_timespan: str
+    adx_ingestion_batching_max_items: int
+    adx_ingestion_batching_max_size_mb: int
     keyvault_enabled: bool
     keyvault_url: str
     keyvault_passwordlocation: str
