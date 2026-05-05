@@ -730,14 +730,15 @@ class AdxManager:
         except Exception:
             pass
 
-        cluster = Cluster(location=location, sku=AzureSku(name=sku_name, capacity=1, tier=sku_tier))
+        capacity = 1 if sku_tier == 'Basic' else 2
+        cluster = Cluster(location=location, sku=AzureSku(name=sku_name, capacity=capacity, tier=sku_tier))
         log.info(f"Provisioning ADX cluster '{cluster_name}' (this may take several minutes)...")
         for attempt in range(1, 4):
             try:
                 result = mgmt.clusters.begin_create_or_update(resource_group, cluster_name, cluster).result()
                 break
             except Exception as e:
-                transient = any(t in str(e) for t in ('InternalServerError', 'GatewayTimeout', 'ServiceUnavailable'))
+                transient = any(t in str(e) for t in ('InternalServerError', 'GatewayTimeout', 'ServiceUnavailable', 'ServiceIsInMaintenance', 'Conflict'))
                 if attempt == 3 or not transient:
                     raise
                 log.warning(f"Transient error on attempt {attempt}/3, retrying in 30 s: {e}")

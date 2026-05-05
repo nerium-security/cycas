@@ -522,7 +522,7 @@ def provision_all(azure, credential, subscription_id,
 
     adx.adx_cluster_uri           = cluster.uri
     adx.adx_cluster_ingestion_uri = cluster.data_ingestion_uri
-    adx.authenticate(credential, verify_enabled=False)
+    adx.authenticate(verify_enabled=False)
 
     step('Ensuring current user has AllDatabasesAdmin...')
     principal_id, principal_type = adx.get_current_user_id()
@@ -569,10 +569,13 @@ def provision_all(azure, credential, subscription_id,
     step('Writing .env...')
 
     write_env_values({
-        'ADX_CLUSTER_ENABLED':       'true',
-        'ADX_CLUSTER_URI':           cluster.uri,
-        'ADX_CLUSTER_INGESTION_URI': cluster.data_ingestion_uri,
-        'ADX_DATABASE_NAME':         database_name,
+        'ADX_CLUSTER_ENABLED':                'true',
+        'ADX_CLUSTER_URI':                    cluster.uri,
+        'ADX_CLUSTER_INGESTION_URI':          cluster.data_ingestion_uri,
+        'ADX_DATABASE_NAME':                  database_name,
+        'ADX_INGESTION_BATCHING_TIMESPAN':    defaults.get('adx_ingestion_batching_timespan', '00:00:30'),
+        'ADX_INGESTION_BATCHING_MAX_ITEMS':   defaults.get('adx_ingestion_batching_max_items', '2500'),
+        'ADX_INGESTION_BATCHING_MAX_SIZE_MB': defaults.get('adx_ingestion_batching_max_size_mb', '4096'),
     })
 
     write_env_values({
@@ -768,6 +771,8 @@ def main():
     print('  re-run it and choose to resume the saved session.')
     print()
 
+    defaults = read_env_defaults(ENV_EXAMPLE)
+
     section(f'Step 1/{total} — Authentication')
     azure      = AzureManager()
     credential = azure.authenticate()
@@ -825,8 +830,6 @@ def main():
             total = '7' if run_mode == 'azurefunction' else '5'
 
     if not saved:
-        defaults = read_env_defaults(ENV_EXAMPLE)
-
         subscription_id = azure.select_subscription()
 
         resource_group, location, new_rg = collect_resource_group(azure, subscription_id, f'2/{total}')
