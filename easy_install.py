@@ -715,11 +715,6 @@ def provision_functions(credential, subscription_id,
     funcs.deploy(processor_app, root / 'azurefunctions' / 'processor', core_dir)
     success('Processor deployed.')
 
-    info('')
-    info('Note: RBAC role propagation can take a few minutes. If the processor')
-    info('queue trigger fails on first run, wait 2-3 minutes and try again.')
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
