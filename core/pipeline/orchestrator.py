@@ -230,7 +230,11 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
         outputfile_path = result_postprocess.get('fullpath')
         result_postprocess.pop('fullpath', None)
         result_upload = define_results_upload_dict()
-        
+
+        if Config.adx_cluster_enabled and outputfile_path:
+            uploadid = results['summary'][0].get('uploadid')
+            managers.adx.add_hostname_to_file(outputfile_path, hostname, zipfile, uploadid)
+
         result_upload.update(_upload_file_to_adx(managers, Config, outputfile_path))
 
         delete_file(outputfile_path)
@@ -251,10 +255,10 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
 
 def extract_all_json_from_zip_and_upload(managers,
                                          Config,
-                                         extracted_zip, 
-                                         extract_path, 
-                                         zip_password, 
-                                         zipfilecontent, 
+                                         extracted_zip,
+                                         extract_path,
+                                         zip_password,
+                                         zipfilecontent,
                                          results):
     '''
     Extract JSON and JSONL files from a zip archive and initiate ADX ingestion.
@@ -278,11 +282,14 @@ def extract_all_json_from_zip_and_upload(managers,
 
     # ----------------------------------------------------------------------
     # Initilializing the extraction
-    # ----------------------------------------------------------------------  
+    # ----------------------------------------------------------------------
     ignorelist = load_ignore_list(Config.var_location_ignorelist)
-    
+
+    hostname = None
+    uploadid = None
     if Config.adx_cluster_enabled:
         hostname = results['summary'][0].get('hostname')
+        uploadid = results['summary'][0].get('uploadid')
 
     # ----------------------------------------------------------------------
     # Extract file by file, add hostname to file, and upload jsons
@@ -305,7 +312,7 @@ def extract_all_json_from_zip_and_upload(managers,
             continue
 
         if hostname:
-            upload_dict.update(managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip))
+            upload_dict.update(managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip, uploadid))
 
             MAX_ADX_UPLOAD_SIZE = 6_442_450_944  # 6 GB
 

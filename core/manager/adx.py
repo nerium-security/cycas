@@ -553,18 +553,19 @@ class AdxManager:
         except Exception as e:
             log.error(f'Failed to initiate the data upload request to table {tablename}. Error: {e}' )
 
-    def add_hostname_to_file(self, fullpath, hostname, zipfile):
+    def add_hostname_to_file(self, fullpath, hostname, zipfile, uploadid=None):
         '''
-        Add Hostname and Sourcefilename fields to each JSON object line in a file.
+        Add Hostname, Sourcefilename, and optionally UploadId fields to each JSON object line in a file.
 
         Performs an in-place modification of a JSON Lines file by appending
-        '"Sourcefilename":"<zipfile>","Hostname":"<hostname>"' to each line that
-        ends with '}'.
+        '"Sourcefilename":"<zipfile>","Hostname":"<hostname>"' (and optionally
+        '"UploadId":"<uploadid>"') to each line that ends with '}'.
 
         Args:
             fullpath (str): Path to the JSONL file to modify in place.
             hostname (str): Hostname value to add to each JSON object.
             zipfile (str): Source filename value to add to each JSON object.
+            uploadid (str | None): Optional upload identifier to add to each JSON object.
 
         Returns:
             dict: Result dictionary containing:
@@ -575,6 +576,8 @@ class AdxManager:
         start = time.time()
         basename = os.path.basename(fullpath)
         columns = f',"Sourcefilename":"{zipfile}","Hostname":"{hostname}"'
+        if uploadid:
+            columns += f',"UploadId":"{uploadid}"'
         replacement = columns + '}'
 
         try:
