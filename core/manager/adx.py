@@ -392,7 +392,7 @@ class AdxManager:
                 with column names as keys and data types as values.
         '''
         
-        end = ('Hostname', 'Sourcefile')
+        end = ('Hostname', 'Sourcefile', 'UploadId')
 
         schema = dict(
             [(k, schema[k]) for k in schema if k not in end] +
