@@ -328,48 +328,6 @@ class TablestorageManager:
 
         self.update_log_entry(entity)
 
-    def check_if_processing_by_this_instance(self, zip, sessionid):
-        '''
-        Check whether the current script instance is processing a zipfile.
-
-        Compares the stored session ID in the log entry with the provided
-        session ID.
-
-        Args:
-            zip (str): Zipfile basename.
-            sessionid: Session identifier for the current script instance.
-
-        Returns:
-            bool: True if the zipfile is processed by this instance.
-        '''
-
-        entry = self.retrieve_log_entry(zip)
-
-        entry_sessionid = entry.get('Sessionid')
-        if entry_sessionid == sessionid:
-            log.info('Zip file is processed by this script instance.')
-            return True
-        
-        return False
-
-    def check_if_failed(self, status, log_entry):
-        '''
-        Check whether a log entry represents a failure state.
-
-        Args:
-            status: Status enum or object containing failure states.
-            log_entry (dict): Log entry retrieved from the table.
-
-        Returns:
-            bool: True if the entry indicates a failure, otherwise False.
-        '''
-
-        log_entry_status = log_entry.get('Status')
-        if log_entry_status in (status.FAILED, status.DOWNLOADFAILED, status.EXTRACTIONFAILED, status.UPLOADFAILED):
-            log.info('Zip file failed to process.')
-            return True
-        return False
-
     def update_log_entry(self, entity):
         '''
         Update an existing log entry in Azure Table Storage.

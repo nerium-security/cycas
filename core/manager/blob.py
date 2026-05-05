@@ -140,24 +140,6 @@ class BlobManager:
             log.debug(f'Error: {str(e)}', exc_info=True)
             sys.exit(1)
 
-    def set_metadata(self, container_name, blob_name, metadata):
-        '''
-        Set metadata on a blob.
-
-        Args:
-            container_name (str): Name of the container containing the blob.
-            blob_name (str): Name of the blob.
-            metadata (dict): Metadata key/value pairs to set.
-
-        '''
-
-        blob_client = self.get_client(container_name, blob_name)
-        try:
-            blob_client.set_blob_metadata(metadata)
-            log.info(f'Successfully set metadata for blob {blob_name} in container {container_name}')
-        except Exception as e:
-            log.error(f'Failed to set metadata for blob {blob_name} in container {container_name}. Error: {str(e)}', exc_info=True)
-
     def create_container(self, container_name):
         '''
         Create a container if possible.
@@ -175,39 +157,6 @@ class BlobManager:
             log.info(f'Successfully created container {container_name}')         
         except:
             pass
-
-    def upload(self, container_name, blob_name, data):
-        '''
-        Upload data as a blob to the specified container.
-
-        Args:
-            container_name (str): Name of the destination container.
-            blob_name (str): Name of the blob to create.
-            data: Data to upload. Typically bytes, a file-like object,
-                or any type accepted by `upload_blob()`.
-
-        Returns:
-            bool or None: Returns True if a '.log' blob upload fails and is
-            intentionally skipped. Returns False on upload failure for other
-            blobs. Returns None on successful upload.
-
-        Notes:
-            - The current implementation does not set `overwrite=True`, so
-            uploading an existing blob will raise and be treated as a failure.
-            - '.log' uploads are treated as optional and may be skipped.
-        '''
-
-        blob_client = self.get_client(container_name, blob_name)
-        try:
-            blob_client.upload_blob(data)
-            log.info(f'Successfully uploaded blob {blob_name} to container {container_name}')
-        except Exception as e:
-            if blob_name.endswith('.log'):
-                log.info(f'Skipped blob upload of {blob_name} to container {container_name}.' )
-                return True
-            else:
-                log.warning(f'Failed to upload blob {blob_name} to container {container_name}. Error: {str(e)}')
-                return False
 
     def delete(self, container_name, blob_name):
         '''
