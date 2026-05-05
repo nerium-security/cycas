@@ -36,8 +36,9 @@ ENV_EXAMPLE = ROOT / '.env_example'
 STATE_FILE  = ROOT / '.install_state.json'
 
 SKUS = {
-    '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'development / testing ~$2.40/day when idle'),
-    '2': ('Standard_D11_v2',             'Standard', 'production ~$5.50/day per node when idle'),
+    '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'Development / Testing  (2 vCores,  16 GB RAM/node) ~$2.40/day when idle'),
+    '2': ('Standard_D11_v2',             'Standard', 'Small Production       (2 vCores,  14 GB RAM/node) ~$5.50/day per node when idle'),
+    '3': ('Standard_E8ads_v5',           'Standard', 'Medium Production      (8 vCores,  64 GB RAM/node) ~$19.00/day per node when idle'),
 }
 
 
@@ -229,11 +230,15 @@ def collect_adx_config(defaults, resource_group, step_label='3/7'):
         print('  Invalid name: must be 4-22 characters, start with a letter, only lowercase letters and numbers.')
     database_name = prompt('Database name', default=defaults.get('adx_database_name', 'dfir'))
 
-    print('\nSKU:')
+    print('\n  Cluster size:')
     for key, (sku, _, desc) in SKUS.items():
-        print(f'  {key}) {sku:<45} {desc}')
-    sku_choice = prompt('Select SKU', default='1')
-    sku_name, sku_tier, _ = SKUS.get(sku_choice, SKUS['1'])
+        print(f'  {key}) {sku:<35} {desc}')
+    while True:
+        sku_choice = prompt('Select cluster size', default='1')
+        if sku_choice in SKUS:
+            break
+        print(f'  Enter a number between 1 and {len(SKUS)}.')
+    sku_name, sku_tier, _ = SKUS[sku_choice]
 
     return cluster_name, database_name, sku_name, sku_tier
 
