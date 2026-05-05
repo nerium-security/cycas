@@ -36,8 +36,8 @@ ENV_EXAMPLE = ROOT / '.env_example'
 STATE_FILE  = ROOT / '.install_state.json'
 
 SKUS = {
-    '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'development / testing ~$2.40/day'),
-    '2': ('Standard_D11_v2',             'Standard', 'production ~$5.50/day per node'),
+    '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'development / testing ~$2.40/day when idle'),
+    '2': ('Standard_D11_v2',             'Standard', 'production ~$5.50/day per node when idle'),
 }
 
 
