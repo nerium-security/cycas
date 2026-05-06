@@ -659,7 +659,7 @@ def provision_functions(credential, subscription_id,
     step(f"Ensuring processor function app '{processor_app}' exists (2048 MB)...")
     processor_result = funcs.provision_function_app(
         resource_group, processor_app, location, processor_plan['id'],
-        instance_memory_mb=2048,
+        instance_memory_mb=4096,
         deployment_container_url=processor_deploy_url,
     )
     success(f"'{processor_app}' ready.")
