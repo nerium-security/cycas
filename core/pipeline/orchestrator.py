@@ -138,6 +138,8 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
 
     prepare_and_send_webhook_message(Config.var_webhook_url, results)
 
+    log.info(f'Processing of {os.path.basename(zipfile)} finished.')
+
 def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfilecontent, results, start):
     '''
     Post-process raw artifacts in a triage zip using Velociraptor and upload outputs to ADX.
