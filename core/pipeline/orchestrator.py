@@ -61,6 +61,15 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
 
 
     # ----------------------------------------------------------------------
+    # Log available disk size
+    # ----------------------------------------------------------------------
+    stat = os.statvfs('/tmp')
+    free_mb  = (stat.f_bavail * stat.f_frsize) // (1024 * 1024)
+    total_mb = (stat.f_blocks * stat.f_frsize) // (1024 * 1024)
+    log.info(f'Disk space before processing {os.path.basename(zipfile)}: {free_mb} MB free of {total_mb} MB total')
+
+
+    # ----------------------------------------------------------------------
     # Download zip file
     # ----------------------------------------------------------------------
     if should_download(source_name):
@@ -95,7 +104,6 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
     # ----------------------------------------------------------------------
     # Post-process raw artifacts and upload it's results (json)
     # ----------------------------------------------------------------------
-
     results = postprocess_velociraptor_and_upload(managers,
                                                   Config,
                                                   extracted_zip,
