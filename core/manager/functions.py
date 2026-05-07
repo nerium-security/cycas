@@ -228,7 +228,7 @@ class FunctionsManager:
                         },
                         'scaleAndConcurrency': {
                             'instanceMemoryMB': instance_memory_mb,
-                            'maximumInstanceCount': 100,
+                            'maximumInstanceCount': 500,
                         },
                         'runtime': {'name': 'python', 'version': '3.13'},
                     },
