@@ -37,8 +37,7 @@ STATE_FILE  = ROOT / '.install_state.json'
 
 SKUS = {
     '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'Development / Testing  (2 vCores,  16 GB RAM/node) ~$2.40/day when idle'),
-    '2': ('Standard_D11_v2',             'Standard', 'Small Production       (2 vCores,  14 GB RAM/node) ~$5.50/day per node when idle'),
-    '3': ('Standard_E8ads_v5',           'Standard', 'Medium Production      (8 vCores,  64 GB RAM/node) ~$19.00/day per node when idle'),
+    '2': ('Standard_E8ads_v5',           'Standard', 'Medium Production      (8 vCores,  64 GB RAM/node) ~$19.00/day per node when idle'),
 }
 
 
