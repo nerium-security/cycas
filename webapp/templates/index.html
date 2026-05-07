@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Ingestion Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Ingestion Dashboard</h1>
+        <div class="subtitle">Azure Table Storage — {{ table_name }}</div>
+    </div>
+</div>
+
+<!-- Stats bar -->
+<div class="stats-bar">
+    <div class="stat-card">
+        <div class="label">Total</div>
+        <div class="value">{{ stats.total }}</div>
+    </div>
+    <div class="stat-card finished">
+        <div class="label">Finished</div>
+        <div class="value">{{ stats.finished }}</div>
+    </div>
+    <div class="stat-card processing">
+        <div class="label">Processing</div>
+        <div class="value">{{ stats.processing }}</div>
+    </div>
+    <div class="stat-card failed">
+        <div class="label">Failed</div>
+        <div class="value">{{ stats.failed }}</div>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<form class="filter-bar" method="get" action="{{ url_for('index') }}">
+    <input type="search" name="q" placeholder="Search filename or host…" value="{{ q }}">
+    <select name="status" onchange="this.form.submit()">
+        <option value="">All statuses</option>
+        {% for s in statuses %}
+            <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s|capitalize }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit" style="display:none"></button>
+</form>
+
+<!-- Table -->
+<div class="table-wrap">
+    {% if entries %}
+    <table>
+        <thead>
+            <tr>
+                <th>Filename</th>
+                <th>Host</th>
+                <th>Status</th>
+                <th>Source</th>
+                <th>Started</th>
+                <th>Duration</th>
+                <th>Size</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in entries %}
+            <tr>
+                <td class="filename">{{ e.ZipfileBasename or '—' }}</td>
+                <td class="hostname">{{ e.Extracted_Hostname or '—' }}</td>
+                <td>
+                    <span class="badge badge-{{ (e.Status or 'new')|lower }}">
+                        {{ e.Status or 'new' }}
+                    </span>
+                </td>
+                <td>{{ e.Source or '—' }}</td>
+                <td>{{ e.StartTime or '—' }}</td>
+                <td>{{ e.Duration or '—' }}</td>
+                <td>{{ e.Size | filesizeformat if e.Size else '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <strong>No entries found</strong>
+        <p>{% if q or status_filter %}No results match your filter.{% else %}The status table is empty.{% endif %}</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
