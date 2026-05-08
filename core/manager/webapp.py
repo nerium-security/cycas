@@ -1,0 +1,179 @@
+'''
+Module for provisioning Azure Web Apps.
+
+Provides WebappManager for creating App Service Plans, Web Apps with
+managed identity, and configuring IP access restrictions.
+'''
+
+import logging as log
+import time
+import requests
+
+from azure.mgmt.authorization import AuthorizationManagementClient
+from azure.mgmt.authorization.models import RoleAssignmentCreateParameters
+
+log = log.getLogger(__name__)
+
+_ARM_API = '2024-04-01'
+
+ROLE_STORAGE_TABLE_DATA_READER = '76199698-9eea-4c19-bc75-cec21354c6b4'
+ROLE_STORAGE_QUEUE_DATA_READER = '19e7f393-937e-4f77-808e-94535e297925'
+
+
+class WebappManager:
+    def __init__(self, credential, subscription_id):
+        self.credential      = credential
+        self.subscription_id = subscription_id
+        self._auth           = AuthorizationManagementClient(credential, subscription_id)
+
+    def _token(self):
+        return self.credential.get_token('https://management.azure.com/.default').token
+
+    def _rg_path(self, resource_group):
+        return f'/subscriptions/{self.subscription_id}/resourceGroups/{resource_group}'
+
+    def _arm(self, method, path, api_version=None, **kwargs):
+        url = f'https://management.azure.com{path}?api-version={api_version or _ARM_API}'
+        headers = {
+            'Authorization': f'Bearer {self._token()}',
+            'Content-Type':  'application/json',
+        }
+        resp = requests.request(method, url, headers=headers, timeout=120, **kwargs)
+        if not resp.ok:
+            try:
+                err = resp.json().get('error', resp.json())
+                msg = err.get('message', str(err))
+            except Exception:
+                msg = resp.text
+            raise requests.exceptions.HTTPError(
+                f'{resp.status_code} {resp.reason} — {msg}', response=resp
+            )
+
+        op_url  = resp.headers.get('Azure-AsyncOperation')
+        loc_url = resp.headers.get('Location')
+
+        if resp.status_code == 202:
+            poll_url = op_url or loc_url
+            if poll_url:
+                while True:
+                    time.sleep(15)
+                    poll = requests.get(
+                        poll_url,
+                        headers={'Authorization': f'Bearer {self._token()}'},
+                        timeout=30,
+                    )
+                    poll.raise_for_status()
+                    data   = poll.json()
+                    status = data.get('status', '')
+                    if status == 'Succeeded':
+                        break
+                    if status in ('Failed', 'Canceled'):
+                        raise RuntimeError(f'ARM operation {status}: {data.get("error", {})}')
+
+            if method.upper() == 'PUT':
+                final = requests.get(
+                    url,
+                    headers={'Authorization': f'Bearer {self._token()}'},
+                    timeout=30,
+                )
+                return final.json() if final.content else {}
+
+        return resp.json() if resp.content else {}
+
+    def _arm_get(self, path, api_version=None):
+        url  = f'https://management.azure.com{path}?api-version={api_version or _ARM_API}'
+        resp = requests.get(url, headers={'Authorization': f'Bearer {self._token()}'}, timeout=30)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()
+
+    def provision_plan(self, resource_group, plan_name, location):
+        '''Create a Basic B1 Linux App Service Plan.'''
+        path     = f'{self._rg_path(resource_group)}/providers/Microsoft.Web/serverfarms/{plan_name}'
+        existing = self._arm_get(path)
+        if existing:
+            log.info(f"App Service Plan '{plan_name}' already exists, skipping creation.")
+            return existing
+        result = self._arm(
+            'PUT', path,
+            json={
+                'location': location,
+                'kind':     'linux',
+                'sku':      {'tier': 'Basic', 'name': 'B1'},
+                'properties': {'reserved': True},
+            },
+        )
+        log.info(f"Webapp plan '{plan_name}' ready.")
+        return result
+
+    def provision_webapp(self, resource_group, app_name, location, plan_id):
+        '''Create a Linux Web App with system-assigned managed identity.'''
+        path     = f'{self._rg_path(resource_group)}/providers/Microsoft.Web/sites/{app_name}'
+        existing = self._arm_get(path)
+        if existing:
+            log.info(f"Web app '{app_name}' already exists, skipping creation.")
+            return existing
+        result = self._arm(
+            'PUT', path,
+            json={
+                'location': location,
+                'kind':     'app,linux',
+                'identity': {'type': 'SystemAssigned'},
+                'properties': {
+                    'serverFarmId': plan_id,
+                    'httpsOnly':    True,
+                    'reserved':     True,
+                    'siteConfig':   {'linuxFxVersion': 'PYTHON|3.13'},
+                },
+            },
+        )
+        principal_id = result.get('identity', {}).get('principalId')
+        log.info(f"Web app '{app_name}' created. Principal: {principal_id}")
+        return result
+
+    def configure_ip_restrictions(self, resource_group, app_name, allowed_ips):
+        '''Restrict access to allowed_ips (list of IP or CIDR strings), deny all others.'''
+        rules = [
+            {
+                'name':      f'allow-{i + 1}',
+                'ipAddress': ip if '/' in ip else f'{ip}/32',
+                'action':    'Allow',
+                'priority':  100 + i * 10,
+            }
+            for i, ip in enumerate(allowed_ips)
+        ]
+        self._arm(
+            'PUT',
+            f'{self._rg_path(resource_group)}/providers/Microsoft.Web/sites/{app_name}/config/web',
+            json={
+                'properties': {
+                    'ipSecurityRestrictions':              rules,
+                    'ipSecurityRestrictionsDefaultAction': 'Deny',
+                },
+            },
+        )
+        log.info(f"IP restrictions applied to '{app_name}'.")
+
+    def assign_storage_roles(self, resource_group, account_name, principal_id):
+        '''Grant the webapp managed identity read access to Table and Queue storage.'''
+        import uuid
+        storage_scope = (
+            f'/subscriptions/{self.subscription_id}/resourceGroups/{resource_group}'
+            f'/providers/Microsoft.Storage/storageAccounts/{account_name}'
+        )
+        for role_id in (ROLE_STORAGE_TABLE_DATA_READER, ROLE_STORAGE_QUEUE_DATA_READER):
+            role_def = (
+                f'/subscriptions/{self.subscription_id}'
+                f'/providers/Microsoft.Authorization/roleDefinitions/{role_id}'
+            )
+            self._auth.role_assignments.create(
+                storage_scope,
+                str(uuid.uuid4()),
+                RoleAssignmentCreateParameters(
+                    role_definition_id=role_def,
+                    principal_id=principal_id,
+                    principal_type='ServicePrincipal',
+                ),
+            )
+        log.info(f"Storage reader roles assigned to webapp principal.")

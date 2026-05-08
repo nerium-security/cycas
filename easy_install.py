@@ -18,6 +18,7 @@ import re
 import sys
 import random
 import string
+from urllib.request import urlopen
 from pathlib import Path
 
 from core.manager.azure import AzureManager
@@ -27,6 +28,7 @@ from core.manager.table import TablestorageManager
 from core.manager.queue import QueueManager
 from core.manager.functions import FunctionsManager
 from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
+from core.manager.webapp import WebappManager
 
 logging.basicConfig(level=logging.WARNING, format='%(message)s')
 
@@ -36,8 +38,8 @@ ENV_EXAMPLE = ROOT / '.env_example'
 STATE_FILE  = ROOT / '.install_state.json'
 
 SKUS = {
-    '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'Development / Testing  (2 vCores,  16 GB RAM/node) ~$2.40/day when idle'),
-    '2': ('Standard_E8ads_v5',           'Standard', 'Medium Production      (8 vCores,  64 GB RAM/node) ~$19.00/day per node when idle'),
+    '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'Small engagements / Testing  (2 vCores,  16 GB RAM/node) ~$2.40/day when idle'),
+    '2': ('Standard_E8ads_v5',           'Standard', 'Large engagements            (8 vCores,  64 GB RAM/node) ~$19.00/day per node when idle'),
 }
 
 
@@ -173,6 +175,7 @@ def load_state():
         azure_required = {
             'watcher_app', 'watcher_sa', 'processor_app', 'processor_sa',
             'keyvault_name', 'keyvault_password_location', 'insights_name',
+            'webapp_app', 'webapp_allowed_ips',
         }
         run_mode = data.get('run_mode', 'azurefunction')
         required = base_required | (azure_required if run_mode == 'azurefunction' else set())
@@ -385,6 +388,50 @@ def collect_keyvault_config(resource_group, step_label='7/7'):
     return keyvault_name, password_location, zip_password
 
 
+def collect_webapp_config(resource_group, step_label='8/8'):
+    section(f'Step {step_label} — Web Application (optional)')
+
+    info('A Web App provides a status dashboard for the Cycas pipeline.')
+    info('Access is restricted to IP addresses you specify.')
+    print()
+    create_wa = input('  Create a Web App? [y/N]: ').strip().lower()
+    if create_wa not in ('y', 'yes'):
+        return None, None
+
+    rg_slug  = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
+    app_name = prompt('Web app name', default=f'{rg_slug[:43]}-webapp-{rand6()}')
+
+    print()
+    print('  Enter IP addresses or CIDR ranges allowed to access the webapp.')
+    print('  All other traffic will be denied.')
+    print()
+
+    try:
+        my_ip = urlopen('https://api.ipify.org', timeout=5).read().decode()
+    except Exception:
+        my_ip = None
+
+    allowed_ips = []
+    if my_ip:
+        answer = input(f'  Add your current external IP ({my_ip})? [Y/n]: ').strip().lower()
+        if answer not in ('n', 'no'):
+            allowed_ips.append(my_ip)
+            success(f"'{my_ip}' added.")
+        print()
+
+    while True:
+        ip = input('  Add IP / CIDR (or press Enter to finish): ').strip()
+        if not ip:
+            if not allowed_ips:
+                print('  At least one IP address is required.')
+                continue
+            break
+        allowed_ips.append(ip)
+        success(f"'{ip}' added.")
+
+    return app_name, allowed_ips
+
+
 def collect_storage_config(defaults, resource_group, step_label='4/7'):
     section(f'Step {step_label} — Storage Account')
 
@@ -409,7 +456,8 @@ def confirm_plan(run_mode,
                  input_sources,
                  watcher_app=None, watcher_sa=None,
                  processor_app=None, processor_sa=None,
-                 keyvault_name=None, keyvault_password_location=None):
+                 keyvault_name=None, keyvault_password_location=None,
+                 webapp_app=None, webapp_allowed_ips=None):
 
     section('Summary — Review before provisioning')
 
@@ -448,6 +496,10 @@ def confirm_plan(run_mode,
         info(f'Processor: {processor_app}  (storage: {processor_sa})')
         if keyvault_name:
             info(f'Key Vault: {keyvault_name}  (secret: {keyvault_password_location})')
+        if webapp_app:
+            print('\n  Web Application')
+            info(f'App name : {webapp_app}')
+            info(f'Allowed IPs: {", ".join(webapp_allowed_ips)}')
 
     print()
     confirm = input('Proceed with provisioning? [Y/n]: ').strip().lower()
@@ -737,6 +789,38 @@ def provision_functions(credential, subscription_id,
     success('Processor deployed.')
 
 # ---------------------------------------------------------------------------
+# Phase 5: Web App
+# ---------------------------------------------------------------------------
+
+def provision_webapp_all(credential, subscription_id, resource_group, location,
+                         account_name, webapp_app, allowed_ips):
+
+    section('Provisioning — Web Application')
+
+    webapp = WebappManager(credential, subscription_id)
+
+    plan_name = f'{webapp_app}-plan'
+    step(f"Ensuring App Service Plan '{plan_name}' exists...")
+    plan = webapp.provision_plan(resource_group, plan_name, location)
+    success(f"Plan '{plan_name}' ready.")
+
+    step(f"Ensuring Web App '{webapp_app}' exists...")
+    result = webapp.provision_webapp(resource_group, webapp_app, location, plan['id'])
+    principal_id = result.get('identity', {}).get('principalId')
+    success(f"Web App '{webapp_app}' ready.")
+
+    step(f"Configuring IP restrictions ({len(allowed_ips)} rule(s))...")
+    webapp.configure_ip_restrictions(resource_group, webapp_app, allowed_ips)
+    success('IP restrictions applied.')
+
+    step('Assigning storage reader roles to web app managed identity...')
+    webapp.assign_storage_roles(resource_group, account_name, principal_id)
+    success('Storage reader roles assigned.')
+
+    success(f"Web App accessible at: https://{webapp_app}.azurewebsites.net")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -755,7 +839,7 @@ def main():
         section('Deployment Mode')
         run_mode = collect_run_mode()
 
-    total = '7' if run_mode == 'azurefunction' else '5'
+    total = '8' if run_mode == 'azurefunction' else '5'
 
     print()
     print('  What will be created:')
@@ -813,6 +897,8 @@ def main():
                 keyvault_name              = saved['keyvault_name']
                 keyvault_password_location = saved['keyvault_password_location']
                 insights_name              = saved['insights_name']
+                webapp_app                 = saved['webapp_app']
+                webapp_allowed_ips         = saved['webapp_allowed_ips']
                 zip_password               = None  # not stored in state
                 if keyvault_name:
                     import getpass
@@ -820,13 +906,14 @@ def main():
             else:
                 watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
                 keyvault_name = keyvault_password_location = zip_password = None
+                webapp_app = webapp_allowed_ips = None
         else:
             clear_state()
             saved = None
             # User declined to resume — re-ask mode for the fresh install
             section('Deployment Mode')
             run_mode = collect_run_mode()
-            total = '7' if run_mode == 'azurefunction' else '5'
+            total = '8' if run_mode == 'azurefunction' else '5'
 
     if not saved:
         subscription_id = azure.select_subscription()
@@ -845,9 +932,11 @@ def main():
         if run_mode == 'azurefunction':
             watcher_app, watcher_sa, processor_app, processor_sa, insights_name = collect_functions_config(resource_group, f'6/{total}')
             keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
+            webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
         else:
             watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
             keyvault_name = keyvault_password_location = zip_password = None
+            webapp_app = webapp_allowed_ips = None
 
         state = {
             'run_mode':                  run_mode,
@@ -875,6 +964,8 @@ def main():
                 'keyvault_name':             keyvault_name,
                 'keyvault_password_location': keyvault_password_location,
                 'insights_name':             insights_name,
+                'webapp_app':                webapp_app,
+                'webapp_allowed_ips':        webapp_allowed_ips,
             })
         save_state(state)
 
@@ -885,7 +976,8 @@ def main():
                         account_name, table_name, queue_name, container,
                         input_sources,
                         watcher_app, watcher_sa, processor_app, processor_sa,
-                        keyvault_name, keyvault_password_location):
+                        keyvault_name, keyvault_password_location,
+                        webapp_app, webapp_allowed_ips):
         print('Aborted.')
         sys.exit(0)
 
@@ -916,6 +1008,11 @@ def main():
                             watcher_app, watcher_sa,
                             processor_app, processor_sa,
                             keyvault_name, insights_name)
+
+        if webapp_app:
+            provision_webapp_all(credential, subscription_id,
+                                 resource_group, location,
+                                 account_name, webapp_app, webapp_allowed_ips)
 
     state = load_state()
     if state:
