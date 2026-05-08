@@ -140,7 +140,18 @@ table {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.875rem;
+    table-layout: fixed;
 }
+
+/* Fixed column widths */
+table colgroup col:nth-child(1) { width:  3%; } /* Checkbox  */
+table colgroup col:nth-child(2) { width: 22%; } /* Filename  */
+table colgroup col:nth-child(3) { width: 13%; } /* Host      */
+table colgroup col:nth-child(4) { width: 18%; } /* Status    */
+table colgroup col:nth-child(5) { width:  8%; } /* Source    */
+table colgroup col:nth-child(6) { width: 15%; } /* Started   */
+table colgroup col:nth-child(7) { width: 12%; } /* Duration  */
+table colgroup col:nth-child(8) { width:  9%; } /* Size      */
 
 thead tr {
     background: var(--teal);
@@ -152,6 +163,8 @@ thead th {
     text-align: left;
     font-weight: 600;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 tbody tr { border-bottom: 1px solid var(--border); }
@@ -161,6 +174,9 @@ tbody tr:hover { background: #f0f8fb; }
 tbody td {
     padding: 0.7rem 1rem;
     vertical-align: middle;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .filename { font-family: monospace; font-size: 0.82rem; }
@@ -176,6 +192,10 @@ tbody td {
     text-transform: uppercase;
     letter-spacing: 0.04em;
     white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
 }
 
 .badge-finished     { background: #d5f5e3; color: #1e8449; }
@@ -188,6 +208,57 @@ tbody td {
 .badge-queued       { background: #f0e6ff; color: #6c3483; }
 .badge-unqueued     { background: #fdfefe; color: #717d7e; border: 1px solid #d0d3d4; }
 .badge-new          { background: var(--bg); color: var(--teal); border: 1px solid var(--border); }
+
+/* ── Checkbox column ── */
+.col-check {
+    text-align: center;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+}
+
+.col-check input[type="checkbox"] {
+    cursor: pointer;
+    width: 15px;
+    height: 15px;
+    accent-color: var(--teal);
+}
+
+/* ── Sticky action bar ── */
+.action-bar {
+    position: fixed;
+    bottom: 1.5rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(120%);
+    background: var(--dark);
+    color: var(--white);
+    border-radius: 8px;
+    padding: 0.75rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    transition: transform 0.2s ease;
+    z-index: 100;
+    font-size: 0.9rem;
+}
+
+.action-bar.visible {
+    transform: translateX(-50%) translateY(0);
+}
+
+.btn-retry {
+    background: var(--lime);
+    color: var(--dark);
+    border: none;
+    border-radius: 6px;
+    padding: 0.4rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn-retry:hover   { background: var(--lime-dark); }
+.btn-retry:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Empty state ── */
 .empty-state {

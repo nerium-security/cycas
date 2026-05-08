@@ -186,12 +186,13 @@ class TablestorageManager:
             'PartitionKey': self.partitionkey,
             'RowKey': self.hash_filename(status_data.get('zipfile_basename', '')),
             'ZipfileBasename': status_data.get('zipfile_basename', ''),
+            'UploadId': status_data.get('uploadid', ''),
             'Status': status,
             'Sessionid': status_data.get('sessionid', ''),
             'ScriptLocation': self.computername,
             'Source': status_data.get('source_name', ''),
             'Duration': duration,
-            'StartTime': f'{datetime.utcnow():%Y-%m-%dT%H:%M:%SZ}',
+            'LastUpdatedTime': f'{datetime.utcnow():%Y-%m-%dT%H:%M:%SZ}',
             'Extracted_Hostname': status_data.get('hostname', ''),
             'Size': size
         }
@@ -301,6 +302,7 @@ class TablestorageManager:
 
         if not existing_entry:
             log.info(f'No log entry found for {zipfile}. Writing new one.')
+            entity['StartTime'] = f'{datetime.utcnow():%Y-%m-%dT%H:%M:%SZ}'
             self.table_client.create_entity(entity)
             return True
 

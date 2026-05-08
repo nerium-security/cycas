@@ -16,8 +16,7 @@ log = log.getLogger(__name__)
 
 _ARM_API = '2024-04-01'
 
-ROLE_STORAGE_TABLE_DATA_READER = '76199698-9eea-4c19-bc75-cec21354c6b4'
-ROLE_STORAGE_QUEUE_DATA_READER = '19e7f393-937e-4f77-808e-94535e297925'
+ROLE_TABLE_DATA_CONTRIBUTOR = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 
 
 class WebappManager:
@@ -156,17 +155,17 @@ class WebappManager:
         log.info(f"IP restrictions applied to '{app_name}'.")
 
     def assign_storage_roles(self, resource_group, account_name, principal_id):
-        '''Grant the webapp managed identity read access to Table and Queue storage.'''
+        '''Grant the webapp managed identity Table Data Contributor on the data storage account.'''
         import uuid
         storage_scope = (
             f'/subscriptions/{self.subscription_id}/resourceGroups/{resource_group}'
             f'/providers/Microsoft.Storage/storageAccounts/{account_name}'
         )
-        for role_id in (ROLE_STORAGE_TABLE_DATA_READER, ROLE_STORAGE_QUEUE_DATA_READER):
-            role_def = (
-                f'/subscriptions/{self.subscription_id}'
-                f'/providers/Microsoft.Authorization/roleDefinitions/{role_id}'
-            )
+        role_def = (
+            f'/subscriptions/{self.subscription_id}'
+            f'/providers/Microsoft.Authorization/roleDefinitions/{ROLE_TABLE_DATA_CONTRIBUTOR}'
+        )
+        try:
             self._auth.role_assignments.create(
                 storage_scope,
                 str(uuid.uuid4()),
@@ -176,4 +175,9 @@ class WebappManager:
                     principal_type='ServicePrincipal',
                 ),
             )
-        log.info(f"Storage reader roles assigned to webapp principal.")
+        except Exception as e:
+            if 'RoleAssignmentExists' in str(e) or 'already exists' in str(e).lower():
+                log.info('Table Data Contributor already assigned, skipping.')
+            else:
+                raise
+        log.info('Table Data Contributor assigned to webapp principal.')

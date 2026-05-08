@@ -45,8 +45,12 @@
 <div class="table-wrap">
     {% if entries %}
     <table>
+        <colgroup>
+            <col><col><col><col><col><col><col><col>
+        </colgroup>
         <thead>
             <tr>
+                <th class="col-check"><input type="checkbox" id="select-all" title="Select all"></th>
                 <th>Filename</th>
                 <th>Host</th>
                 <th>Status</th>
@@ -56,29 +60,167 @@
                 <th>Size</th>
             </tr>
         </thead>
-        <tbody>
+        <tbody id="entries-body">
             {% for e in entries %}
-            <tr>
+            <tr data-rowkey="{{ e.RowKey }}">
+                <td class="col-check"><input type="checkbox" class="row-check" value="{{ e.RowKey }}"></td>
                 <td class="filename">{{ e.ZipfileBasename or '—' }}</td>
                 <td class="hostname">{{ e.Extracted_Hostname or '—' }}</td>
-                <td>
-                    <span class="badge badge-{{ (e.Status or 'new')|lower }}">
+                <td title="{{ e.Status or 'new' }}">
+                    <span class="badge badge-{{ (e.Status or 'new').split(' ')[0]|lower }}">
                         {{ e.Status or 'new' }}
                     </span>
                 </td>
                 <td>{{ e.Source or '—' }}</td>
                 <td>{{ e.StartTime or '—' }}</td>
-                <td>{{ e.Duration or '—' }}</td>
+                <td>
+                    {% if e.Status == 'finished' %}
+                        {{ e.ComputedDuration or '—' }}
+                    {% elif e.StartTime %}
+                        <span class="live-duration" data-start="{{ e.StartTime }}">{{ e.ComputedDuration or '—' }}</span>
+                    {% else %}
+                        {{ e.ComputedDuration or '—' }}
+                    {% endif %}
+                </td>
                 <td>{{ e.Size | filesizeformat if e.Size else '—' }}</td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
     {% else %}
-    <div class="empty-state">
+    <div class="empty-state" id="empty-state">
         <strong>No entries found</strong>
         <p>{% if q or status_filter %}No results match your filter.{% else %}The status table is empty.{% endif %}</p>
     </div>
     {% endif %}
 </div>
+
+<!-- Sticky action bar -->
+<div class="action-bar" id="action-bar">
+    <span id="action-bar-count"></span>
+    <button class="btn-retry" id="btn-retry">Retry selected</button>
+</div>
+
+<script>
+const selectedKeys = new Set();
+
+// ── Selection helpers ──────────────────────────────────────────────────────
+
+function updateActionBar() {
+    const bar   = document.getElementById('action-bar');
+    const count = document.getElementById('action-bar-count');
+    if (selectedKeys.size > 0) {
+        count.textContent = `${selectedKeys.size} selected`;
+        bar.classList.add('visible');
+    } else {
+        bar.classList.remove('visible');
+    }
+}
+
+function restoreCheckboxes() {
+    document.querySelectorAll('.row-check').forEach(cb => {
+        cb.checked = selectedKeys.has(cb.value);
+    });
+    const allChecks = document.querySelectorAll('.row-check');
+    const selectAll = document.getElementById('select-all');
+    if (selectAll && allChecks.length > 0) {
+        selectAll.checked = allChecks.length === selectedKeys.size && selectedKeys.size > 0;
+    }
+}
+
+document.getElementById('select-all').addEventListener('change', function () {
+    document.querySelectorAll('.row-check').forEach(cb => {
+        cb.checked = this.checked;
+        this.checked ? selectedKeys.add(cb.value) : selectedKeys.delete(cb.value);
+    });
+    updateActionBar();
+});
+
+document.getElementById('entries-body').addEventListener('change', function (e) {
+    if (!e.target.classList.contains('row-check')) return;
+    e.target.checked ? selectedKeys.add(e.target.value) : selectedKeys.delete(e.target.value);
+    updateActionBar();
+});
+
+// ── Retry ──────────────────────────────────────────────────────────────────
+
+document.getElementById('btn-retry').addEventListener('click', function () {
+    if (!selectedKeys.size) return;
+    this.disabled = true;
+    fetch('/api/retry', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ row_keys: [...selectedKeys] }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { alert('Retry failed: ' + data.error); return; }
+        selectedKeys.clear();
+        updateActionBar();
+        refreshTable();
+    })
+    .catch(() => alert('Retry request failed.'))
+    .finally(() => { this.disabled = false; });
+});
+
+// ── Live duration timer ────────────────────────────────────────────────────
+
+function fmtDuration(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h}h ${m}m ${s}s`;
+}
+
+function tickDurations() {
+    const now = Date.now();
+    document.querySelectorAll('.live-duration[data-start]').forEach(el => {
+        const start = new Date(el.dataset.start).getTime();
+        if (!isNaN(start)) el.textContent = fmtDuration(Math.floor((now - start) / 1000));
+    });
+}
+setInterval(tickDurations, 1000);
+tickDurations();
+
+// ── Table auto-refresh ─────────────────────────────────────────────────────
+
+function filesizeformat(bytes) {
+    if (!bytes) return '—';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let v = bytes, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function refreshTable() {
+    const params = new URLSearchParams(window.location.search);
+    fetch(`/api/entries?${params}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) return;
+            const tbody = document.getElementById('entries-body');
+            if (!tbody) return;
+            tbody.innerHTML = data.map(e => {
+                const isFinished = e.Status === 'finished';
+                const durationCell = (isFinished || !e.StartTime)
+                    ? (e.Duration || '—')
+                    : `<span class="live-duration" data-start="${e.StartTime}">—</span>`;
+                return `<tr data-rowkey="${e.RowKey}">
+                    <td class="col-check"><input type="checkbox" class="row-check" value="${e.RowKey}" ${selectedKeys.has(e.RowKey) ? 'checked' : ''}></td>
+                    <td class="filename">${e.ZipfileBasename || '—'}</td>
+                    <td class="hostname">${e.Extracted_Hostname || '—'}</td>
+                    <td title="${e.Status || 'new'}"><span class="badge badge-${(e.Status || 'new').split(' ')[0].toLowerCase()}">${e.Status || 'new'}</span></td>
+                    <td>${e.Source || '—'}</td>
+                    <td>${e.StartTime || '—'}</td>
+                    <td>${durationCell}</td>
+                    <td>${filesizeformat(e.Size)}</td>
+                </tr>`;
+            }).join('');
+            restoreCheckboxes();
+            tickDurations();
+        })
+        .catch(() => {});
+}
+setInterval(refreshTable, 15000);
+</script>
 {% endblock %}

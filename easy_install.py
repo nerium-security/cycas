@@ -1037,6 +1037,11 @@ def main():
     if 'sftp' in input_sources:
         sftp = input_sources['sftp']
         info(f'  SFTP  — {sftp["SFTP_USERNAME"]}@{sftp["SFTP_URL"]}:{sftp["SFTP_PORT"]}')
+    if webapp_app:
+        print()
+        info(f'Web application:')
+        info(f'  URL     — https://{webapp_app}.azurewebsites.net')
+        info(f'  Access  — restricted to: {", ".join(webapp_allowed_ips)}')
     info('')
 
 
