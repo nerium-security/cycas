@@ -6,9 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import json
 from flask import Flask, render_template, request, flash, jsonify
 from azure.identity import DefaultAzureCredential
 from azure.data.tables import EntityProperty
+from azure.storage.blob import BlobServiceClient
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 from core.manager.table import TablestorageManager
 from core.utils.config import load_config
@@ -322,6 +324,26 @@ def api_retry():
         return jsonify({'retried': len(row_keys)})
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/status/<uploadid>')
+def api_status_detail(uploadid):
+    '''Fetch the status JSON blob for a finished or failed pipeline run.'''
+    try:
+        config = load_config()
+        credential = DefaultAzureCredential()
+        blob_service = BlobServiceClient(
+            account_url=config.blob_storageaccount_uri,
+            credential=credential,
+        )
+        blob_client = blob_service.get_blob_client(
+            container=config.blob_container_status,
+            blob=f'{uploadid}.json',
+        )
+        data = blob_client.download_blob().readall()
+        return jsonify(json.loads(data))
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 404
 
 
 @app.route('/api/adx-status')

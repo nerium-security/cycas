@@ -62,7 +62,7 @@
         </thead>
         <tbody id="entries-body">
             {% for e in entries %}
-            <tr data-rowkey="{{ e.RowKey }}">
+            <tr data-rowkey="{{ e.RowKey }}" data-uploadid="{{ e.UploadId or '' }}">
                 <td class="col-check"><input type="checkbox" class="row-check" value="{{ e.RowKey }}"></td>
                 <td class="filename">{{ e.ZipfileBasename or '—' }}</td>
                 <td class="hostname">{{ e.Extracted_Hostname or '—' }}</td>
@@ -103,6 +103,25 @@
         <p>{% if q or status_filter %}No results match your filter.{% else %}The status table is empty.{% endif %}</p>
     </div>
     {% endif %}
+</div>
+
+<!-- Detail drawer -->
+<div class="drawer-backdrop" id="drawer-backdrop"></div>
+<div class="drawer" id="detail-drawer">
+    <div class="drawer-header">
+        <h2 id="drawer-title">—</h2>
+        <button class="drawer-close" id="drawer-close" title="Close">&#x2715;</button>
+    </div>
+    <div class="drawer-tabs">
+        <button class="drawer-tab active" data-tab="summary">Summary</button>
+        <button class="drawer-tab" data-tab="postprocessing">Postprocessing</button>
+        <button class="drawer-tab" data-tab="uploads">Uploads</button>
+    </div>
+    <div class="drawer-body">
+        <div class="tab-panel active" id="tab-summary"></div>
+        <div class="tab-panel" id="tab-postprocessing"></div>
+        <div class="tab-panel" id="tab-uploads"></div>
+    </div>
 </div>
 
 <!-- Sticky action bar -->
@@ -237,7 +256,7 @@ function refreshTable() {
                 const durationCell = (isFinished || !e.StartTime)
                     ? (e.Duration || '—')
                     : `<span class="live-duration" data-start="${e.StartTime}">—</span>`;
-                return `<tr data-rowkey="${e.RowKey}">
+                return `<tr data-rowkey="${e.RowKey}" data-uploadid="${e.UploadId || ''}">
                     <td class="col-check"><input type="checkbox" class="row-check" value="${e.RowKey}" ${selectedKeys.has(e.RowKey) ? 'checked' : ''}></td>
                     <td class="filename">${e.ZipfileBasename || '—'}</td>
                     <td class="hostname">${e.Extracted_Hostname || '—'}</td>
@@ -254,5 +273,128 @@ function refreshTable() {
         .catch(() => {});
 }
 setInterval(refreshTable, 15000);
+
+// ── Detail drawer ──────────────────────────────────────────────────────────
+
+const drawer        = document.getElementById('detail-drawer');
+const drawerBackdrop = document.getElementById('drawer-backdrop');
+const drawerTitle   = document.getElementById('drawer-title');
+
+function openDrawer()  { drawer.classList.add('open'); drawerBackdrop.classList.add('visible'); }
+function closeDrawer() { drawer.classList.remove('open'); drawerBackdrop.classList.remove('visible'); }
+
+document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+drawerBackdrop.addEventListener('click', closeDrawer);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+document.querySelectorAll('.drawer-tab').forEach(btn => {
+    btn.addEventListener('click', function () {
+        document.querySelectorAll('.drawer-tab').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        this.classList.add('active');
+        document.getElementById('tab-' + this.dataset.tab).classList.add('active');
+    });
+});
+
+function fmt(val) {
+    if (val === null || val === undefined || val === '') return '—';
+    if (typeof val === 'boolean') return val ? 'Yes' : 'No';
+    return String(val);
+}
+
+function fmtBytes(bytes) {
+    if (!bytes) return '—';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let v = bytes, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function renderSummary(data) {
+    const s = (data.summary || [])[0] || {};
+    const rows = [
+        ['Filename',   s.zipfile_basename],
+        ['Upload ID',  s.uploadid],
+        ['Session',    s.sessionid],
+        ['Source',     s.source_name],
+        ['Hostname',   s.hostname],
+        ['Size',       fmtBytes(s.zipfile_size)],
+        ['Encrypted',  s.is_encrypted],
+        ['Started',    s.starttime_script],
+        ['Finished',   data.finished],
+    ];
+    return `<dl class="detail-grid">${rows.map(([k, v]) =>
+        `<dt>${k}</dt><dd>${fmt(v)}</dd>`
+    ).join('')}</dl>`;
+}
+
+function renderPostprocessing(data) {
+    const items = data.postprocessing || [];
+    if (!items.length) return '<p class="drawer-empty">No post-processing data.</p>';
+    return `<div class="detail-table-wrap"><table class="detail-table">
+        <thead><tr><th>Artifact</th><th>Success</th><th>Duration</th><th>Error</th></tr></thead>
+        <tbody>${items.map(p => `<tr>
+            <td>${fmt(p.artifact)}</td>
+            <td>${p.success ? '✓' : '✗'}</td>
+            <td>${p.duration_in_sec != null ? p.duration_in_sec.toFixed(1) + 's' : '—'}</td>
+            <td>${fmt(p.error)}</td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+}
+
+function renderUploads(data) {
+    const items = data.uploads || [];
+    if (!items.length) return '<p class="drawer-empty">No upload data.</p>';
+    return `<div class="detail-table-wrap"><table class="detail-table">
+        <thead><tr><th>File</th><th>Size</th><th>Uploaded</th><th>Postprocessed</th><th>Ignored</th></tr></thead>
+        <tbody>${items.map(u => `<tr>
+            <td>${fmt(u.location_in_zip)}</td>
+            <td>${fmtBytes(u.size)}</td>
+            <td>${u.upload_initiated ? '✓' : '✗'}</td>
+            <td>${fmt(u.was_postprocessed_with)}</td>
+            <td>${u.ignored_upload ? fmt(u.ignored_reason) : '—'}</td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+}
+
+document.getElementById('entries-body').addEventListener('click', function (e) {
+    if (e.target.closest('.col-check')) return;
+    const row = e.target.closest('tr[data-uploadid]');
+    if (!row) return;
+
+    const uploadId = row.dataset.uploadid;
+    const filename = row.querySelector('.filename')?.textContent?.trim() || uploadId || '—';
+
+    drawerTitle.textContent = filename;
+    document.getElementById('tab-summary').innerHTML        = '<p class="drawer-loading">Loading…</p>';
+    document.getElementById('tab-postprocessing').innerHTML = '';
+    document.getElementById('tab-uploads').innerHTML        = '';
+
+    // Reset to Summary tab
+    document.querySelectorAll('.drawer-tab').forEach((b, i) => b.classList.toggle('active', i === 0));
+    document.querySelectorAll('.tab-panel').forEach((p, i) => p.classList.toggle('active', i === 0));
+
+    openDrawer();
+
+    if (!uploadId) {
+        document.getElementById('tab-summary').innerHTML = '<p class="drawer-empty">No status data available for this entry.</p>';
+        return;
+    }
+
+    fetch(`/api/status/${encodeURIComponent(uploadId)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                document.getElementById('tab-summary').innerHTML = `<p class="drawer-empty">Status file not found.<br><small>${data.error}</small></p>`;
+                return;
+            }
+            document.getElementById('tab-summary').innerHTML        = renderSummary(data);
+            document.getElementById('tab-postprocessing').innerHTML = renderPostprocessing(data);
+            document.getElementById('tab-uploads').innerHTML        = renderUploads(data);
+        })
+        .catch(() => {
+            document.getElementById('tab-summary').innerHTML = '<p class="drawer-empty">Failed to load status data.</p>';
+        });
+});
 </script>
 {% endblock %}
