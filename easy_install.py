@@ -389,13 +389,13 @@ def collect_keyvault_config(resource_group, step_label='7/7'):
 
 
 def collect_webapp_config(resource_group, step_label='8/8'):
-    section(f'Step {step_label} — Web Application (optional)')
+    section(f'Step {step_label} — Web Application')
 
     info('A Web App provides a status dashboard for the Cycas pipeline.')
     info('Access is restricted to IP addresses you specify.')
     print()
-    create_wa = input('  Create a Web App? [y/N]: ').strip().lower()
-    if create_wa not in ('y', 'yes'):
+    create_wa = input('  Create a Web App? [Y/n]: ').strip().lower()
+    if create_wa not in ('n', 'no'):
         return None, None
 
     rg_slug  = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
