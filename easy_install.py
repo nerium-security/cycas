@@ -170,7 +170,7 @@ def load_state():
             'run_mode', 'subscription_id', 'resource_group', 'location', 'new_rg',
             'cluster_name', 'database_name', 'sku_name', 'sku_tier',
             'admin_users', 'account_name', 'table_name', 'queue_name',
-            'container', 'input_sources',
+            'container', 'status_container', 'input_sources',
         }
         azure_required = {
             'watcher_app', 'watcher_sa', 'processor_app', 'processor_sa',
@@ -436,12 +436,13 @@ def collect_storage_config(defaults, resource_group, step_label='4/7'):
     section(f'Step {step_label} — Storage Account')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
-    account_name = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'zip')[:18] + rand6())
-    table_name   = prompt('Status table name',       default=defaults.get('blob_logtable_name', 'statusupdate'))
-    queue_name   = prompt('Queue name',              default=defaults.get('blob_queue_name', 'triagepackages'))
-    container    = prompt('Blob container for uploads', default=defaults.get('blob_container_input', 'uploads'))
+    account_name     = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'zip')[:18] + rand6())
+    table_name       = prompt('Status table name',              default=defaults.get('blob_logtable_name', 'statusupdate'))
+    queue_name       = prompt('Queue name',                     default=defaults.get('blob_queue_name', 'triagepackages'))
+    container        = prompt('Blob container for uploads',     default=defaults.get('blob_container_input', 'uploads'))
+    status_container = prompt('Blob container for status JSON', default=defaults.get('blob_container_status', 'status'))
 
-    return account_name, table_name, queue_name, container
+    return account_name, table_name, queue_name, container, status_container
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +453,7 @@ def confirm_plan(run_mode,
                  resource_group, location, new_rg,
                  cluster_name, database_name, sku_name,
                  admin_users,
-                 account_name, table_name, queue_name, container,
+                 account_name, table_name, queue_name, container, status_container,
                  input_sources,
                  watcher_app=None, watcher_sa=None,
                  processor_app=None, processor_sa=None,
@@ -476,10 +477,11 @@ def confirm_plan(run_mode,
         info(f'Admins   : {", ".join(u["displayName"] for u in admin_users)}')
 
     print('\n  Storage Account (data)')
-    info(f'Account  : {account_name}')
-    info(f'Table    : {table_name}')
-    info(f'Queue    : {queue_name}')
-    info(f'Container: {container}')
+    info(f'Account         : {account_name}')
+    info(f'Table           : {table_name}')
+    info(f'Queue           : {queue_name}')
+    info(f'Container       : {container}')
+    info(f'Status container: {status_container}')
 
     print('\n  Input Sources')
     if 'blob' in input_sources:
@@ -551,7 +553,7 @@ def provision_all(azure, credential, subscription_id,
                   resource_group, location, new_rg,
                   cluster_name, database_name, sku_name, sku_tier,
                   admin_users,
-                  account_name, table_name, queue_name, container,
+                  account_name, table_name, queue_name, container, status_container,
                   defaults):
 
     section('Provisioning')
@@ -617,9 +619,9 @@ def provision_all(azure, credential, subscription_id,
     blob_mgr.create_container(container)
     success(f"Container '{container}' ready.")
 
-    step("Ensuring blob container 'status' exists...")
-    blob_mgr.create_container('status')
-    success("Container 'status' ready.")
+    step(f"Ensuring blob container '{status_container}' exists...")
+    blob_mgr.create_container(status_container)
+    success(f"Container '{status_container}' ready.")
 
     step('Writing .env...')
 
@@ -634,12 +636,13 @@ def provision_all(azure, credential, subscription_id,
     })
 
     write_env_values({
-        'BLOB_LOGTABLE_ENABLED': 'true',
-        'BLOB_LOGTABLE_URI':     table_endpoint,
-        'BLOB_LOGTABLE_NAME':    table_name,
-        'BLOB_QUEUE_ENABLED':    'true',
-        'BLOB_QUEUE_URL':        queue_url,
-        'BLOB_QUEUE_NAME':       queue_name,
+        'BLOB_LOGTABLE_ENABLED':   'true',
+        'BLOB_LOGTABLE_URI':       table_endpoint,
+        'BLOB_LOGTABLE_NAME':      table_name,
+        'BLOB_QUEUE_ENABLED':      'true',
+        'BLOB_QUEUE_URL':          queue_url,
+        'BLOB_QUEUE_NAME':         queue_name,
+        'BLOB_CONTAINER_STATUS':   status_container,
     })
 
     success('.env updated.')
@@ -797,7 +800,7 @@ def provision_functions(credential, subscription_id,
 # ---------------------------------------------------------------------------
 
 def provision_webapp_all(credential, subscription_id, resource_group, location,
-                         account_name, webapp_app, allowed_ips):
+                         account_name, status_container, webapp_app, allowed_ips):
 
     section('Provisioning — Web Application')
 
@@ -821,9 +824,9 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
     webapp.assign_storage_roles(resource_group, account_name, principal_id)
     success('Table Data Contributor assigned.')
 
-    step("Assigning Blob Data Reader on 'status' container to web app managed identity...")
-    webapp.assign_blob_container_reader(resource_group, account_name, 'status', principal_id)
-    success("Blob Data Reader on 'status' container assigned.")
+    step(f"Assigning Blob Data Reader on '{status_container}' container to web app managed identity...")
+    webapp.assign_blob_container_reader(resource_group, account_name, status_container, principal_id)
+    success(f"Blob Data Reader on '{status_container}' container assigned.")
 
     success(f"Web App accessible at: https://{webapp_app}.azurewebsites.net")
 
@@ -892,11 +895,12 @@ def main():
             sku_name        = saved['sku_name']
             sku_tier        = saved['sku_tier']
             admin_users     = saved['admin_users']
-            account_name    = saved['account_name']
-            table_name      = saved['table_name']
-            queue_name      = saved['queue_name']
-            container       = saved['container']
-            input_sources   = saved['input_sources']
+            account_name     = saved['account_name']
+            table_name       = saved['table_name']
+            queue_name       = saved['queue_name']
+            container        = saved['container']
+            status_container = saved['status_container']
+            input_sources    = saved['input_sources']
             if run_mode == 'azurefunction':
                 watcher_app                = saved['watcher_app']
                 watcher_sa                 = saved['watcher_sa']
@@ -933,7 +937,7 @@ def main():
         adx = AdxManager(credential, adx_cluster_uri='', adx_cluster_ingestion_uri='', adx_database_name=database_name)
         admin_users = collect_admin_users(adx)
 
-        account_name, table_name, queue_name, container = collect_storage_config(defaults, resource_group, f'4/{total}')
+        account_name, table_name, queue_name, container, status_container = collect_storage_config(defaults, resource_group, f'4/{total}')
 
         input_sources = collect_input_sources(defaults, account_name, container, f'5/{total}')
 
@@ -961,6 +965,7 @@ def main():
             'table_name':                table_name,
             'queue_name':                queue_name,
             'container':                 container,
+            'status_container':          status_container,
             'input_sources':             input_sources,
         }
         if run_mode == 'azurefunction':
@@ -981,7 +986,7 @@ def main():
                         resource_group, location, new_rg,
                         cluster_name, database_name, sku_name,
                         admin_users,
-                        account_name, table_name, queue_name, container,
+                        account_name, table_name, queue_name, container, status_container,
                         input_sources,
                         watcher_app, watcher_sa, processor_app, processor_sa,
                         keyvault_name, keyvault_password_location,
@@ -993,7 +998,7 @@ def main():
                   resource_group, location, new_rg,
                   cluster_name, database_name, sku_name, sku_tier,
                   admin_users,
-                  account_name, table_name, queue_name, container,
+                  account_name, table_name, queue_name, container, status_container,
                   defaults)
 
     step('Writing input source settings to .env...')
@@ -1020,7 +1025,7 @@ def main():
         if webapp_app:
             provision_webapp_all(credential, subscription_id,
                                  resource_group, location,
-                                 account_name, webapp_app, webapp_allowed_ips)
+                                 account_name, status_container, webapp_app, webapp_allowed_ips)
 
     state = load_state()
     if state:
