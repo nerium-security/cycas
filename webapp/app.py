@@ -220,13 +220,16 @@ def index():
         error_msg = str(exc)
         table_name = os.environ.get('BLOB_LOGTABLE_NAME', 'status table')
 
-    # Register FINISHED entries with the ADX poller
+    # Register FINISHED entries with the ADX poller, then read back their status
     poller = get_poller()
-    if poller:
-        for e in entries:
-            if e.get('Status') == Status.FINISHED and e.get('UploadId'):
-                finished_at = _parse_finished_at(e.get('StartTime', ''))
-                poller.track(e['UploadId'], finished_at)
+    for e in entries:
+        upload_id = e.get('UploadId') or ''
+        if poller and e.get('Status') == Status.FINISHED and upload_id:
+            finished_at = _parse_finished_at(e.get('StartTime', ''))
+            poller.track(upload_id, finished_at)
+            e['AdxStatus'] = poller.get_status(upload_id)
+        else:
+            e['AdxStatus'] = ''
 
     if error_msg:
         flash(f'Could not connect to Table Storage: {error_msg}', 'error')

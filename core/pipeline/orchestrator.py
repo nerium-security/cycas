@@ -226,7 +226,7 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
     # ----------------------------------------------------------------------   
     for artifact in artifacts:
 
-        update_status_in_log(managers, Config, f'{Status.POSTPROCESSING} - {artifact}', start, results)
+        update_status_in_log(managers, Config, artifact, start, results)
 
         result_postprocess = postprocess(hostname,
                                             artifact, 

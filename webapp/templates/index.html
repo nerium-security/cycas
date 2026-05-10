@@ -53,11 +53,11 @@
                 <th class="col-check"><input type="checkbox" id="select-all" title="Select all"></th>
                 <th>Filename</th>
                 <th>Host</th>
-                <th>Status</th>
                 <th>Source</th>
                 <th>Started</th>
                 <th>Duration</th>
-                <th>Size</th>
+                <th>Status (Processing)</th>
+                <th>Status (ADX)</th>
             </tr>
         </thead>
         <tbody id="entries-body">
@@ -66,11 +66,6 @@
                 <td class="col-check"><input type="checkbox" class="row-check" value="{{ e.RowKey }}"></td>
                 <td class="filename">{{ e.ZipfileBasename or '—' }}</td>
                 <td class="hostname">{{ e.Extracted_Hostname or '—' }}</td>
-                <td title="{{ e.Status or 'new' }}">
-                    <span class="badge badge-{{ (e.Status or 'new').split(' ')[0]|lower }}">
-                        {{ e.Status or 'new' }}
-                    </span>
-                </td>
                 <td>{{ e.Source or '—' }}</td>
                 <td>{{ e.StartTime or '—' }}</td>
                 <td>
@@ -82,7 +77,22 @@
                         {{ e.ComputedDuration or '—' }}
                     {% endif %}
                 </td>
-                <td>{{ e.Size | filesizeformat if e.Size else '—' }}</td>
+                <td title="{{ e.Status or 'new' }}">
+                    <span class="badge badge-{{ (e.Status or 'new').split(' ')[0]|lower }}">
+                        {{ e.Status or 'new' }}
+                    </span>
+                </td>
+                <td class="adx-cell" data-uploadid="{{ e.UploadId or '' }}">
+                    {% if e.AdxStatus == 'confirmed' %}
+                        <span class="adx-confirmed">● Queryable</span>
+                    {% elif e.AdxStatus == 'pending' %}
+                        <span class="adx-pending">⟳ Pending</span>
+                    {% elif e.AdxStatus == 'timeout' %}
+                        <span class="adx-timeout">Timeout</span>
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
@@ -182,6 +192,28 @@ function tickDurations() {
 setInterval(tickDurations, 1000);
 tickDurations();
 
+// ── ADX status helpers ─────────────────────────────────────────────────────
+
+function adxBadge(status) {
+    if (status === 'confirmed') return '<span class="adx-confirmed">● Queryable</span>';
+    if (status === 'pending')   return '<span class="adx-pending">⟳ Pending</span>';
+    if (status === 'timeout')   return '<span class="adx-timeout">Timeout</span>';
+    return '—';
+}
+
+function refreshAdxStatus() {
+    fetch('/api/adx-status')
+        .then(r => r.json())
+        .then(data => {
+            document.querySelectorAll('.adx-cell[data-uploadid]').forEach(cell => {
+                const uid = cell.dataset.uploadid;
+                if (uid && data[uid]) cell.innerHTML = adxBadge(data[uid]);
+            });
+        })
+        .catch(() => {});
+}
+setInterval(refreshAdxStatus, 10000);
+
 // ── Table auto-refresh ─────────────────────────────────────────────────────
 
 function filesizeformat(bytes) {
@@ -209,11 +241,11 @@ function refreshTable() {
                     <td class="col-check"><input type="checkbox" class="row-check" value="${e.RowKey}" ${selectedKeys.has(e.RowKey) ? 'checked' : ''}></td>
                     <td class="filename">${e.ZipfileBasename || '—'}</td>
                     <td class="hostname">${e.Extracted_Hostname || '—'}</td>
-                    <td title="${e.Status || 'new'}"><span class="badge badge-${(e.Status || 'new').split(' ')[0].toLowerCase()}">${e.Status || 'new'}</span></td>
                     <td>${e.Source || '—'}</td>
                     <td>${e.StartTime || '—'}</td>
                     <td>${durationCell}</td>
-                    <td>${filesizeformat(e.Size)}</td>
+                    <td title="${e.Status || 'new'}"><span class="badge badge-${(e.Status || 'new').split(' ')[0].toLowerCase()}">${e.Status || 'new'}</span></td>
+                    <td class="adx-cell" data-uploadid="${e.UploadId || ''}">${adxBadge(e.AdxStatus)}</td>
                 </tr>`;
             }).join('');
             restoreCheckboxes();

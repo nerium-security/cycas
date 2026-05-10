@@ -144,14 +144,14 @@ table {
 }
 
 /* Fixed column widths */
-table colgroup col:nth-child(1) { width:  3%; } /* Checkbox  */
-table colgroup col:nth-child(2) { width: 22%; } /* Filename  */
-table colgroup col:nth-child(3) { width: 13%; } /* Host      */
-table colgroup col:nth-child(4) { width: 18%; } /* Status    */
-table colgroup col:nth-child(5) { width:  8%; } /* Source    */
-table colgroup col:nth-child(6) { width: 15%; } /* Started   */
-table colgroup col:nth-child(7) { width: 12%; } /* Duration  */
-table colgroup col:nth-child(8) { width:  9%; } /* Size      */
+table colgroup col:nth-child(1) { width:  3%; } /* Checkbox           */
+table colgroup col:nth-child(2) { width: 22%; } /* Filename           */
+table colgroup col:nth-child(3) { width: 13%; } /* Host               */
+table colgroup col:nth-child(4) { width:  9%; } /* Source             */
+table colgroup col:nth-child(5) { width: 15%; } /* Started            */
+table colgroup col:nth-child(6) { width: 12%; } /* Duration           */
+table colgroup col:nth-child(7) { width: 17%; } /* Status (Processing) */
+table colgroup col:nth-child(8) { width:  9%; } /* Status (ADX)       */
 
 thead tr {
     background: var(--teal);
@@ -208,6 +208,12 @@ tbody td {
 .badge-queued       { background: #f0e6ff; color: #6c3483; }
 .badge-unqueued     { background: #fdfefe; color: #717d7e; border: 1px solid #d0d3d4; }
 .badge-new          { background: var(--bg); color: var(--teal); border: 1px solid var(--border); }
+
+/* ── ADX status ── */
+.adx-cell { font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
+.adx-confirmed { color: #1e8449; }
+.adx-pending   { color: #7d6608; }
+.adx-timeout   { color: var(--text-muted); }
 
 /* ── Checkbox column ── */
 .col-check {
