@@ -243,6 +243,34 @@ class BlobManager:
             log.error(f'Failed to download blob {blob_name} from container {container_name}. Error: {str(e)}', exc_info=True)
             return False
 
+    def upload_json(self, container_name, blob_name, data):
+        '''
+        Serialize a dict to JSON and upload it as a blob.
+
+        Datetimes are converted to ISO-8601 strings. Existing blobs are
+        overwritten so re-runs always reflect the latest pipeline output.
+
+        Args:
+            container_name (str): Target container name.
+            blob_name (str): Blob name (e.g. '<uploadid>.json').
+            data (dict): Data to serialize and upload.
+        '''
+        import json
+        from datetime import datetime
+
+        def _default(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            raise TypeError(f'Object of type {type(obj).__name__} is not JSON serializable')
+
+        payload = json.dumps(data, default=_default, indent=2).encode('utf-8')
+        blob_client = self.get_client(container_name, blob_name)
+        try:
+            blob_client.upload_blob(payload, overwrite=True)
+            log.info(f'Uploaded status JSON to {container_name}/{blob_name}')
+        except Exception as e:
+            log.error(f'Failed to upload status JSON to {container_name}/{blob_name}. Error: {e}')
+
     def provision_storage_account(self, subscription_id, resource_group, location, account_name):
         '''
         Create a storage account if it does not already exist.
