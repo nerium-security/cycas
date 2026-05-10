@@ -280,12 +280,18 @@ const drawer        = document.getElementById('detail-drawer');
 const drawerBackdrop = document.getElementById('drawer-backdrop');
 const drawerTitle   = document.getElementById('drawer-title');
 
-function openDrawer()  { drawer.classList.add('open'); drawerBackdrop.classList.add('visible'); }
-function closeDrawer() { drawer.classList.remove('open'); drawerBackdrop.classList.remove('visible'); }
+function openDrawer()  { drawer.classList.add('open'); }
+function closeDrawer() { drawer.classList.remove('open'); }
 
 document.getElementById('drawer-close').addEventListener('click', closeDrawer);
-drawerBackdrop.addEventListener('click', closeDrawer);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+document.getElementById('tab-postprocessing').addEventListener('change', function (e) {
+    const cb = e.target.closest('input[data-col]');
+    if (!cb) return;
+    document.querySelectorAll(`.col-${cb.dataset.col}`)
+        .forEach(el => { el.style.display = cb.checked ? '' : 'none'; });
+});
 
 document.querySelectorAll('.drawer-tab').forEach(btn => {
     btn.addEventListener('click', function () {
@@ -323,38 +329,127 @@ function renderSummary(data) {
         ['Started',    s.starttime_script],
         ['Finished',   data.finished],
     ];
-    return `<dl class="detail-grid">${rows.map(([k, v]) =>
-        `<dt>${k}</dt><dd>${fmt(v)}</dd>`
-    ).join('')}</dl>`;
+    return `<dl class="detail-grid">${rows.map(([k, v]) => {
+        const text = fmt(v);
+        return `<dt>${k}</dt><dd title="${text}">${text}</dd>`;
+    }).join('')}</dl>`;
 }
 
 function renderPostprocessing(data) {
     const items = data.postprocessing || [];
     if (!items.length) return '<p class="drawer-empty">No post-processing data.</p>';
-    return `<div class="detail-table-wrap"><table class="detail-table">
-        <thead><tr><th>Artifact</th><th>Success</th><th>Duration</th><th>Error</th></tr></thead>
-        <tbody>${items.map(p => `<tr>
-            <td>${fmt(p.artifact)}</td>
+
+    const optionalCols = [
+        { key: 'cmd',        label: 'Command' },
+        { key: 'stdout',     label: 'Stdout' },
+        { key: 'stderr',     label: 'Stderr' },
+        { key: 'returncode', label: 'Return code' },
+    ];
+
+    const toggles = optionalCols.map(c =>
+        `<label class="col-toggle"><input type="checkbox" data-col="${c.key}"> ${c.label}</label>`
+    ).join('');
+
+    const rows = items.map(p => {
+        const artifact = fmt(p.artifact);
+        const basename = fmt(p.basename);
+        const size     = fmtBytes(p.size);
+        const error    = fmt(p.error);
+        const duration = p.duration_in_sec != null ? p.duration_in_sec.toFixed(1) + 's' : '—';
+        const cmd      = fmt(p.cmd);
+        const stdout   = fmt(p.stdout);
+        const stderr   = fmt(p.stderr);
+        const rc       = fmt(p.returncode);
+        return `<tr>
+            <td title="${artifact}">${artifact}</td>
+            <td title="${basename}">${basename}</td>
+            <td title="${size}">${size}</td>
             <td>${p.success ? '✓' : '✗'}</td>
-            <td>${p.duration_in_sec != null ? p.duration_in_sec.toFixed(1) + 's' : '—'}</td>
-            <td>${fmt(p.error)}</td>
-        </tr>`).join('')}</tbody>
+            <td title="${duration}">${duration}</td>
+            <td title="${error}">${error}</td>
+            <td class="col-opt col-cmd"    title="${cmd}">${cmd}</td>
+            <td class="col-opt col-stdout" title="${stdout}">${stdout}</td>
+            <td class="col-opt col-stderr" title="${stderr}">${stderr}</td>
+            <td class="col-opt col-returncode" title="${rc}">${rc}</td>
+        </tr>`;
+    }).join('');
+
+    return `<div class="col-toggles">Show: ${toggles}</div>
+        <div class="detail-table-wrap"><table class="detail-table">
+        <thead><tr>
+            <th>Artifact</th><th>Basename</th><th>Size</th><th>Success</th><th>Duration</th><th>Error</th>
+            <th class="col-opt col-cmd">Command</th>
+            <th class="col-opt col-stdout">Stdout</th>
+            <th class="col-opt col-stderr">Stderr</th>
+            <th class="col-opt col-returncode">Return code</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
     </table></div>`;
 }
 
 function renderUploads(data) {
     const items = data.uploads || [];
     if (!items.length) return '<p class="drawer-empty">No upload data.</p>';
-    return `<div class="detail-table-wrap"><table class="detail-table">
-        <thead><tr><th>File</th><th>Size</th><th>Uploaded</th><th>Postprocessed</th><th>Ignored</th></tr></thead>
-        <tbody>${items.map(u => `<tr>
-            <td>${fmt(u.location_in_zip)}</td>
-            <td>${fmtBytes(u.size)}</td>
-            <td>${u.upload_initiated ? '✓' : '✗'}</td>
-            <td>${fmt(u.was_postprocessed_with)}</td>
-            <td>${u.ignored_upload ? fmt(u.ignored_reason) : '—'}</td>
-        </tr>`).join('')}</tbody>
-    </table></div>`;
+
+    const uploaded = items.filter(u => !u.ignored_upload && !u.upload_error && u.upload_initiated);
+    const failed   = items.filter(u => !u.ignored_upload && (u.upload_error || !u.upload_initiated));
+    const ignored  = items.filter(u => u.ignored_upload);
+
+    function group(cls, label, open, headings, rows) {
+        if (!rows.length) return '';
+        return `<details class="upload-group ${cls}"${open ? ' open' : ''}>
+            <summary class="upload-group-header">
+                <span>${label}</span><span class="group-count">${rows.length}</span>
+            </summary>
+            <div class="detail-table-wrap"><table class="detail-table">
+                <thead><tr>${headings.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+                <tbody>${rows.join('')}</tbody>
+            </table></div>
+        </details>`;
+    }
+
+    const uploadedRows = uploaded.map(u => {
+        const file    = fmt(u.location_in_zip);
+        const size    = fmtBytes(u.size);
+        const proc    = fmt(u.was_postprocessed_with);
+        const dur     = u.upload_duration_in_sec != null ? u.upload_duration_in_sec.toFixed(1) + 's' : '—';
+        return `<tr>
+            <td title="${file}">${file}</td>
+            <td title="${size}">${size}</td>
+            <td title="${proc}">${proc}</td>
+            <td title="${dur}">${dur}</td>
+        </tr>`;
+    });
+
+    const failedRows = failed.map(u => {
+        const file  = fmt(u.location_in_zip);
+        const size  = fmtBytes(u.size);
+        const error = fmt(u.upload_error);
+        return `<tr>
+            <td title="${file}">${file}</td>
+            <td title="${size}">${size}</td>
+            <td title="${error}">${error}</td>
+        </tr>`;
+    });
+
+    const ignoredRows = ignored.map(u => {
+        const file    = fmt(u.location_in_zip);
+        const size    = fmtBytes(u.size);
+        const reason  = fmt(u.ignored_reason);
+        const pattern = fmt(u.ignored_pattern);
+        return `<tr>
+            <td title="${file}">${file}</td>
+            <td title="${size}">${size}</td>
+            <td title="${reason}">${reason}</td>
+            <td title="${pattern}">${pattern}</td>
+        </tr>`;
+    });
+
+    return [
+        group('group-failed',   'Failed',   !!failed.length,  ['File', 'Size', 'Error'],                  failedRows),
+        group('group-ignored',  'Ignored',  false,            ['File', 'Size', 'Reason', 'Pattern'],       ignoredRows),
+        group('group-uploaded', 'Uploaded', false,            ['File', 'Size', 'Postprocessed', 'Upload duration'], uploadedRows),
+    ].join('');
 }
 
 document.getElementById('entries-body').addEventListener('click', function (e) {

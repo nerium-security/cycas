@@ -279,34 +279,20 @@ tbody td {
 tbody tr { cursor: pointer; }
 
 /* ── Detail drawer ── */
-.drawer-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.3);
-    z-index: 200;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.2s ease;
-}
-.drawer-backdrop.visible { opacity: 1; pointer-events: all; }
+.drawer-backdrop { display: none; }
 
 .drawer {
     position: fixed;
-    top: 0;
-    right: 0;
-    width: 42%;
-    min-width: 440px;
-    height: 100vh;
+    inset: 0;
     background: var(--white);
-    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.18);
-    transform: translateX(100%);
+    transform: translateY(100%);
     transition: transform 0.25s ease;
-    z-index: 201;
+    z-index: 200;
     display: flex;
     flex-direction: column;
     overflow: hidden;
 }
-.drawer.open { transform: translateX(0); }
+.drawer.open { transform: translateY(0); }
 
 .drawer-header {
     display: flex;
@@ -411,6 +397,52 @@ tbody tr { cursor: pointer; }
     padding: 2rem 0;
 }
 .drawer-loading { text-align: center; padding: 2rem 0; color: var(--text-muted); }
+
+/* ── Upload groups ── */
+.upload-group {
+    margin-bottom: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.upload-group-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 0.9rem;
+    background: var(--bg);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+.upload-group-header::-webkit-details-marker { display: none; }
+.upload-group-header:hover { background: #ddeef4; }
+.upload-group[open] > .upload-group-header { border-bottom: 1px solid var(--border); }
+.group-count {
+    background: var(--teal);
+    color: var(--white);
+    border-radius: 999px;
+    padding: 0.1rem 0.55rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+.upload-group.group-failed > .upload-group-header { background: #fdf0ef; }
+.upload-group.group-failed > .upload-group-header .group-count { background: #c0392b; }
+.upload-group.group-ignored > .upload-group-header .group-count { background: var(--text-muted); }
+
+.col-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.col-toggle { display: flex; align-items: center; gap: 0.3rem; cursor: pointer; user-select: none; }
+.col-toggle input { accent-color: var(--teal); cursor: pointer; }
+.col-opt { display: none; }
 
 /* ── Flash messages ── */
 .flash { padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; }
