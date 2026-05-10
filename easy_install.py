@@ -617,6 +617,10 @@ def provision_all(azure, credential, subscription_id,
     blob_mgr.create_container(container)
     success(f"Container '{container}' ready.")
 
+    step("Ensuring blob container 'status' exists...")
+    blob_mgr.create_container('status')
+    success("Container 'status' ready.")
+
     step('Writing .env...')
 
     write_env_values({
@@ -813,9 +817,13 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
     webapp.configure_ip_restrictions(resource_group, webapp_app, allowed_ips)
     success('IP restrictions applied.')
 
-    step('Assigning storage reader roles to web app managed identity...')
+    step('Assigning Table Data Contributor to web app managed identity...')
     webapp.assign_storage_roles(resource_group, account_name, principal_id)
-    success('Storage reader roles assigned.')
+    success('Table Data Contributor assigned.')
+
+    step("Assigning Blob Data Reader on 'status' container to web app managed identity...")
+    webapp.assign_blob_container_reader(resource_group, account_name, 'status', principal_id)
+    success("Blob Data Reader on 'status' container assigned.")
 
     success(f"Web App accessible at: https://{webapp_app}.azurewebsites.net")
 
