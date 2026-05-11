@@ -265,18 +265,36 @@ class WebappManager:
                         zf.write(file, file.relative_to(tmp_dir))
 
             kudu_url = f'https://{app_name}.scm.azurewebsites.net/api/zipdeploy'
-            log.info(f"Deploying to '{app_name}' via Kudu ZIP deploy...")
+            log.info(f"Deploying to '{app_name}' via Kudu ZIP deploy (async)...")
             with open(zip_path, 'rb') as f:
                 resp = requests.post(
-                    kudu_url,
+                    kudu_url + '?isAsync=true',
                     headers={
                         'Authorization': f'Bearer {self._token()}',
                         'Content-Type':  'application/zip',
                     },
                     data=f,
-                    timeout=300,
+                    timeout=120,
                 )
             resp.raise_for_status()
+
+            poll_url = resp.headers.get('Location')
+            if poll_url:
+                log.info('Waiting for Oryx build to complete...')
+                while True:
+                    time.sleep(10)
+                    poll = requests.get(
+                        poll_url,
+                        headers={'Authorization': f'Bearer {self._token()}'},
+                        timeout=30,
+                    )
+                    poll.raise_for_status()
+                    status = poll.json().get('status')
+                    if status == 4:
+                        break
+                    if status == 3:
+                        raise RuntimeError(f"Deployment failed for '{app_name}': {poll.json()}")
+
             log.info(f"'{app_name}' deployed successfully.")
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
