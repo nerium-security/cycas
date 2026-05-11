@@ -804,7 +804,9 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
 
     section('Provisioning — Web Application')
 
-    webapp = WebappManager(credential, subscription_id)
+    webapp   = WebappManager(credential, subscription_id)
+    root     = Path(__file__).parent
+    core_dir = root / 'core'
 
     plan_name = f'{webapp_app}-plan'
     step(f"Ensuring App Service Plan '{plan_name}' exists...")
@@ -827,6 +829,21 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
     step(f"Assigning Blob Data Reader on '{status_container}' container to web app managed identity...")
     webapp.assign_blob_container_reader(resource_group, account_name, status_container, principal_id)
     success(f"Blob Data Reader on '{status_container}' container assigned.")
+
+    step(f"Configuring startup command on '{webapp_app}'...")
+    webapp.configure_startup(resource_group, webapp_app,
+                             'gunicorn --bind=0.0.0.0:8000 --timeout 600 webapp.app:app')
+    success('Startup command configured.')
+
+    step(f"Applying app settings to '{webapp_app}'...")
+    env_raw      = read_env_defaults(ENV_FILE)
+    env_settings = {k.upper(): v for k, v in env_raw.items() if v}
+    webapp.set_app_settings(resource_group, webapp_app, env_settings)
+    success('App settings applied.')
+
+    step(f"Deploying webapp code to '{webapp_app}'...")
+    webapp.deploy(resource_group, webapp_app, root / 'webapp', core_dir)
+    success(f"Webapp deployed.")
 
     success(f"Web App accessible at: https://{webapp_app}.azurewebsites.net")
 

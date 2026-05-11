@@ -6,7 +6,12 @@ managed identity, and configuring IP access restrictions.
 '''
 
 import logging as log
+import shutil
+import tempfile
 import time
+import zipfile
+from pathlib import Path
+
 import requests
 
 from azure.mgmt.authorization import AuthorizationManagementClient
@@ -15,6 +20,8 @@ from azure.mgmt.authorization.models import RoleAssignmentCreateParameters
 log = log.getLogger(__name__)
 
 _ARM_API = '2024-04-01'
+
+_STAGE_IGNORE = shutil.ignore_patterns('.venv', '__pycache__', '.git', '.vscode', 'test')
 
 ROLE_TABLE_DATA_CONTRIBUTOR  = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 ROLE_STORAGE_BLOB_DATA_READER = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
@@ -211,3 +218,66 @@ class WebappManager:
             else:
                 raise
         log.info(f'Blob Data Reader assigned on container {container_name!r} to webapp principal.')
+
+    def configure_startup(self, resource_group, app_name, command: str):
+        '''Set the startup command on the Web App without overwriting other site config.'''
+        self._arm(
+            'PATCH',
+            f'{self._rg_path(resource_group)}/providers/Microsoft.Web/sites/{app_name}',
+            json={'properties': {'siteConfig': {'appCommandLine': command}}},
+        )
+        log.info(f"Startup command set on '{app_name}': {command}")
+
+    def set_app_settings(self, resource_group, app_name, settings: dict):
+        '''Replace all application settings on the Web App.'''
+        self._arm(
+            'PUT',
+            f'{self._rg_path(resource_group)}/providers/Microsoft.Web/sites/{app_name}/config/appsettings',
+            json={'properties': settings},
+        )
+        log.info(f"App settings applied to '{app_name}'.")
+
+    def deploy(self, resource_group, app_name, webapp_dir: Path, core_dir: Path):
+        '''
+        Deploy the webapp via Kudu ZIP deploy.
+
+        Stages webapp/ and core/ into a temp directory, creates a ZIP, and
+        POSTs it to the Kudu zipdeploy endpoint. App Service extracts the ZIP
+        to /home/site/wwwroot, giving the layout expected by startup.txt:
+          wwwroot/webapp/app.py
+          wwwroot/core/...
+        '''
+        import tomllib
+
+        tmp_dir  = Path(tempfile.mkdtemp())
+        zip_path = tmp_dir.parent / f'{app_name}-deploy.zip'
+        try:
+            shutil.copytree(webapp_dir, tmp_dir / 'webapp', ignore=_STAGE_IGNORE)
+            shutil.copytree(core_dir,   tmp_dir / 'core',   ignore=_STAGE_IGNORE)
+
+            pyproject = tomllib.loads((webapp_dir.parent / 'pyproject.toml').read_text())
+            deps      = pyproject.get('project', {}).get('dependencies', [])
+            (tmp_dir / 'requirements.txt').write_text('\n'.join(deps) + '\n')
+
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for file in tmp_dir.rglob('*'):
+                    if file.is_file():
+                        zf.write(file, file.relative_to(tmp_dir))
+
+            kudu_url = f'https://{app_name}.scm.azurewebsites.net/api/zipdeploy'
+            log.info(f"Deploying to '{app_name}' via Kudu ZIP deploy...")
+            with open(zip_path, 'rb') as f:
+                resp = requests.post(
+                    kudu_url,
+                    headers={
+                        'Authorization': f'Bearer {self._token()}',
+                        'Content-Type':  'application/zip',
+                    },
+                    data=f,
+                    timeout=300,
+                )
+            resp.raise_for_status()
+            log.info(f"'{app_name}' deployed successfully.")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            zip_path.unlink(missing_ok=True)

@@ -290,7 +290,16 @@ document.getElementById('tab-postprocessing').addEventListener('change', functio
     const cb = e.target.closest('input[data-col]');
     if (!cb) return;
     document.querySelectorAll(`.col-${cb.dataset.col}`)
-        .forEach(el => { el.style.display = cb.checked ? '' : 'none'; });
+        .forEach(el => { el.style.display = cb.checked ? 'table-cell' : ''; });
+});
+
+document.getElementById('tab-uploads').addEventListener('input', function (e) {
+    if (!e.target.classList.contains('uploads-filter')) return;
+    const q = e.target.value.toLowerCase();
+    document.querySelectorAll('#tab-uploads .detail-table tbody tr').forEach(row => {
+        const filename = row.querySelector('td')?.textContent?.toLowerCase() || '';
+        row.style.display = q && !filename.includes(q) ? 'none' : '';
+    });
 });
 
 document.querySelectorAll('.drawer-tab').forEach(btn => {
@@ -445,7 +454,7 @@ function renderUploads(data) {
         </tr>`;
     });
 
-    return [
+    return `<input type="search" class="uploads-filter" placeholder="Filter files…">` + [
         group('group-failed',   'Failed',   !!failed.length,  ['File', 'Size', 'Error'],                  failedRows),
         group('group-ignored',  'Ignored',  false,            ['File', 'Size', 'Reason', 'Pattern'],       ignoredRows),
         group('group-uploaded', 'Uploaded', false,            ['File', 'Size', 'Postprocessed', 'Upload duration'], uploadedRows),
