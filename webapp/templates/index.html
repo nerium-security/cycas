@@ -192,6 +192,20 @@ document.getElementById('btn-retry').addEventListener('click', function () {
     .finally(() => { this.disabled = false; });
 });
 
+// ── Live search ───────────────────────────────────────────────────────────
+
+const searchInput = document.querySelector('.filter-bar input[type="search"]');
+if (searchInput) {
+    searchInput.addEventListener('input', function () {
+        const q = this.value.toLowerCase();
+        document.querySelectorAll('#entries-body tr').forEach(row => {
+            const filename = row.querySelector('.filename')?.textContent.toLowerCase() || '';
+            const hostname = row.querySelector('.hostname')?.textContent.toLowerCase() || '';
+            row.style.display = (!q || filename.includes(q) || hostname.includes(q)) ? '' : 'none';
+        });
+    });
+}
+
 // ── Live duration timer ────────────────────────────────────────────────────
 
 function fmtDuration(seconds) {
