@@ -76,6 +76,9 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
 
         zipfile = _download_zip(managers, Config, source_name, zipfile, sessionid, start, results)
 
+        if zipfile and results.get('summary'):
+            results['summary'][0]['zipfile_size'] = os.path.getsize(zipfile)
+
 
     # ----------------------------------------------------------------------
     # Extract zipfile if encrypted
