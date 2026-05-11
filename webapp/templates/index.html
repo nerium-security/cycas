@@ -38,6 +38,7 @@
         {% endfor %}
     </select>
     <button type="submit" style="display:none"></button>
+    <button type="button" id="btn-export" class="btn-export">Export CSV</button>
 </form>
 
 <!-- Table -->
@@ -204,6 +205,39 @@ if (searchInput) {
         });
     });
 }
+
+// ── Export CSV ────────────────────────────────────────────────────────────
+
+document.getElementById('btn-export')?.addEventListener('click', function () {
+    const headers = ['Filename', 'Host', 'Source', 'Started', 'Duration', 'Status (Processing)', 'Status (ADX)'];
+    const rows = [];
+    document.querySelectorAll('#entries-body tr').forEach(row => {
+        if (row.style.display === 'none') return;
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 8) return;
+        rows.push([
+            cells[1].textContent.trim(),
+            cells[2].textContent.trim(),
+            cells[3].textContent.trim(),
+            cells[4].textContent.trim(),
+            cells[5].textContent.trim(),
+            cells[6].textContent.trim(),
+            cells[7].textContent.trim(),
+        ]);
+    });
+    const escape = v => '"' + v.replace(/"/g, '""') + '"';
+    const csv    = [headers, ...rows].map(r => r.map(escape).join(',')).join('\r\n');
+    const blob   = new Blob([csv], { type: 'text/csv' });
+    const url    = URL.createObjectURL(blob);
+    const a      = Object.assign(document.createElement('a'), {
+        href:     url,
+        download: `cycas-export-${new Date().toISOString().slice(0,10)}.csv`,
+    });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+});
 
 // ── Live duration timer ────────────────────────────────────────────────────
 
