@@ -327,6 +327,7 @@ class TablestorageManager:
         duration = self.calculate_duration(starttime)
 
         entity = self.build_log_entity(status, duration, status_data)
+        entity['StartTime'] = f'{starttime:%Y-%m-%dT%H:%M:%SZ}'
 
         self.update_log_entry(entity)
 
