@@ -2,7 +2,7 @@ import logging
 from core.utils.log import setup_logging
 from core.pipeline.orchestrator import init, run_zip_processor
 from core.utils.zip import list_zipfiles, list_zipfiles_with_sizes
-from core.utils.status import Status, write_logentry_if_new, determine_if_needs_processing, add_summary_info_to_status, update_status_in_log
+from core.utils.status import Status, write_logentry_if_new, determine_if_needs_processing, add_summary_info_to_status, update_status_in_log, upload_detailed_status_to_adx
 from core.utils.config import load_config
 from core.utils.summary import define_results_dict
 from core.utils.queue import update_status_unqueued, decode_message
@@ -96,6 +96,7 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
                 upload_id = results['summary'][0].get('uploadid', '') if results.get('summary') else ''
                 if upload_id:
                     managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)
+                upload_detailed_status_to_adx(managers, Config, results, tablename='_status')
                 all_succeeded = False
 
         if mode == 'manual' and all_succeeded:
