@@ -64,17 +64,17 @@
             {% for e in entries %}
             <tr data-rowkey="{{ e.RowKey }}" data-uploadid="{{ e.UploadId or '' }}">
                 <td class="col-check"><input type="checkbox" class="row-check" value="{{ e.RowKey }}"></td>
-                <td class="filename">{{ e.ZipfileBasename or '—' }}</td>
-                <td class="hostname">{{ e.Extracted_Hostname or '—' }}</td>
-                <td>{{ e.Source or '—' }}</td>
-                <td>{{ e.StartTime or '—' }}</td>
+                <td class="filename">{{ e.ZipfileBasename or '-' }}</td>
+                <td class="hostname">{{ e.Extracted_Hostname or '-' }}</td>
+                <td>{{ e.Source or '-' }}</td>
+                <td>{{ e.StartTime or '-' }}</td>
                 <td>
                     {% if e.Status == 'finished' %}
-                        {{ e.ComputedDuration or '—' }}
+                        {{ e.ComputedDuration or '-' }}
                     {% elif e.StartTime %}
-                        <span class="live-duration" data-start="{{ e.StartTime }}">{{ e.ComputedDuration or '—' }}</span>
+                        <span class="live-duration" data-start="{{ e.StartTime }}">{{ e.ComputedDuration or '-' }}</span>
                     {% else %}
-                        {{ e.ComputedDuration or '—' }}
+                        {{ e.ComputedDuration or '-' }}
                     {% endif %}
                 </td>
                 <td title="{{ e.Status or 'new' }}">
@@ -90,7 +90,7 @@
                     {% elif e.AdxStatus == 'timeout' %}
                         <span class="adx-timeout">Timeout</span>
                     {% else %}
-                        —
+                        -
                     {% endif %}
                 </td>
             </tr>
@@ -109,7 +109,7 @@
 <div class="drawer-backdrop" id="drawer-backdrop"></div>
 <div class="drawer" id="detail-drawer">
     <div class="drawer-header">
-        <h2 id="drawer-title">—</h2>
+        <h2 id="drawer-title">-</h2>
         <button class="drawer-close" id="drawer-close" title="Close">&#x2715;</button>
     </div>
     <div class="drawer-tabs">
@@ -264,7 +264,7 @@ function adxBadge(status) {
     if (status === 'confirmed') return '<span class="adx-confirmed">● Queryable</span>';
     if (status === 'pending')   return '<span class="adx-pending">⟳ Pending</span>';
     if (status === 'timeout')   return '<span class="adx-timeout">Timeout</span>';
-    return '—';
+    return '-';
 }
 
 function refreshAdxStatus() {
@@ -283,7 +283,7 @@ setInterval(refreshAdxStatus, 10000);
 // ── Table auto-refresh ─────────────────────────────────────────────────────
 
 function filesizeformat(bytes) {
-    if (!bytes) return '—';
+    if (!bytes) return '-';
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     let v = bytes, i = 0;
     while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
@@ -301,14 +301,14 @@ function refreshTable() {
             tbody.innerHTML = data.map(e => {
                 const isFinished = e.Status === 'finished';
                 const durationCell = (isFinished || !e.StartTime)
-                    ? (e.Duration || '—')
-                    : `<span class="live-duration" data-start="${e.StartTime}">—</span>`;
+                    ? (e.Duration || '-')
+                    : `<span class="live-duration" data-start="${e.StartTime}">-</span>`;
                 return `<tr data-rowkey="${e.RowKey}" data-uploadid="${e.UploadId || ''}">
                     <td class="col-check"><input type="checkbox" class="row-check" value="${e.RowKey}" ${selectedKeys.has(e.RowKey) ? 'checked' : ''}></td>
-                    <td class="filename">${e.ZipfileBasename || '—'}</td>
-                    <td class="hostname">${e.Extracted_Hostname || '—'}</td>
-                    <td>${e.Source || '—'}</td>
-                    <td>${e.StartTime || '—'}</td>
+                    <td class="filename">${e.ZipfileBasename || '-'}</td>
+                    <td class="hostname">${e.Extracted_Hostname || '-'}</td>
+                    <td>${e.Source || '-'}</td>
+                    <td>${e.StartTime || '-'}</td>
                     <td>${durationCell}</td>
                     <td title="${e.Status || 'new'}"><span class="badge badge-${(e.Status || 'new').split(' ')[0].toLowerCase()}">${e.Status || 'new'}</span></td>
                     <td class="adx-cell" data-uploadid="${e.UploadId || ''}">${adxBadge(e.AdxStatus)}</td>
@@ -359,13 +359,13 @@ document.querySelectorAll('.drawer-tab').forEach(btn => {
 });
 
 function fmt(val) {
-    if (val === null || val === undefined || val === '') return '—';
+    if (val === null || val === undefined || val === '') return '-';
     if (typeof val === 'boolean') return val ? 'Yes' : 'No';
     return String(val);
 }
 
 function fmtBytes(bytes) {
-    if (!bytes) return '—';
+    if (!bytes) return '-';
     const units = ['B', 'KB', 'MB', 'GB'];
     let v = bytes, i = 0;
     while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
@@ -411,7 +411,7 @@ function renderPostprocessing(data) {
         const basename = fmt(p.basename);
         const size     = fmtBytes(p.size);
         const error    = fmt(p.error);
-        const duration = p.duration_in_sec != null ? p.duration_in_sec.toFixed(1) + 's' : '—';
+        const duration = p.duration_in_sec != null ? p.duration_in_sec.toFixed(1) + 's' : '-';
         const cmd      = fmt(p.cmd);
         const stdout   = fmt(p.stdout);
         const stderr   = fmt(p.stderr);
@@ -468,7 +468,7 @@ function renderUploads(data) {
         const file    = fmt(u.location_in_zip);
         const size    = fmtBytes(u.size);
         const proc    = fmt(u.was_postprocessed_with);
-        const dur     = u.upload_duration_in_sec != null ? u.upload_duration_in_sec.toFixed(1) + 's' : '—';
+        const dur     = u.upload_duration_in_sec != null ? u.upload_duration_in_sec.toFixed(1) + 's' : '-';
         return `<tr>
             <td title="${file}">${file}</td>
             <td title="${size}">${size}</td>
@@ -514,7 +514,7 @@ document.getElementById('entries-body').addEventListener('click', function (e) {
     if (!row) return;
 
     const uploadId = row.dataset.uploadid;
-    const filename = row.querySelector('.filename')?.textContent?.trim() || uploadId || '—';
+    const filename = row.querySelector('.filename')?.textContent?.trim() || uploadId || '-';
 
     drawerTitle.textContent = filename;
     document.getElementById('tab-summary').innerHTML        = '<p class="drawer-loading">Loading…</p>';

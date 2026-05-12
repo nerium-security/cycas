@@ -156,10 +156,10 @@ def _compute_duration(entry):
     '''
     status = (entry.get('Status') or '').lower()
     if status == Status.FINISHED:
-        return entry.get('Duration') or '—'
+        return entry.get('Duration') or '-'
     start_str = entry.get('StartTime') or ''
     if not start_str:
-        return entry.get('Duration') or '—'
+        return entry.get('Duration') or '-'
     try:
         start   = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
         elapsed = int((datetime.now(timezone.utc) - start).total_seconds())
@@ -167,7 +167,7 @@ def _compute_duration(entry):
         m, s    = divmod(rem, 60)
         return f'{h}h {m}m {s}s'
     except Exception:
-        return entry.get('Duration') or '—'
+        return entry.get('Duration') or '-'
 
 
 def _parse_finished_at(start_time_str):
