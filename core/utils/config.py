@@ -49,6 +49,7 @@ class Config(BaseSettings):
     adx_database_name: str
     adx_cluster_uri: str
     adx_cluster_ingestion_uri: str
+    adx_table_prefix: str = ''
     adx_ingestion_batching_timespan: str
     adx_ingestion_batching_max_items: int
     adx_ingestion_batching_max_size_mb: int

@@ -319,7 +319,7 @@ class AdxManager:
         if forcetablename:
             tablename = forcetablename
         else:
-            tablename = self.sanitize_adx_column_name(os.path.basename(file))
+            tablename = Config.adx_table_prefix + self.sanitize_adx_column_name(os.path.basename(file))
             if os.path.getsize(file) == 0:
                 return tablename
 
