@@ -28,16 +28,16 @@ Prerequisites
    sudo apt install python3.13
    sudo apt install python3.13-venv
 
-**Azure CLI** — used for authentication:
+**Azure CLI** - used for authentication:
 
 .. code-block:: bash
 
    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
-**Azure permissions** — Contributor access on the target resource group (or
+**Azure permissions** - Contributor access on the target resource group (or
 subscription if you want to create a new resource group).
 
-**Azure Functions Core Tools** — installed automatically by the wizard if not
+**Azure Functions Core Tools** - installed automatically by the wizard if not
 already present (requires ``npm``).
 
 Steps

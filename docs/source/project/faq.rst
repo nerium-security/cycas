@@ -32,9 +32,9 @@ Can I skip certain files from being ingested to Azure Data Explorer (ADX)?
 Yes. Place a ``.ignorelist.json`` file in the root folder of Cycas.
 It supports two keys:
  
-- ``ignorelist`` — exact filenames or paths to skip (URL-encode ``/`` as ``%2F``
+- ``ignorelist`` - exact filenames or paths to skip (URL-encode ``/`` as ``%2F``
   in artifact paths)
-- ``ignorepattern`` — glob-style patterns such as ``uploads/*``
+- ``ignorepattern`` - glob-style patterns such as ``uploads/*``
  
 Example:
  
@@ -57,9 +57,9 @@ How to add artifacts for post-processing with Velocriaptor?
 Artifacts are defined in ``Velociraptor/artifacts/velociraptor_artifacts.json``.
 The file contains three lists:
 
-- ``essential`` — a minimal set of artifacts collected in all cases
-- ``full`` — the complete artifact set for a thorough investigation
-- ``skip`` — artifacts to explicitly exclude from collection
+- ``essential`` - a minimal set of artifacts collected in all cases
+- ``full`` - the complete artifact set for a thorough investigation
+- ``skip`` - artifacts to explicitly exclude from collection
 
 Example:
 

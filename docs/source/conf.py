@@ -7,7 +7,7 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'cycas'
-copyright = '2026, Jos Clephas'
+copyright = '2026, Nerium'
 author = 'Jos Clephas'
 
 # -- General configuration ---------------------------------------------------

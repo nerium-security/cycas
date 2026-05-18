@@ -30,7 +30,7 @@ Local
 
 provides a single pipeline script, ``zip2adx.py``, that ingests
 forensic triage packages into Azure Data Explorer (ADX). The input source
-is controlled entirely through the ``.env`` file — no command-line arguments
+is controlled entirely through the ``.env`` file - no command-line arguments
 are needed.
 
 .. code-block:: bash

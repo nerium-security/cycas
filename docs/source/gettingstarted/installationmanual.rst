@@ -69,7 +69,7 @@ First copy the .env_example to .env:
 .. note::
  
    Boolean values must be set to ``true`` or ``false`` (lowercase).
-   Leave a variable empty (``VARIABLE=``) rather than removing it — all
+   Leave a variable empty (``VARIABLE=``) rather than removing it - all
    keys must be present for the configuration to load correctly.
  
 Our prefered setup is to store the ZIP file in a storage account blob and from there upload it to Azure Data Explorer (ADX). 

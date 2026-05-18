@@ -7,7 +7,7 @@ evidence are listed below.
 .. note::
     Velociraptor artifacts are designed to run against a live Windows system.
     To run them against a collected ZIP containing raw evidence instead, Cycas
-    generates a *remapping file* — a YAML configuration that instructs Velociraptor
+    generates a *remapping file* - a YAML configuration that instructs Velociraptor
     to treat the ZIP's contents as if they were a live machine, redirecting
     filesystem and registry paths into the archive.
 
@@ -25,19 +25,19 @@ Standard artifacts
    * - Artifact
      - Description
    * - ``Windows.NTFS.MFT``
-     - Master File Table — full filesystem metadata
+     - Master File Table - full filesystem metadata
    * - ``Windows.Forensics.Usn``
-     - USN Journal ($UsnJrnl) — filesystem change history
+     - USN Journal ($UsnJrnl) - filesystem change history
    * - ``Windows.Sys.AppcompatShims``
      - Application compatibility shims
    * - ``Windows.Forensics.RecentApps``
      - Recently accessed files and applications from the registry
    * - ``Windows.Forensics.UserAccessLogs``
-     - User Access Logs (UAL) — remote access and logon history
+     - User Access Logs (UAL) - remote access and logon history
    * - ``Windows.Forensics.Shellbags``
-     - Shellbags — folder browsing history
+     - Shellbags - folder browsing history
    * - ``Windows.Detection.Amcache``
-     - Amcache.hve — file execution and installation history
+     - Amcache.hve - file execution and installation history
    * - ``Windows.System.Powershell.PSReadline``
      - PowerShell command history
    * - ``Windows.System.TaskScheduler``
@@ -47,17 +47,17 @@ Standard artifacts
    * - ``Windows.EventLogs.Evtx``
      - Windows Event Logs (all .evtx files)
    * - ``Windows.Registry.AppCompatCache``
-     - AppCompatCache (Shimcache) — program execution evidence
+     - AppCompatCache (Shimcache) - program execution evidence
    * - ``Windows.Forensics.Prefetch``
-     - Prefetch files — execution evidence
+     - Prefetch files - execution evidence
    * - ``Windows.Sys.Programs``
      - Installed programs
    * - ``Windows.Forensics.JumpLists``
-     - Jump Lists — recently/frequently accessed files per application
+     - Jump Lists - recently/frequently accessed files per application
    * - ``Windows.Forensics.Timeline``
      - Windows Timeline / Activity history
    * - ``Windows.Forensics.SRUM``
-     - System Resource Usage Monitor — process, network, and energy usage history
+     - System Resource Usage Monitor - process, network, and energy usage history
 
 
 Custom artifacts
@@ -73,9 +73,9 @@ indicated by the ``Custom`` prefix.
    * - Artifact
      - Description
    * - ``Custom.Windows.Forensics.Bam``
-     - Background Activity Moderator — records of executed binaries
+     - Background Activity Moderator - records of executed binaries
    * - ``Custom.Windows.Forensics.SAM``
-     - SAM database — local account and group information
+     - SAM database - local account and group information
    * - ``Custom.Windows.Registry.Interfaces``
      - Network interface registry keys
    * - ``Custom.Windows.Registry.NTUser``
