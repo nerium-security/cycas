@@ -2,6 +2,8 @@
 
 Cycas is a is a Python pipeline for post-processing raw forensic artefacts collected with [Velociraptor](https://www.velocidex.com/golang/velociraptor/). It optionally ingests data into [Azure Data Explorer (ADX)](https://azure.microsoft.com/en-us/products/data-explorer). 
 
+![Ingestion Dashboard](docs/source/_static/images/webapp_status.png)
+
 ## Features
 
 - Post-process raw Velociraptor artefacts (MFT, EVTX etc) into CSV, JSON, or JSONL format
@@ -10,12 +12,6 @@ Cycas is a is a Python pipeline for post-processing raw forensic artefacts colle
 - Encrypted ZIP support via Azure Key Vault or environment variables
 - Deduplication and status tracking via Azure Table Storage
 - Concurrent processing of multiple ZIP files
-
-## Visualisation
-
-Idea:
-1) Collect raw artefacts from endpoints using Velocirpator -> upload to blob
-2) post-process and upload to adx
 
 ## Supported Input Sources
  
