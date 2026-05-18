@@ -76,7 +76,7 @@ def prepare_and_send_webhook_message(webhook_url, results):
 
         nr_uploads += 1
 
-    # Retrieve count of postprocessed artefacts
+    # Retrieve count of postprocessed artifacts
     nr_postprocessed = 0
     for f in results['postprocessing']:
         if not isinstance(f, dict):

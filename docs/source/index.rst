@@ -6,7 +6,7 @@
 cycas documentation
 ===================
 
-Cycas is a solution for post-processing raw forensic artefacts collected with `Velociraptor <https://github.com/Velocidex/velociraptor>`_. It optionally ingests data into `Azure Data Explorer (ADX) <https://azure.microsoft.com/nl-nl/products/data-explorer>`_.
+Cycas is a solution for post-processing raw forensic artifacts collected with `Velociraptor <https://github.com/Velocidex/velociraptor>`_. It optionally ingests data into `Azure Data Explorer (ADX) <https://azure.microsoft.com/nl-nl/products/data-explorer>`_.
 
 .. toctree::
    :maxdepth: 2

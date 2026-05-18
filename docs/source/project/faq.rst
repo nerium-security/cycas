@@ -13,15 +13,15 @@ What operating systems are supported?
 Cycas is supported to run on Linux. Although it would probably work on
 Windows and macOS as well, but we have not tested this.
 
-Cycas also supports post-processing raw artefacts collected from 
+Cycas also supports post-processing raw artifacts collected from 
 Windows endpoints, there is currently no support for post-processing
-artefacts from other endpoints like macOS or Linux.
+artifacts from other endpoints like macOS or Linux.
 
-When raw artefacts are already post-processed to JSONL with Velociraptor
+When raw artifacts are already post-processed to JSONL with Velociraptor
 , whether this is from a Windows, macOS, or Linux device, it is supported.
 
 
-Which artefacts are supported for post-processing?
+Which artifacts are supported for post-processing?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 See :doc:`../reference/supportedartifacts`
@@ -51,15 +51,15 @@ Example:
       ]
     }
 
-How to add artefacts for post-processing with Velocriaptor?
+How to add artifacts for post-processing with Velocriaptor?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Artefacts are defined in ``Velociraptor/artifacts/velociraptor_artifacts.json``.
+Artifacts are defined in ``Velociraptor/artifacts/velociraptor_artifacts.json``.
 The file contains three lists:
 
-- ``essential`` — a minimal set of artefacts collected in all cases
-- ``full`` — the complete artefact set for a thorough investigation
-- ``skip`` — artefacts to explicitly exclude from collection
+- ``essential`` — a minimal set of artifacts collected in all cases
+- ``full`` — the complete artifact set for a thorough investigation
+- ``skip`` — artifacts to explicitly exclude from collection
 
 Example:
 
@@ -79,13 +79,13 @@ Example:
       ]
     }
 
-To add a new artefact, append its Velociraptor artifact name (including
+To add a new artifact, append its Velociraptor artifact name (including
 parentheses and any parameters) to either the ``essential`` or ``full`` list.
-To prevent an artefact from being collected, add it to the ``skip`` list.
+To prevent an artifact from being collected, add it to the ``skip`` list.
 
-If you want to add a custom artefact, add the Velociraptor artefact file to the folder as well: ``/velociraptor/definitions/``
+If you want to add a custom artifact, add the Velociraptor artifact file to the folder as well: ``/velociraptor/definitions/``
 
-What if I only want to post-process raw artefacts? And not ingest to ADX?
+What if I only want to post-process raw artifacts? And not ingest to ADX?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 You can use the standalone script we've built. See :doc:`../guides/postprocessingraw`.
