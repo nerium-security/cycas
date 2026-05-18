@@ -141,7 +141,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
     if upload_id:
         managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)
 
-    upload_detailed_status_to_adx(managers, Config, results, tablename='_status')
+    upload_detailed_status_to_adx(managers, Config, results)
 
     prepare_and_send_webhook_message(Config.var_webhook_url, results)
 

@@ -96,7 +96,7 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
                 upload_id = results['summary'][0].get('uploadid', '') if results.get('summary') else ''
                 if upload_id:
                     managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)
-                upload_detailed_status_to_adx(managers, Config, results, tablename='_status')
+                upload_detailed_status_to_adx(managers, Config, results)
                 all_succeeded = False
 
         if mode == 'manual' and all_succeeded:

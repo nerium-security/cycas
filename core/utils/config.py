@@ -50,6 +50,9 @@ class Config(BaseSettings):
     adx_cluster_uri: str
     adx_cluster_ingestion_uri: str
     adx_table_prefix: str = ''
+    adx_status_table_summary: str = '_status_summary'
+    adx_status_table_uploads: str = '_status_uploads'
+    adx_status_table_postprocessing: str = '_status_postprocessing'
     adx_ingestion_batching_timespan: str
     adx_ingestion_batching_max_items: int
     adx_ingestion_batching_max_size_mb: int

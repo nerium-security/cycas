@@ -133,34 +133,29 @@ def _prepare_dictionary_for_upload_to_adx(results_dict, dict_key):
 
     return output
 
-def upload_detailed_status_to_adx(managers, Config, results, tablename):
+def upload_detailed_status_to_adx(managers, Config, results):
     '''
     Upload detailed pipeline status results to Azure Data Explorer (ADX).
 
     When ADX ingestion is enabled, uploads the 'postprocessing', 'uploads',
     and 'summary' parts of the results dictionary to separate ADX tables
-    derived from the provided base table name.
+    configured via Config.
 
     Args:
         managers: Container holding authenticated service managers.
         results (dict): Results dictionary containing keys 'postprocessing',
             'uploads', and 'summary'.
-        tablename (str): Base table name used to generate table names for
-            detailed status ingestion.
     '''
 
     if Config.adx_cluster_enabled:
 
         dict_status = {
-
-            'uploads': tablename + '_uploads',
-            'summary': tablename + '_summary'
-
+            'uploads': Config.adx_status_table_uploads,
+            'summary': Config.adx_status_table_summary,
         }
 
         if results.get('postprocessing'):
-
-            dict_status['postprocessing'] = tablename + '_postprocessing'
+            dict_status['postprocessing'] = Config.adx_status_table_postprocessing
 
         for key, tablename in dict_status.items():
             results_prepared = _prepare_dictionary_for_upload_to_adx(results, key)

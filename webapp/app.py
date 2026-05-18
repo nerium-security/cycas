@@ -43,9 +43,10 @@ class IngestionPoller:
     entries. Polling stops per-entry once confirmed or after POLL_TIMEOUT_MIN minutes.
     '''
 
-    def __init__(self, cluster_uri, database):
-        self._cluster_uri = cluster_uri
-        self._database    = database
+    def __init__(self, cluster_uri, database, summary_table):
+        self._cluster_uri  = cluster_uri
+        self._database     = database
+        self._summary_table = summary_table
         self._pending     = {}    # uploadid -> finished_at (UTC-aware datetime)
         self._confirmed   = set()
         self._timed_out   = set()
@@ -106,7 +107,7 @@ class IngestionPoller:
 
             try:
                 ids_kql = ', '.join(f'"{uid}"' for uid in pending)
-                query   = f'_status_summary | where uploadid in ({ids_kql}) | project uploadid'
+                query   = f'{self._summary_table} | where uploadid in ({ids_kql}) | project uploadid'
                 result  = self._client.execute(self._database, query)
                 found   = {row['uploadid'] for row in result.primary_results[0]}
                 with self._lock:
@@ -132,7 +133,7 @@ def get_poller():
             try:
                 config = load_config()
                 if config.adx_cluster_enabled:
-                    _poller = IngestionPoller(config.adx_cluster_uri, config.adx_database_name)
+                    _poller = IngestionPoller(config.adx_cluster_uri, config.adx_database_name, config.adx_status_table_summary)
             except Exception:
                 pass
     return _poller
