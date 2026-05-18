@@ -137,6 +137,9 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
 
     update_status_in_log(managers, Config, Status.FINISHED, start, results)
 
+    if results.get('summary'):
+        results['summary'][0]['duration_in_sec'] = (datetime.now() - start).total_seconds()
+
     upload_id = results['summary'][0].get('uploadid', '')
     if upload_id:
         managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)

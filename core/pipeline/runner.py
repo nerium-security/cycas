@@ -93,6 +93,8 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
             except Exception as e:
                 log.error(f'Processing failed for {zipfile}: {e}')
                 update_status_in_log(managers, Config, Status.FAILED, start, results)
+                if results.get('summary'):
+                    results['summary'][0]['duration_in_sec'] = (datetime.now() - start).total_seconds()
                 upload_id = results['summary'][0].get('uploadid', '') if results.get('summary') else ''
                 if upload_id:
                     managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)
