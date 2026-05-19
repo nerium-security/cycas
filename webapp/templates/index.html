@@ -536,7 +536,7 @@ document.getElementById('entries-body').addEventListener('click', function (e) {
         .then(r => r.json())
         .then(data => {
             if (data.pending) {
-                document.getElementById('tab-summary').innerHTML = '<p class="drawer-empty">Status not yet available - run has not started processing.</p>';
+                document.getElementById('tab-summary').innerHTML = '<p class="drawer-empty">Status not (yet) available.</p>';
                 return;
             }
             if (data.error) {
