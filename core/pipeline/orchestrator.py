@@ -101,8 +101,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
         zip_password, extracted_zip = get_password_from_env_or_prompt(source_name, unextracted_zip)
 
         if not zip_password:
-            log.info('Password false. Skipping zip.')
-            return
+            raise RuntimeError('ZIP is encrypted but no password could be retrieved. Check Key Vault connectivity and secret name.')
 
     zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
 
