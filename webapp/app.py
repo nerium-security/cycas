@@ -381,18 +381,61 @@ def adx_status():
 def _artifact_name(entry):
     return entry.split('(')[0].strip()
 
+def _yaml_blob_name(name):
+    return f'definitions/{name}.yaml'
+
 def _yaml_path(config, name):
     return Path(config.velociraptor_definitions) / f'{name}.yaml'
 
+def _read_yaml(config, name):
+    '''Return YAML text for an artifact definition. Tries blob first, then local file.'''
+    if config.blob_storageaccount_enabled:
+        try:
+            credential = DefaultAzureCredential()
+            svc = BlobServiceClient(account_url=config.blob_storageaccount_uri, credential=credential)
+            bc = svc.get_blob_client(container=config.blob_container_config, blob=_yaml_blob_name(name))
+            return bc.download_blob().readall().decode('utf-8')
+        except Exception:
+            pass
+    local = _yaml_path(config, name)
+    if local.exists():
+        return local.read_text()
+    return None
+
+def _write_yaml(config, name, text):
+    '''Write YAML text for an artifact definition to blob (or local if blob disabled).'''
+    if config.blob_storageaccount_enabled:
+        credential = DefaultAzureCredential()
+        svc = BlobServiceClient(account_url=config.blob_storageaccount_uri, credential=credential)
+        bc = svc.get_blob_client(container=config.blob_container_config, blob=_yaml_blob_name(name))
+        bc.upload_blob(text.encode('utf-8'), overwrite=True)
+    else:
+        _yaml_path(config, name).write_text(text)
+
+def _config_blob_client(config):
+    credential = DefaultAzureCredential()
+    svc = BlobServiceClient(account_url=config.blob_storageaccount_uri, credential=credential)
+    return svc.get_blob_client(container=config.blob_container_config, blob='velociraptor_artifacts.json')
+
 def _load_artifacts_json(config):
+    if config.blob_storageaccount_enabled:
+        try:
+            data = _config_blob_client(config).download_blob().readall()
+            return json.loads(data)
+        except Exception:
+            pass
     with open(config.velociraptor_artifactslist) as f:
         return json.load(f)
 
 def _save_artifacts_json(config, data):
-    path = Path(config.velociraptor_artifactslist)
-    tmp  = path.with_suffix('.tmp')
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(path)
+    payload = json.dumps(data, indent=2).encode('utf-8')
+    if config.blob_storageaccount_enabled:
+        _config_blob_client(config).upload_blob(payload, overwrite=True)
+    else:
+        path = Path(config.velociraptor_artifactslist)
+        tmp  = path.with_suffix('.tmp')
+        tmp.write_bytes(payload)
+        tmp.replace(path)
 
 
 # ---------------------------------------------------------------------------
@@ -414,10 +457,10 @@ def api_artifacts_get():
             result[category] = []
             for entry in entries:
                 name      = _artifact_name(entry)
-                yf        = _yaml_path(config, name)
+                yaml_text = _read_yaml(config, name)
                 params    = []
-                if yf.exists():
-                    parsed = yaml.safe_load(yf.read_text()) or {}
+                if yaml_text:
+                    parsed = yaml.safe_load(yaml_text) or {}
                     params = [
                         {'name': p['name'], 'default': str(p.get('default', '') or '')}
                         for p in (parsed.get('parameters') or [])
@@ -425,7 +468,7 @@ def api_artifacts_get():
                 result[category].append({
                     'entry':    entry,
                     'name':     name,
-                    'has_yaml': yf.exists(),
+                    'has_yaml': yaml_text is not None,
                     'params':   params,
                 })
         return jsonify(result)
@@ -464,7 +507,7 @@ def api_artifacts_upload():
         if not name:
             return jsonify({'error': 'YAML file has no name field'}), 400
 
-        _yaml_path(config, name).write_text(content)
+        _write_yaml(config, name, content)
 
         data        = _load_artifacts_json(config)
         all_entries = data['essential'] + data['full'] + data['skip']
@@ -480,19 +523,19 @@ def api_artifacts_upload():
 @app.route('/api/artifacts/<path:name>/yaml', methods=['POST'])
 def api_artifact_yaml_save(name):
     try:
-        config = load_config()
-        yf     = _yaml_path(config, name)
-        if not yf.exists():
+        config    = load_config()
+        yaml_text = _read_yaml(config, name)
+        if yaml_text is None:
             return jsonify({'error': 'YAML file not found'}), 404
 
         params  = (request.get_json() or {}).get('parameters', [])
-        content = yaml.safe_load(yf.read_text()) or {}
+        content = yaml.safe_load(yaml_text) or {}
         lookup  = {p['name']: p for p in (content.get('parameters') or [])}
         for p in params:
             if p['name'] in lookup:
                 lookup[p['name']]['default'] = p['default']
         content['parameters'] = list(lookup.values())
-        yf.write_text(yaml.dump(content, allow_unicode=True, sort_keys=False))
+        _write_yaml(config, name, yaml.dump(content, allow_unicode=True, sort_keys=False))
         return jsonify({'saved': True})
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500

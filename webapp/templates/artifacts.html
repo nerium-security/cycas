@@ -62,6 +62,7 @@
 let state = { essential: [], full: [], skip: [] };
 let currentParamsName = null;
 let dirty = false;
+const collapsed = { essential: true, full: true, skip: true };
 
 function markDirty() {
     if (dirty) return;
@@ -145,14 +146,15 @@ function render() {
         ).join('');
         return `
         <div class="artifact-section">
-            <div class="artifact-section-header">
-                <label class="select-all-label" title="Select all">
+            <div class="artifact-section-header section-toggle" data-cat="${cat}">
+                <label class="select-all-label" title="Select all" onclick="event.stopPropagation()">
                     <input type="checkbox" class="select-all-cb" data-cat="${cat}">
                 </label>
                 <span>${CAT_LABELS[cat]}</span>
                 <span class="group-count">${state[cat].length}</span>
+                <span class="section-chevron">${collapsed[cat] ? '&#9654;' : '&#9660;'}</span>
             </div>
-            <div class="bulk-action-bar" id="bulk-${cat}">
+            <div class="bulk-action-bar" id="bulk-${cat}" style="display:none">
                 <span class="bulk-count" id="bulk-count-${cat}"></span>
                 ${otherCats.map(c => `
                 <button class="btn-bulk-move btn-artifact-action" data-from="${cat}" data-to="${c}">
@@ -160,7 +162,7 @@ function render() {
                 </button>`).join('')}
                 <button class="btn-bulk-remove btn-artifact-action" data-cat="${cat}">Remove</button>
             </div>
-            <div class="artifact-list" id="list-${cat}">
+            <div class="artifact-list" id="list-${cat}" ${collapsed[cat] ? 'hidden' : ''}>
                 ${state[cat].length
                     ? state[cat].map((a, i) => artifactRow(cat, i, a)).join('')
                     : '<div class="artifact-empty">No artifacts</div>'
@@ -223,6 +225,17 @@ document.getElementById('artifact-sections').addEventListener('change', function
 });
 
 document.getElementById('artifact-sections').addEventListener('click', function (e) {
+    const toggle = e.target.closest('.section-toggle');
+    if (toggle && !e.target.closest('.select-all-label')) {
+        const cat  = toggle.dataset.cat;
+        collapsed[cat] = !collapsed[cat];
+        const list = document.getElementById(`list-${cat}`);
+        if (list) list.hidden = collapsed[cat];
+        const chevron = toggle.querySelector('.section-chevron');
+        if (chevron) chevron.innerHTML = collapsed[cat] ? '&#9654;' : '&#9660;';
+        return;
+    }
+
     const removeBtn = e.target.closest('.btn-remove');
     if (removeBtn) {
         const cat = removeBtn.dataset.cat;

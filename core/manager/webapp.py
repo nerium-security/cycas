@@ -23,8 +23,9 @@ _ARM_API = '2024-04-01'
 
 _STAGE_IGNORE = shutil.ignore_patterns('.venv', '__pycache__', '.git', '.vscode', 'test')
 
-ROLE_TABLE_DATA_CONTRIBUTOR  = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
-ROLE_STORAGE_BLOB_DATA_READER = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
+ROLE_TABLE_DATA_CONTRIBUTOR       = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
+ROLE_STORAGE_BLOB_DATA_READER     = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
+ROLE_STORAGE_BLOB_DATA_CONTRIBUTOR = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 
 class WebappManager:
@@ -218,6 +219,35 @@ class WebappManager:
             else:
                 raise
         log.info(f'Blob Data Reader assigned on container {container_name!r} to webapp principal.')
+
+    def assign_blob_container_contributor(self, resource_group, account_name, container_name, principal_id):
+        '''Grant the webapp managed identity Storage Blob Data Contributor on a specific container.'''
+        import uuid
+        container_scope = (
+            f'/subscriptions/{self.subscription_id}/resourceGroups/{resource_group}'
+            f'/providers/Microsoft.Storage/storageAccounts/{account_name}'
+            f'/blobServices/default/containers/{container_name}'
+        )
+        role_def = (
+            f'/subscriptions/{self.subscription_id}'
+            f'/providers/Microsoft.Authorization/roleDefinitions/{ROLE_STORAGE_BLOB_DATA_CONTRIBUTOR}'
+        )
+        try:
+            self._auth.role_assignments.create(
+                container_scope,
+                str(uuid.uuid4()),
+                RoleAssignmentCreateParameters(
+                    role_definition_id=role_def,
+                    principal_id=principal_id,
+                    principal_type='ServicePrincipal',
+                ),
+            )
+        except Exception as e:
+            if 'RoleAssignmentExists' in str(e) or 'already exists' in str(e).lower():
+                log.info(f'Blob Data Contributor on {container_name} already assigned, skipping.')
+            else:
+                raise
+        log.info(f'Blob Data Contributor assigned on container {container_name!r} to webapp principal.')
 
     def configure_startup(self, resource_group, app_name, command: str):
         '''Set the startup command on the Web App without overwriting other site config.'''

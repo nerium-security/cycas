@@ -37,6 +37,7 @@ class Config(BaseSettings):
     blob_storageaccount_uri: str
     blob_container_input: str
     blob_container_status: str
+    blob_container_config: str = 'config'
     blob_storageaccount_sas_enabled: bool
     blob_storageaccount_sas: str
     blob_logtable_enabled: bool

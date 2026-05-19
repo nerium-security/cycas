@@ -271,6 +271,53 @@ class BlobManager:
         except Exception as e:
             log.error(f'Failed to upload status JSON to {container_name}/{blob_name}. Error: {e}')
 
+    def list_blobs_prefix(self, container_name, prefix):
+        '''Return blob names in container whose names start with prefix.'''
+        try:
+            container_client = self.get_container_client(container_name)
+            return [b.name for b in container_client.list_blobs(name_starts_with=prefix)]
+        except Exception as e:
+            log.warning(f'Could not list blobs in {container_name} with prefix {prefix!r}: {e}')
+            return []
+
+    def upload_text(self, container_name, blob_name, text):
+        '''Upload a UTF-8 string as a blob, overwriting any existing content.'''
+        blob_client = self.get_client(container_name, blob_name)
+        try:
+            blob_client.upload_blob(text.encode('utf-8'), overwrite=True)
+            log.info(f'Uploaded text blob to {container_name}/{blob_name}')
+        except Exception as e:
+            log.error(f'Failed to upload text blob to {container_name}/{blob_name}: {e}')
+
+    def read_text(self, container_name, blob_name):
+        '''Download a blob and return its content as a UTF-8 string, or None if not found.'''
+        from azure.core.exceptions import ResourceNotFoundError
+        blob_client = self.get_client(container_name, blob_name)
+        try:
+            return blob_client.download_blob().readall().decode('utf-8')
+        except ResourceNotFoundError:
+            log.info(f'Blob {container_name}/{blob_name} not found.')
+            return None
+        except Exception as e:
+            log.warning(f'Could not read {container_name}/{blob_name}: {e}')
+            return None
+
+    def read_json(self, container_name, blob_name):
+        '''Download a blob and parse it as JSON. Returns the dict, or None if the blob
+        does not exist or cannot be read.'''
+        import json
+        from azure.core.exceptions import ResourceNotFoundError
+        blob_client = self.get_client(container_name, blob_name)
+        try:
+            data = blob_client.download_blob().readall()
+            return json.loads(data)
+        except ResourceNotFoundError:
+            log.info(f'Blob {container_name}/{blob_name} not found.')
+            return None
+        except Exception as e:
+            log.warning(f'Could not read {container_name}/{blob_name}: {e}')
+            return None
+
     def provision_storage_account(self, subscription_id, resource_group, location, account_name):
         '''
         Create a storage account if it does not already exist.

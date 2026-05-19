@@ -640,6 +640,29 @@ def provision_all(azure, credential, subscription_id,
     blob_mgr.create_container(status_container)
     success(f"Container '{status_container}' ready.")
 
+    step("Ensuring blob container 'config' exists...")
+    blob_mgr.create_container('config')
+    success("Container 'config' ready.")
+
+    step("Uploading initial velociraptor_artifacts.json to 'config' container...")
+    import json as _json
+    artifacts_src = Path(__file__).parent / 'velociraptor' / 'artifacts' / 'velociraptor_artifacts.json'
+    if artifacts_src.exists():
+        blob_mgr.upload_json('config', 'velociraptor_artifacts.json', _json.loads(artifacts_src.read_text()))
+        success('velociraptor_artifacts.json uploaded.')
+    else:
+        info('velociraptor_artifacts.json not found locally, skipping upload.')
+
+    step("Uploading Velociraptor definition YAMLs to 'config/definitions/' ...")
+    definitions_src = Path(__file__).parent / 'velociraptor' / 'definitions'
+    if definitions_src.is_dir():
+        yaml_files = list(definitions_src.glob('*.yaml')) + list(definitions_src.glob('*.yml'))
+        for yf in yaml_files:
+            blob_mgr.upload_text('config', f'definitions/{yf.name}', yf.read_text())
+        success(f'{len(yaml_files)} definition YAML(s) uploaded.')
+    else:
+        info('velociraptor/definitions/ not found locally, skipping YAML upload.')
+
     step('Writing .env...')
 
     write_env_values({
@@ -660,6 +683,7 @@ def provision_all(azure, credential, subscription_id,
         'BLOB_QUEUE_URL':          queue_url,
         'BLOB_QUEUE_NAME':         queue_name,
         'BLOB_CONTAINER_STATUS':   status_container,
+        'BLOB_CONTAINER_CONFIG':   'config',
     })
 
     success('.env updated.')
@@ -846,6 +870,10 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
     step(f"Assigning Blob Data Reader on '{status_container}' container to web app managed identity...")
     webapp.assign_blob_container_reader(resource_group, account_name, status_container, principal_id)
     success(f"Blob Data Reader on '{status_container}' container assigned.")
+
+    step("Assigning Blob Data Contributor on 'config' container to web app managed identity...")
+    webapp.assign_blob_container_contributor(resource_group, account_name, 'config', principal_id)
+    success("Blob Data Contributor on 'config' container assigned.")
 
     step(f"Configuring startup command on '{webapp_app}'...")
     webapp.configure_startup(resource_group, webapp_app,
