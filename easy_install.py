@@ -395,7 +395,7 @@ def collect_webapp_config(resource_group, step_label='8/8'):
     info('Access is restricted to IP addresses you specify.')
     print()
     create_wa = input('  Create a Web App? [Y/n]: ').strip().lower()
-    if create_wa not in ('n', 'no'):
+    if create_wa in ('n', 'no'):
         return None, None
 
     rg_slug  = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
