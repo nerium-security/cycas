@@ -504,10 +504,42 @@ nav .nav-link-active { opacity: 1; background: rgba(255,255,255,0.18); }
 
 .artifact-sections {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: 1fr;
     gap: 1rem;
     margin-bottom: 5rem;
 }
+
+.profile-bar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding: 0.75rem 1rem;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    flex-wrap: wrap;
+}
+.profile-bar-label { font-size: 0.875rem; color: var(--text-muted); font-weight: 600; }
+.profile-options { display: flex; gap: 0.5rem; }
+.profile-btn {
+    border: 1px solid var(--border);
+    background: var(--white);
+    border-radius: 6px;
+    padding: 0.35rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--dark);
+}
+.profile-btn.active {
+    background: var(--teal);
+    border-color: var(--teal);
+    color: var(--white);
+    font-weight: 600;
+}
+.profile-btn:not(.active):hover { border-color: var(--teal); color: var(--teal); }
+.profile-status { font-size: 0.82rem; margin-left: auto; }
 
 .artifact-section {
     background: var(--white);

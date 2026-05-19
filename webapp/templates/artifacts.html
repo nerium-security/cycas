@@ -9,6 +9,16 @@
     </div>
 </div>
 
+<!-- Profile selector -->
+<div class="profile-bar">
+    <span class="profile-bar-label">Active profile:</span>
+    <div class="profile-options">
+        <button class="profile-btn" data-profile="essential" id="btn-profile-essential">Essential</button>
+        <button class="profile-btn" data-profile="full" id="btn-profile-full">Full</button>
+    </div>
+    <span id="profile-status" class="profile-status save-status"></span>
+</div>
+
 <!-- Upload -->
 <div class="artifact-upload-bar">
     <span class="artifact-upload-label">Upload YAML definition:</span>
@@ -54,6 +64,46 @@ let currentParamsName = null;
 
 const CATEGORIES = ['essential', 'full', 'skip'];
 const CAT_LABELS  = { essential: 'Essential', full: 'Full', skip: 'Skip' };
+
+// ── Profile ───────────────────────────────────────────────────────────────
+
+async function loadProfile() {
+    const resp = await fetch('/api/config/profile');
+    const data = await resp.json();
+    if (data.profile) setProfileUI(data.profile);
+}
+
+function setProfileUI(profile) {
+    document.querySelectorAll('.profile-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.profile === profile);
+    });
+}
+
+document.querySelectorAll('.profile-btn').forEach(btn => {
+    btn.addEventListener('click', async function () {
+        const profile = this.dataset.profile;
+        const status  = document.getElementById('profile-status');
+        status.textContent = 'Saving...';
+        status.className = 'profile-status save-status';
+        try {
+            const resp = await fetch('/api/config/profile', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ profile }),
+            });
+            const data = await resp.json();
+            if (data.error) throw new Error(data.error);
+            setProfileUI(profile);
+            status.textContent = 'Saved.';
+            status.className = 'profile-status save-status save-ok';
+        } catch (err) {
+            status.textContent = 'Error: ' + err.message;
+            status.className = 'profile-status save-status save-err';
+        } finally {
+            setTimeout(() => { status.textContent = ''; }, 3000);
+        }
+    });
+});
 
 // ── Load ──────────────────────────────────────────────────────────────────
 
@@ -288,5 +338,6 @@ function showError(msg) {
 }
 
 load();
+loadProfile();
 </script>
 {% endblock %}

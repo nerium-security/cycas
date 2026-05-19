@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import json
 import yaml
+from dotenv import find_dotenv, set_key
 from flask import Flask, render_template, request, flash, jsonify
 from azure.identity import DefaultAzureCredential
 from azure.data.tables import EntityProperty
@@ -493,6 +494,31 @@ def api_artifact_yaml_save(name):
         content['parameters'] = list(lookup.values())
         yf.write_text(yaml.dump(content, allow_unicode=True, sort_keys=False))
         return jsonify({'saved': True})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/config/profile', methods=['GET'])
+def api_profile_get():
+    try:
+        config = load_config()
+        return jsonify({'profile': config.velociraptor_postprocess})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/config/profile', methods=['POST'])
+def api_profile_set():
+    try:
+        data    = request.get_json() or {}
+        profile = data.get('profile', '')
+        if profile not in ('essential', 'full'):
+            return jsonify({'error': 'Profile must be essential or full'}), 400
+        env_path = find_dotenv()
+        if not env_path:
+            return jsonify({'error': '.env file not found'}), 500
+        set_key(env_path, 'VELOCIRAPTOR_POSTPROCESS', profile)
+        return jsonify({'profile': profile})
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
 
