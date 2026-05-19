@@ -34,21 +34,17 @@ class Status:
 
 def update_status_in_log(managers, Config, processing_status, starttime, status_data):
     '''
-    Update the processing status in the Table Storage log.
-
-    Calls the Table Storage manager to update the status entry if Table
-    Storage logging is enabled in configuration.
-
-    Args:
-        managers: Container holding authenticated service managers.
-        Config: variables defined in .env file
-        processing_status (str): New status value to store.
-        status_data (dict): Metadata used to build the log entity.
+    Update the processing status in Table Storage and write a live snapshot
+    blob so the webapp can show progress before the run completes.
     '''
 
     if Config.blob_logtable_enabled:
-
         managers.table.update_status_in_log(processing_status, starttime, status_data)
+
+    if Config.blob_storageaccount_enabled:
+        upload_id = (status_data.get('summary') or [{}])[0].get('uploadid', '')
+        if upload_id:
+            managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', status_data)
 
 def write_logentry_if_new(managers, Config, processing_status, status_data):
     '''

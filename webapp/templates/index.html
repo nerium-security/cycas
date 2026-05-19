@@ -535,8 +535,12 @@ document.getElementById('entries-body').addEventListener('click', function (e) {
     fetch(`/api/status/${encodeURIComponent(uploadId)}`)
         .then(r => r.json())
         .then(data => {
+            if (data.pending) {
+                document.getElementById('tab-summary').innerHTML = '<p class="drawer-empty">Status not yet available - run has not started processing.</p>';
+                return;
+            }
             if (data.error) {
-                document.getElementById('tab-summary').innerHTML = `<p class="drawer-empty">Status file not found.<br><small>${data.error}</small></p>`;
+                document.getElementById('tab-summary').innerHTML = `<p class="drawer-empty">Could not load status details.</p>`;
                 return;
             }
             document.getElementById('tab-summary').innerHTML        = renderSummary(data);

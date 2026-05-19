@@ -332,7 +332,8 @@ def api_retry():
 
 @app.route('/api/status/<uploadid>')
 def api_status_detail(uploadid):
-    '''Fetch the status JSON blob for a finished or failed pipeline run.'''
+    '''Fetch the status JSON blob for a pipeline run (may be a live snapshot).'''
+    from azure.core.exceptions import ResourceNotFoundError
     try:
         config = load_config()
         credential = DefaultAzureCredential()
@@ -346,8 +347,10 @@ def api_status_detail(uploadid):
         )
         data = blob_client.download_blob().readall()
         return jsonify(json.loads(data))
+    except ResourceNotFoundError:
+        return jsonify({'pending': True}), 202
     except Exception as exc:
-        return jsonify({'error': str(exc)}), 404
+        return jsonify({'error': str(exc)}), 500
 
 
 @app.route('/api/adx-status')
