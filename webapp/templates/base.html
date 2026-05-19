@@ -10,7 +10,10 @@
 
 <nav>
     <a class="logo" href="{{ url_for('index') }}">Cycas <span>by Nerium</span></a>
-    <a class="nav-link" href="{{ url_for('artifacts_page') }}">Artifacts</a>
+    <div class="nav-links">
+        <a class="nav-link{% if request.endpoint == 'index' %} nav-link-active{% endif %}" href="{{ url_for('index') }}">Home</a>
+        <a class="nav-link{% if request.endpoint == 'artifacts_page' %} nav-link-active{% endif %}" href="{{ url_for('artifacts_page') }}">Settings</a>
+    </div>
 </nav>
 
 <div class="container">

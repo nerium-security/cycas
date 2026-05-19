@@ -392,11 +392,24 @@ def collect_webapp_config(resource_group, step_label='8/8'):
     section(f'Step {step_label} — Web Application')
 
     info('A Web App provides a status dashboard for the Cycas pipeline.')
-    info('Access is restricted to IP addresses you specify.')
     print()
-    create_wa = input('  Create a Web App? [Y/n]: ').strip().lower()
+    create_wa = input('  Set up the Web Application? [Y/n]: ').strip().lower()
     if create_wa in ('n', 'no'):
-        return None, None
+        return None, None, None
+
+    print()
+    info('Run the webapp locally (1) or deploy it to Azure App Service (2)?')
+    info('  1) Local  — Fastest and most secure option. Only you can access it on your device.')
+    info('  2) Azure  — Adds 10+ minutes of deployment time. Multiple teammembers can access it.')
+    print()
+    mode_choice = input('  Select [1]: ').strip()
+    if mode_choice == '2':
+        webapp_mode = 'azure'
+    else:
+        webapp_mode = 'local'
+
+    if webapp_mode == 'local':
+        return 'local', None, None
 
     rg_slug  = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
     app_name = prompt('Web app name', default=f'{rg_slug[:43]}-webapp-{rand6()}')
@@ -429,7 +442,7 @@ def collect_webapp_config(resource_group, step_label='8/8'):
         allowed_ips.append(ip)
         success(f"'{ip}' added.")
 
-    return app_name, allowed_ips
+    return webapp_mode, app_name, allowed_ips
 
 
 def collect_storage_config(defaults, resource_group, step_label='4/7'):
@@ -458,7 +471,7 @@ def confirm_plan(run_mode,
                  watcher_app=None, watcher_sa=None,
                  processor_app=None, processor_sa=None,
                  keyvault_name=None, keyvault_password_location=None,
-                 webapp_app=None, webapp_allowed_ips=None):
+                 webapp_mode=None, webapp_app=None, webapp_allowed_ips=None):
 
     section('Summary — Review before provisioning')
 
@@ -498,9 +511,13 @@ def confirm_plan(run_mode,
         info(f'Processor: {processor_app}  (storage: {processor_sa})')
         if keyvault_name:
             info(f'Key Vault: {keyvault_name}  (secret: {keyvault_password_location})')
-        if webapp_app:
+        if webapp_mode == 'local':
             print('\n  Web Application')
-            info(f'App name : {webapp_app}')
+            info('Mode: Local (storage roles assigned to current user)')
+        elif webapp_mode == 'azure' and webapp_app:
+            print('\n  Web Application')
+            info(f'Mode       : Azure App Service')
+            info(f'App name   : {webapp_app}')
             info(f'Allowed IPs: {", ".join(webapp_allowed_ips)}')
 
     print()
@@ -961,11 +978,11 @@ def main():
         if run_mode == 'azurefunction':
             watcher_app, watcher_sa, processor_app, processor_sa, insights_name = collect_functions_config(resource_group, f'6/{total}')
             keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
-            webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
+            webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
         else:
             watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
             keyvault_name = keyvault_password_location = zip_password = None
-            webapp_app = webapp_allowed_ips = None
+            webapp_mode = webapp_app = webapp_allowed_ips = None
 
         state = {
             'run_mode':                  run_mode,
@@ -994,6 +1011,7 @@ def main():
                 'keyvault_name':             keyvault_name,
                 'keyvault_password_location': keyvault_password_location,
                 'insights_name':             insights_name,
+                'webapp_mode':               webapp_mode,
                 'webapp_app':                webapp_app,
                 'webapp_allowed_ips':        webapp_allowed_ips,
             })
@@ -1007,7 +1025,7 @@ def main():
                         input_sources,
                         watcher_app, watcher_sa, processor_app, processor_sa,
                         keyvault_name, keyvault_password_location,
-                        webapp_app, webapp_allowed_ips):
+                        webapp_mode, webapp_app, webapp_allowed_ips):
         print('Aborted.')
         sys.exit(0)
 
@@ -1039,7 +1057,15 @@ def main():
                             processor_app, processor_sa,
                             keyvault_name, insights_name)
 
-        if webapp_app:
+        if webapp_mode == 'local':
+            step('Assigning storage roles to current user for local webapp...')
+            from core.manager.functions import FunctionsManager
+            funcs_tmp = FunctionsManager(credential, subscription_id)
+            adx_tmp2  = AdxManager(credential, '', '', '')
+            current_user_id, _ = adx_tmp2.get_current_user_id()
+            funcs_tmp.assign_data_storage_roles(resource_group, account_name, current_user_id, principal_type='User')
+            success('Storage roles assigned to current user.')
+        elif webapp_mode == 'azure' and webapp_app:
             provision_webapp_all(credential, subscription_id,
                                  resource_group, location,
                                  account_name, status_container, webapp_app, webapp_allowed_ips)
@@ -1053,6 +1079,12 @@ def main():
     if run_mode == 'azurefunction':
         success('Installation complete.')
         print()
+        if webapp_mode == 'local':
+            info('To run the webapp locally:')
+            info('  cd <repo root>')
+            info('  gunicorn --bind=0.0.0.0:8000 --timeout 600 webapp.app:app')
+            info('  Then open http://localhost:8000 in your browser.')
+            print()
     else:
         success('Installation complete.')
         print()
