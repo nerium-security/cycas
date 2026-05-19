@@ -3,10 +3,12 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import json
+import yaml
 from flask import Flask, render_template, request, flash, jsonify
 from azure.identity import DefaultAzureCredential
 from azure.data.tables import EntityProperty
@@ -369,6 +371,130 @@ def adx_status():
             result[uid] = 'pending'
 
     return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# Artifact management helpers
+# ---------------------------------------------------------------------------
+
+def _artifact_name(entry):
+    return entry.split('(')[0].strip()
+
+def _yaml_path(config, name):
+    return Path(config.velociraptor_definitions) / f'{name}.yaml'
+
+def _load_artifacts_json(config):
+    with open(config.velociraptor_artifactslist) as f:
+        return json.load(f)
+
+def _save_artifacts_json(config, data):
+    path = Path(config.velociraptor_artifactslist)
+    tmp  = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.replace(path)
+
+
+# ---------------------------------------------------------------------------
+# Artifact management routes
+# ---------------------------------------------------------------------------
+
+@app.route('/artifacts')
+def artifacts_page():
+    return render_template('artifacts.html')
+
+
+@app.route('/api/artifacts')
+def api_artifacts_get():
+    try:
+        config = load_config()
+        data   = _load_artifacts_json(config)
+        result = {}
+        for category, entries in data.items():
+            result[category] = []
+            for entry in entries:
+                name      = _artifact_name(entry)
+                yf        = _yaml_path(config, name)
+                params    = []
+                if yf.exists():
+                    parsed = yaml.safe_load(yf.read_text()) or {}
+                    params = [
+                        {'name': p['name'], 'default': str(p.get('default', '') or '')}
+                        for p in (parsed.get('parameters') or [])
+                    ]
+                result[category].append({
+                    'entry':    entry,
+                    'name':     name,
+                    'has_yaml': yf.exists(),
+                    'params':   params,
+                })
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/artifacts', methods=['POST'])
+def api_artifacts_save():
+    try:
+        config = load_config()
+        data   = request.get_json() or {}
+        for key in ('essential', 'full', 'skip'):
+            if key not in data or not isinstance(data[key], list):
+                return jsonify({'error': f'Missing or invalid key: {key}'}), 400
+        _save_artifacts_json(config, {k: data[k] for k in ('essential', 'full', 'skip')})
+        return jsonify({'saved': True})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/artifacts/upload', methods=['POST'])
+def api_artifacts_upload():
+    try:
+        config = load_config()
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        file     = request.files['file']
+        category = request.form.get('category', 'essential')
+        if category not in ('essential', 'full', 'skip'):
+            return jsonify({'error': 'Invalid category'}), 400
+
+        content = file.read().decode('utf-8')
+        parsed  = yaml.safe_load(content)
+        name    = (parsed or {}).get('name')
+        if not name:
+            return jsonify({'error': 'YAML file has no name field'}), 400
+
+        _yaml_path(config, name).write_text(content)
+
+        data        = _load_artifacts_json(config)
+        all_entries = data['essential'] + data['full'] + data['skip']
+        if not any(_artifact_name(e) == name for e in all_entries):
+            data[category].append(f'{name}()')
+            _save_artifacts_json(config, data)
+
+        return jsonify({'name': name, 'category': category})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/artifacts/<path:name>/yaml', methods=['POST'])
+def api_artifact_yaml_save(name):
+    try:
+        config = load_config()
+        yf     = _yaml_path(config, name)
+        if not yf.exists():
+            return jsonify({'error': 'YAML file not found'}), 404
+
+        params  = (request.get_json() or {}).get('parameters', [])
+        content = yaml.safe_load(yf.read_text()) or {}
+        lookup  = {p['name']: p for p in (content.get('parameters') or [])}
+        for p in params:
+            if p['name'] in lookup:
+                lookup[p['name']]['default'] = p['default']
+        content['parameters'] = list(lookup.values())
+        yf.write_text(yaml.dump(content, allow_unicode=True, sort_keys=False))
+        return jsonify({'saved': True})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
 
 
 if __name__ == '__main__':

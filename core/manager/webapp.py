@@ -241,19 +241,22 @@ class WebappManager:
         '''
         Deploy the webapp via Kudu ZIP deploy.
 
-        Stages webapp/ and core/ into a temp directory, creates a ZIP, and
-        POSTs it to the Kudu zipdeploy endpoint. App Service extracts the ZIP
-        to /home/site/wwwroot, giving the layout expected by startup.txt:
+        Stages webapp/, core/, and velociraptor/ into a temp directory, creates
+        a ZIP, and POSTs it to the Kudu zipdeploy endpoint. App Service extracts
+        the ZIP to /home/site/wwwroot, giving the layout expected by startup.txt:
           wwwroot/webapp/app.py
           wwwroot/core/...
+          wwwroot/velociraptor/...
         '''
         import tomllib
 
+        root     = webapp_dir.parent
         tmp_dir  = Path(tempfile.mkdtemp())
         zip_path = tmp_dir.parent / f'{app_name}-deploy.zip'
         try:
-            shutil.copytree(webapp_dir, tmp_dir / 'webapp', ignore=_STAGE_IGNORE)
-            shutil.copytree(core_dir,   tmp_dir / 'core',   ignore=_STAGE_IGNORE)
+            shutil.copytree(webapp_dir,          tmp_dir / 'webapp',       ignore=_STAGE_IGNORE)
+            shutil.copytree(core_dir,             tmp_dir / 'core',         ignore=_STAGE_IGNORE)
+            shutil.copytree(root / 'velociraptor', tmp_dir / 'velociraptor', ignore=_STAGE_IGNORE)
 
             pyproject = tomllib.loads((webapp_dir.parent / 'pyproject.toml').read_text())
             deps      = pyproject.get('project', {}).get('dependencies', [])

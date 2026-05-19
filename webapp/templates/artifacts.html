@@ -1,0 +1,292 @@
+{% extends "base.html" %}
+{% block title %}Artifacts{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Artifact Management</h1>
+        <div class="subtitle">Manage Velociraptor artifact definitions and categories</div>
+    </div>
+</div>
+
+<!-- Upload -->
+<div class="artifact-upload-bar">
+    <span class="artifact-upload-label">Upload YAML definition:</span>
+    <input type="file" id="yaml-file-input" accept=".yaml,.yml">
+    <select id="yaml-category-select">
+        <option value="essential">Essential</option>
+        <option value="full">Full</option>
+        <option value="skip">Skip</option>
+    </select>
+    <button class="btn-upload" id="btn-upload-yaml">Upload</button>
+    <span id="upload-status" class="upload-status"></span>
+</div>
+
+<!-- Artifact sections -->
+<div class="artifact-sections" id="artifact-sections">
+    <div class="artifact-loading">Loading artifacts...</div>
+</div>
+
+<!-- Save bar -->
+<div class="save-bar">
+    <span id="save-status" class="save-status"></span>
+    <button class="btn-save-all" id="btn-save-all">Save all</button>
+</div>
+
+<!-- Edit params modal -->
+<div class="params-modal-backdrop" id="params-backdrop"></div>
+<div class="params-modal" id="params-modal">
+    <div class="params-modal-header">
+        <span id="params-modal-title"></span>
+        <button class="drawer-close" id="params-modal-close">&#x2715;</button>
+    </div>
+    <div class="params-modal-body" id="params-modal-body"></div>
+    <div class="params-modal-footer">
+        <button class="btn-save-params" id="btn-save-params">Save parameters</button>
+        <span id="params-save-status" class="save-status"></span>
+    </div>
+</div>
+
+<script>
+// State: mirrors the JSON structure, mutated by user actions
+let state = { essential: [], full: [], skip: [] };
+let currentParamsName = null;
+
+const CATEGORIES = ['essential', 'full', 'skip'];
+const CAT_LABELS  = { essential: 'Essential', full: 'Full', skip: 'Skip' };
+
+// ── Load ──────────────────────────────────────────────────────────────────
+
+async function load() {
+    const resp = await fetch('/api/artifacts');
+    const data = await resp.json();
+    if (data.error) { showError(data.error); return; }
+    state = data;
+    render();
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+
+function render() {
+    const container = document.getElementById('artifact-sections');
+    container.innerHTML = CATEGORIES.map(cat => `
+        <div class="artifact-section">
+            <div class="artifact-section-header">
+                <span>${CAT_LABELS[cat]}</span>
+                <span class="group-count">${state[cat].length}</span>
+            </div>
+            <div class="artifact-list" id="list-${cat}">
+                ${state[cat].length
+                    ? state[cat].map((a, i) => artifactRow(cat, i, a)).join('')
+                    : '<div class="artifact-empty">No artifacts</div>'
+                }
+            </div>
+        </div>
+    `).join('');
+}
+
+function artifactRow(cat, idx, a) {
+    const otherCats = CATEGORIES.filter(c => c !== cat);
+    const moveOptions = otherCats.map(c =>
+        `<option value="${c}">Move to ${CAT_LABELS[c]}</option>`
+    ).join('');
+    const editBtn = a.has_yaml
+        ? `<button class="btn-artifact-action btn-edit-params" data-name="${a.name}">Edit params</button>`
+        : `<span class="no-yaml">no YAML</span>`;
+    return `<div class="artifact-row" data-cat="${cat}" data-idx="${idx}">
+        <span class="artifact-name" title="${a.entry}">${a.name}</span>
+        ${editBtn}
+        <select class="move-select" data-cat="${cat}" data-idx="${idx}">
+            <option value="">Move to...</option>
+            ${moveOptions}
+        </select>
+        <button class="btn-artifact-action btn-remove" data-cat="${cat}" data-idx="${idx}">Remove</button>
+    </div>`;
+}
+
+// ── Events ────────────────────────────────────────────────────────────────
+
+document.getElementById('artifact-sections').addEventListener('click', function (e) {
+    const removeBtn = e.target.closest('.btn-remove');
+    if (removeBtn) {
+        const cat = removeBtn.dataset.cat;
+        const idx = parseInt(removeBtn.dataset.idx);
+        state[cat].splice(idx, 1);
+        render();
+        return;
+    }
+    const editBtn = e.target.closest('.btn-edit-params');
+    if (editBtn) {
+        openParamsModal(editBtn.dataset.name);
+    }
+});
+
+document.getElementById('artifact-sections').addEventListener('change', function (e) {
+    const sel = e.target.closest('.move-select');
+    if (!sel || !sel.value) return;
+    const fromCat = sel.dataset.cat;
+    const idx     = parseInt(sel.dataset.idx);
+    const toCat   = sel.value;
+    const [item]  = state[fromCat].splice(idx, 1);
+    state[toCat].push(item);
+    render();
+});
+
+// ── Save all ──────────────────────────────────────────────────────────────
+
+document.getElementById('btn-save-all').addEventListener('click', async function () {
+    this.disabled = true;
+    const status = document.getElementById('save-status');
+    status.textContent = 'Saving...';
+    status.className = 'save-status';
+
+    const payload = {
+        essential: state.essential.map(a => a.entry),
+        full:      state.full.map(a => a.entry),
+        skip:      state.skip.map(a => a.entry),
+    };
+
+    try {
+        const resp = await fetch('/api/artifacts', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        status.textContent = 'Saved.';
+        status.className = 'save-status save-ok';
+    } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'save-status save-err';
+    } finally {
+        this.disabled = false;
+        setTimeout(() => { status.textContent = ''; }, 3000);
+    }
+});
+
+// ── Upload YAML ───────────────────────────────────────────────────────────
+
+document.getElementById('btn-upload-yaml').addEventListener('click', async function () {
+    const fileInput = document.getElementById('yaml-file-input');
+    const category  = document.getElementById('yaml-category-select').value;
+    const status    = document.getElementById('upload-status');
+
+    if (!fileInput.files.length) {
+        status.textContent = 'Select a YAML file first.';
+        status.className = 'upload-status save-err';
+        return;
+    }
+
+    const form = new FormData();
+    form.append('file', fileInput.files[0]);
+    form.append('category', category);
+
+    this.disabled = true;
+    status.textContent = 'Uploading...';
+    status.className = 'upload-status';
+
+    try {
+        const resp = await fetch('/api/artifacts/upload', { method: 'POST', body: form });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        status.textContent = `Added '${data.name}' to ${CAT_LABELS[data.category]}.`;
+        status.className = 'upload-status save-ok';
+        fileInput.value = '';
+        await load();
+    } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'upload-status save-err';
+    } finally {
+        this.disabled = false;
+        setTimeout(() => { status.textContent = ''; }, 4000);
+    }
+});
+
+// ── Params modal ──────────────────────────────────────────────────────────
+
+function openParamsModal(name) {
+    currentParamsName = name;
+    document.getElementById('params-modal-title').textContent = name;
+    document.getElementById('params-modal-body').innerHTML = '<p class="drawer-loading">Loading...</p>';
+    document.getElementById('params-save-status').textContent = '';
+    document.getElementById('params-modal').classList.add('open');
+    document.getElementById('params-backdrop').classList.add('open');
+
+    // Find params from current state
+    for (const cat of CATEGORIES) {
+        const found = state[cat].find(a => a.name === name);
+        if (found) {
+            renderParamsForm(found.params);
+            return;
+        }
+    }
+    document.getElementById('params-modal-body').innerHTML = '<p class="drawer-empty">No parameters found.</p>';
+}
+
+function renderParamsForm(params) {
+    if (!params.length) {
+        document.getElementById('params-modal-body').innerHTML = '<p class="drawer-empty">This artifact has no parameters.</p>';
+        return;
+    }
+    document.getElementById('params-modal-body').innerHTML = `
+        <div class="detail-grid">
+            ${params.map(p => `
+                <dt title="${p.name}">${p.name}</dt>
+                <dd><input class="param-input" data-param="${p.name}" type="text" value="${escHtml(String(p.default))}"></dd>
+            `).join('')}
+        </div>`;
+}
+
+function closeParamsModal() {
+    document.getElementById('params-modal').classList.remove('open');
+    document.getElementById('params-backdrop').classList.remove('open');
+    currentParamsName = null;
+}
+
+document.getElementById('params-modal-close').addEventListener('click', closeParamsModal);
+document.getElementById('params-backdrop').addEventListener('click', closeParamsModal);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeParamsModal(); });
+
+document.getElementById('btn-save-params').addEventListener('click', async function () {
+    if (!currentParamsName) return;
+    const inputs = document.querySelectorAll('#params-modal-body .param-input');
+    const params = Array.from(inputs).map(inp => ({
+        name:    inp.dataset.param,
+        default: inp.value,
+    }));
+    const status = document.getElementById('params-save-status');
+    this.disabled = true;
+    status.textContent = 'Saving...';
+    status.className = 'save-status';
+
+    try {
+        const resp = await fetch(`/api/artifacts/${encodeURIComponent(currentParamsName)}/yaml`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ parameters: params }),
+        });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        status.textContent = 'Saved.';
+        status.className = 'save-status save-ok';
+    } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'save-status save-err';
+    } finally {
+        this.disabled = false;
+    }
+});
+
+function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showError(msg) {
+    document.getElementById('artifact-sections').innerHTML =
+        `<div class="flash flash-error">Failed to load artifacts: ${msg}</div>`;
+}
+
+load();
+</script>
+{% endblock %}
