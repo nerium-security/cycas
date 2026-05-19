@@ -551,7 +551,7 @@ nav .nav-link-active { opacity: 1; background: rgba(255,255,255,0.18); }
 .artifact-section-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 0.6rem;
     padding: 0.7rem 1rem;
     background: var(--teal);
     color: var(--white);
@@ -560,7 +560,26 @@ nav .nav-link-active { opacity: 1; background: rgba(255,255,255,0.18); }
 }
 .artifact-section-header .group-count {
     background: rgba(255,255,255,0.2);
+    margin-left: auto;
 }
+.select-all-label { display: flex; align-items: center; cursor: pointer; }
+.select-all-cb { width: 15px; height: 15px; cursor: pointer; accent-color: var(--white); }
+
+.bulk-action-bar {
+    display: none;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: #e8f7f7;
+    border-bottom: 2px solid var(--teal);
+    font-size: 0.82rem;
+    flex-wrap: wrap;
+}
+.bulk-count { color: var(--teal); font-weight: 600; white-space: nowrap; }
+.btn-bulk-move { color: var(--teal); border-color: var(--teal); }
+.btn-bulk-move:hover { background: var(--teal); color: var(--white); }
+.btn-bulk-remove { color: #c0392b; border-color: #c0392b; margin-left: auto; }
+.btn-bulk-remove:hover { background: #c0392b; color: var(--white); }
 
 .artifact-list { padding: 0.5rem; }
 .artifact-empty { padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem; }
@@ -575,6 +594,8 @@ nav .nav-link-active { opacity: 1; background: rgba(255,255,255,0.18); }
     font-size: 0.82rem;
 }
 .artifact-row:last-child { border-bottom: none; }
+.artifact-row.selected { background: #f0fbfb; }
+.artifact-cb { width: 14px; height: 14px; cursor: pointer; flex-shrink: 0; }
 
 .artifact-name {
     flex: 1;
@@ -639,8 +660,11 @@ nav .nav-link-active { opacity: 1; background: rgba(255,255,255,0.18); }
 .btn-save-all:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .save-status { font-size: 0.85rem; }
-.save-ok  { color: #1e8449; }
-.save-err { color: #c0392b; }
+.save-ok   { color: #1e8449; }
+.save-err  { color: #c0392b; }
+.save-warn { color: #b7770d; font-weight: 600; }
+.btn-save-all--dirty { background: #b7770d; }
+.btn-save-all--dirty:hover { background: #9a6510; }
 
 /* ── Params modal ── */
 .params-modal-backdrop {

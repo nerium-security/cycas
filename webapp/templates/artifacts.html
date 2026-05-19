@@ -61,6 +61,25 @@
 // State: mirrors the JSON structure, mutated by user actions
 let state = { essential: [], full: [], skip: [] };
 let currentParamsName = null;
+let dirty = false;
+
+function markDirty() {
+    if (dirty) return;
+    dirty = true;
+    const status = document.getElementById('save-status');
+    status.textContent = 'Unsaved changes';
+    status.className = 'save-status save-warn';
+    document.getElementById('btn-save-all').classList.add('btn-save-all--dirty');
+}
+
+function markClean() {
+    dirty = false;
+    document.getElementById('btn-save-all').classList.remove('btn-save-all--dirty');
+}
+
+window.addEventListener('beforeunload', e => {
+    if (dirty) { e.preventDefault(); }
+});
 
 const CATEGORIES = ['essential', 'full', 'skip'];
 const CAT_LABELS  = { essential: 'Essential', full: 'Full', skip: 'Skip' };
@@ -119,11 +138,27 @@ async function load() {
 
 function render() {
     const container = document.getElementById('artifact-sections');
-    container.innerHTML = CATEGORIES.map(cat => `
+    container.innerHTML = CATEGORIES.map(cat => {
+        const otherCats   = CATEGORIES.filter(c => c !== cat);
+        const moveOptions = otherCats.map(c =>
+            `<option value="${c}">${CAT_LABELS[c]}</option>`
+        ).join('');
+        return `
         <div class="artifact-section">
             <div class="artifact-section-header">
+                <label class="select-all-label" title="Select all">
+                    <input type="checkbox" class="select-all-cb" data-cat="${cat}">
+                </label>
                 <span>${CAT_LABELS[cat]}</span>
                 <span class="group-count">${state[cat].length}</span>
+            </div>
+            <div class="bulk-action-bar" id="bulk-${cat}">
+                <span class="bulk-count" id="bulk-count-${cat}"></span>
+                ${otherCats.map(c => `
+                <button class="btn-bulk-move btn-artifact-action" data-from="${cat}" data-to="${c}">
+                    Move to ${CAT_LABELS[c]}
+                </button>`).join('')}
+                <button class="btn-bulk-remove btn-artifact-action" data-cat="${cat}">Remove</button>
             </div>
             <div class="artifact-list" id="list-${cat}">
                 ${state[cat].length
@@ -131,30 +166,61 @@ function render() {
                     : '<div class="artifact-empty">No artifacts</div>'
                 }
             </div>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
 }
 
 function artifactRow(cat, idx, a) {
-    const otherCats = CATEGORIES.filter(c => c !== cat);
-    const moveOptions = otherCats.map(c =>
-        `<option value="${c}">Move to ${CAT_LABELS[c]}</option>`
-    ).join('');
     const editBtn = a.has_yaml
         ? `<button class="btn-artifact-action btn-edit-params" data-name="${a.name}">Edit params</button>`
         : `<span class="no-yaml">no YAML</span>`;
     return `<div class="artifact-row" data-cat="${cat}" data-idx="${idx}">
+        <input type="checkbox" class="artifact-cb" data-cat="${cat}" data-idx="${idx}">
         <span class="artifact-name" title="${a.entry}">${a.name}</span>
         ${editBtn}
-        <select class="move-select" data-cat="${cat}" data-idx="${idx}">
-            <option value="">Move to...</option>
-            ${moveOptions}
-        </select>
         <button class="btn-artifact-action btn-remove" data-cat="${cat}" data-idx="${idx}">Remove</button>
     </div>`;
 }
 
 // ── Events ────────────────────────────────────────────────────────────────
+
+function checkedIndices(cat) {
+    return Array.from(document.querySelectorAll(`#list-${cat} .artifact-cb:checked`))
+        .map(cb => parseInt(cb.dataset.idx));
+}
+
+function updateBulkBar(cat) {
+    const indices = checkedIndices(cat);
+    const bar     = document.getElementById(`bulk-${cat}`);
+    const count   = document.getElementById(`bulk-count-${cat}`);
+    if (indices.length > 0) {
+        bar.style.display = 'flex';
+        count.textContent = `${indices.length} selected —`;
+    } else {
+        bar.style.display = 'none';
+    }
+    const allCb = document.querySelector(`.select-all-cb[data-cat="${cat}"]`);
+    if (allCb) allCb.checked = indices.length === state[cat].length && state[cat].length > 0;
+
+    document.querySelectorAll(`#list-${cat} .artifact-row`).forEach(row => {
+        const cb = row.querySelector('.artifact-cb');
+        row.classList.toggle('selected', cb && cb.checked);
+    });
+}
+
+document.getElementById('artifact-sections').addEventListener('change', function (e) {
+    const cb = e.target.closest('.artifact-cb');
+    if (cb) { updateBulkBar(cb.dataset.cat); return; }
+
+    const allCb = e.target.closest('.select-all-cb');
+    if (allCb) {
+        const cat     = allCb.dataset.cat;
+        const checked = allCb.checked;
+        document.querySelectorAll(`#list-${cat} .artifact-cb`)
+            .forEach(c => { c.checked = checked; });
+        updateBulkBar(cat);
+    }
+});
 
 document.getElementById('artifact-sections').addEventListener('click', function (e) {
     const removeBtn = e.target.closest('.btn-remove');
@@ -162,24 +228,36 @@ document.getElementById('artifact-sections').addEventListener('click', function 
         const cat = removeBtn.dataset.cat;
         const idx = parseInt(removeBtn.dataset.idx);
         state[cat].splice(idx, 1);
-        render();
+        markDirty(); render();
         return;
     }
+
+    const bulkRemove = e.target.closest('.btn-bulk-remove');
+    if (bulkRemove) {
+        const cat     = bulkRemove.dataset.cat;
+        const indices = checkedIndices(cat).sort((a, b) => b - a);
+        indices.forEach(i => state[cat].splice(i, 1));
+        markDirty(); render();
+        return;
+    }
+
+    const bulkMove = e.target.closest('.btn-bulk-move');
+    if (bulkMove) {
+        const fromCat = bulkMove.dataset.from;
+        const toCat   = bulkMove.dataset.to;
+        const indices = checkedIndices(fromCat).sort((a, b) => b - a);
+        indices.forEach(i => {
+            const [item] = state[fromCat].splice(i, 1);
+            state[toCat].push(item);
+        });
+        markDirty(); render();
+        return;
+    }
+
     const editBtn = e.target.closest('.btn-edit-params');
     if (editBtn) {
         openParamsModal(editBtn.dataset.name);
     }
-});
-
-document.getElementById('artifact-sections').addEventListener('change', function (e) {
-    const sel = e.target.closest('.move-select');
-    if (!sel || !sel.value) return;
-    const fromCat = sel.dataset.cat;
-    const idx     = parseInt(sel.dataset.idx);
-    const toCat   = sel.value;
-    const [item]  = state[fromCat].splice(idx, 1);
-    state[toCat].push(item);
-    render();
 });
 
 // ── Save all ──────────────────────────────────────────────────────────────
@@ -204,6 +282,7 @@ document.getElementById('btn-save-all').addEventListener('click', async function
         });
         const data = await resp.json();
         if (data.error) throw new Error(data.error);
+        markClean();
         status.textContent = 'Saved.';
         status.className = 'save-status save-ok';
     } catch (err) {
@@ -211,7 +290,7 @@ document.getElementById('btn-save-all').addEventListener('click', async function
         status.className = 'save-status save-err';
     } finally {
         this.disabled = false;
-        setTimeout(() => { status.textContent = ''; }, 3000);
+        setTimeout(() => { if (!dirty) status.textContent = ''; }, 3000);
     }
 });
 
