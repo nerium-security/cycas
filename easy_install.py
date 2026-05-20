@@ -957,14 +957,11 @@ def main():
     print('  and configures it by writing the connection strings to your .env file.')
     print()
 
-    # Determine run mode from saved state or by asking the user now (before auth)
-    # so that step labels and the "what will be created" list are correct.
     saved = load_state()
     if saved:
         run_mode = saved.get('run_mode', 'azurefunction')
     else:
-        section('Deployment Mode')
-        run_mode = collect_run_mode()
+        run_mode = 'azurefunction'
 
     total = '8' if run_mode == 'azurefunction' else '5'
 
@@ -1040,17 +1037,19 @@ def main():
         else:
             clear_state()
             saved = None
-            # User declined to resume — re-ask mode for the fresh install
-            section('Deployment Mode')
-            run_mode = collect_run_mode()
-            total = '8' if run_mode == 'azurefunction' else '5'
+            run_mode = 'azurefunction'
 
     if not saved:
         subscription_id = azure.select_subscription()
 
-        resource_group, location, new_rg = collect_resource_group(azure, subscription_id, f'2/{total}')
-
         setup_mode = collect_setup_mode()
+
+        if setup_mode == 'advanced':
+            section('Deployment Mode')
+            run_mode = collect_run_mode()
+            total = '8' if run_mode == 'azurefunction' else '5'
+
+        resource_group, location, new_rg = collect_resource_group(azure, subscription_id, f'2/{total}')
 
         adx = AdxManager(credential, adx_cluster_uri='', adx_cluster_ingestion_uri='', adx_database_name='')
 
