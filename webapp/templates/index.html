@@ -382,6 +382,7 @@ function renderSummary(data) {
         ['Encrypted',  s.is_encrypted],
         ['Started',    s.starttime_script],
         ['Finished',   data.finished],
+        ['Duration',   s.duration_in_sec != null ? s.duration_in_sec.toFixed(1) + 's' : null],
     ];
     return `<dl class="detail-grid">${rows.map(([k, v]) => {
         const text = fmt(v);
