@@ -1,5 +1,5 @@
 import logging
-from core.utils.log import setup_logging
+from core.utils.log import setup_logging, InMemoryLogHandler
 from core.pipeline.orchestrator import init, run_zip_processor
 from core.utils.zip import list_zipfiles, list_zipfiles_with_sizes
 from core.utils.status import Status, write_logentry_if_new, determine_if_needs_processing, add_summary_info_to_status, update_status_in_log, upload_detailed_status_to_adx
@@ -86,10 +86,13 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
             results = define_results_dict()
             results = add_summary_info_to_status(results, zipfile, sessionid, source_name, start)
 
-            update_status_unqueued(managers, Config, zipfile, start, results)
+            log_handler = InMemoryLogHandler()
+            logging.getLogger().addHandler(log_handler)
+            results['logs'] = log_handler.records
 
             try:
-                run_zip_processor(managers, source_name, zipfile, sessionid, Config)
+                update_status_unqueued(managers, Config, zipfile, start, results)
+                run_zip_processor(managers, source_name, zipfile, sessionid, Config, _log_handler=log_handler)
             except Exception as e:
                 log.error(f'Processing failed for {zipfile}: {e}')
                 update_status_in_log(managers, Config, Status.FAILED, start, results)
@@ -100,6 +103,8 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
                     managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)
                 upload_detailed_status_to_adx(managers, Config, results)
                 all_succeeded = False
+            finally:
+                logging.getLogger().removeHandler(log_handler)
 
         if mode == 'manual' and all_succeeded:
             managers.queue.delete_message(message)

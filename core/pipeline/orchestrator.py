@@ -26,7 +26,7 @@ import logging as log
 
 log = log.getLogger(__name__)
 
-def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
+def run_zip_processor(managers, source_name, zipfile, sessionid, Config, _log_handler=None):
     '''
     Process a single zipfile end-to-end.
 
@@ -44,6 +44,9 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
     start = datetime.now()
 
     results = define_results_dict()
+
+    if _log_handler is not None:
+        results['logs'] = _log_handler.records
 
     results = add_summary_info_to_status(results, zipfile, sessionid, source_name, start)
     

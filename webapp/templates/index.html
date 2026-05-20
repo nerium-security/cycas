@@ -114,11 +114,13 @@
         <button class="drawer-tab active" data-tab="summary">Summary</button>
         <button class="drawer-tab" data-tab="postprocessing">Postprocessing</button>
         <button class="drawer-tab" data-tab="uploads">Uploads</button>
+        <button class="drawer-tab" data-tab="logs">Logs</button>
     </div>
     <div class="drawer-body">
         <div class="tab-panel active" id="tab-summary"></div>
         <div class="tab-panel" id="tab-postprocessing"></div>
         <div class="tab-panel" id="tab-uploads"></div>
+        <div class="tab-panel" id="tab-logs"></div>
     </div>
 </div>
 
@@ -507,6 +509,28 @@ function renderUploads(data) {
     ].join('');
 }
 
+function renderLogs(data) {
+    const items = data.logs || [];
+    if (!items.length) return '<p class="drawer-empty">No log data available.</p>';
+
+    const levelClass = { ERROR: 'log-lvl-error', WARNING: 'log-lvl-warning', WARN: 'log-lvl-warning', INFO: 'log-lvl-info', DEBUG: 'log-lvl-debug' };
+
+    const rows = items.map(e => {
+        const lvl = (e.level || '').toUpperCase();
+        const cls = levelClass[lvl] || '';
+        return `<tr>
+            <td class="log-ts">${fmt(e.timestamp)}</td>
+            <td><span class="log-level ${cls}">${lvl}</span></td>
+            <td class="log-msg">${fmt(e.message)}</td>
+        </tr>`;
+    }).join('');
+
+    return `<div class="detail-table-wrap"><table class="detail-table">
+        <thead><tr><th style="width:70px">Time</th><th style="width:80px">Level</th><th>Message</th></tr></thead>
+        <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
 // ── Column resizing ───────────────────────────────────────────────────────────
 
 (function initColumnResize() {
@@ -597,6 +621,7 @@ document.getElementById('entries-body').addEventListener('click', function (e) {
     document.getElementById('tab-summary').innerHTML        = '<p class="drawer-loading">Loading…</p>';
     document.getElementById('tab-postprocessing').innerHTML = '';
     document.getElementById('tab-uploads').innerHTML        = '';
+    document.getElementById('tab-logs').innerHTML           = '';
 
     // Reset to Summary tab
     document.querySelectorAll('.drawer-tab').forEach((b, i) => b.classList.toggle('active', i === 0));
@@ -623,6 +648,7 @@ document.getElementById('entries-body').addEventListener('click', function (e) {
             document.getElementById('tab-summary').innerHTML        = renderSummary(data);
             document.getElementById('tab-postprocessing').innerHTML = renderPostprocessing(data);
             document.getElementById('tab-uploads').innerHTML        = renderUploads(data);
+            document.getElementById('tab-logs').innerHTML           = renderLogs(data);
         })
         .catch(() => {
             document.getElementById('tab-summary').innerHTML = '<p class="drawer-empty">Failed to load status data.</p>';

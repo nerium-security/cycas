@@ -14,6 +14,21 @@ from datetime import datetime
 from pathlib import Path
 from core.utils.files import create_directory_if_not_exists
 
+
+class InMemoryLogHandler(log.Handler):
+    '''Logging handler that accumulates records in a list for later serialisation.'''
+
+    def __init__(self):
+        super().__init__()
+        self.records = []
+
+    def emit(self, record):
+        self.records.append({
+            'timestamp': self.formatTime(record, datefmt='%H:%M:%S'),
+            'level': record.levelname,
+            'message': record.getMessage(),
+        })
+
 def set_loglevel(level):
     '''
     Translate a string log level into a logging module numeric level.

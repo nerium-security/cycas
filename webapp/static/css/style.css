@@ -778,3 +778,12 @@ nav .nav-link-active { opacity: 1; background: rgba(255,255,255,0.18); }
 .flash { padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; }
 .flash-error   { background: #fadbd8; color: #922b21; border: 1px solid #f1948a; }
 .flash-success { background: #d5f5e3; color: #1e8449; border: 1px solid #82e0aa; }
+
+/* ── Log tab ── */
+.log-ts  { font-family: monospace; white-space: nowrap; color: var(--text-muted); width: 70px; }
+.log-msg { font-family: monospace; white-space: pre-wrap; }
+.log-level { display: inline-block; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.72rem; font-weight: 600; font-family: monospace; }
+.log-lvl-error   { background: #fadbd8; color: #c0392b; }
+.log-lvl-warning { background: #fef9e7; color: #7d6608; }
+.log-lvl-info    { background: #d6eaf8; color: #1a5276; }
+.log-lvl-debug   { background: #f2f3f4; color: #566573; }
