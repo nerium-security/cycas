@@ -69,8 +69,8 @@ def prompt(label, default=None):
 def collect_run_mode():
     print('  How do you want to run the Cycas pipeline?')
     print()
-    print('  1) Azure Functions  — automated, runs in the cloud. Recommended for large engagements. [recommended]')
-    print('  2) Local            — run the pipeline manually on this machine. Only for small engagements.')
+    print('  1) Azure Functions  — automated, runs fully in the cloud. Recommended for large engagements. [recommended]')
+    print('  2) Local            — manual, runs partially in the cloud (uses blob storage and Azure Data Explorer). Only for small engagements.')
     print()
     while True:
         choice = input('Select deployment mode [1]: ').strip()
@@ -445,17 +445,68 @@ def collect_webapp_config(resource_group, step_label='8/8'):
     return webapp_mode, app_name, allowed_ips
 
 
+def collect_setup_mode():
+    section('Setup Mode')
+    print('  1) Easy     - sensible defaults [recommended]')
+    print('  2) Advanced - Allows you to configure more granual settings, like names for Azure resources.')
+    print()
+    while True:
+        choice = input('  Setup mode [1]: ').strip() or '1'
+        if choice in ('1', '2'):
+            return 'easy' if choice == '1' else 'advanced'
+        print('  Enter 1 or 2.')
+
+
+def collect_adx_sku(step_label='3'):
+    section(f'Step {step_label} — Cluster Size')
+    for key, (sku, _, desc) in SKUS.items():
+        print(f'  {key}) {sku:<35} {desc}')
+    print()
+    while True:
+        sku_choice = prompt('Select cluster size', default='1')
+        if sku_choice in SKUS:
+            break
+        print(f'  Enter a number between 1 and {len(SKUS)}.')
+    sku_name, sku_tier, _ = SKUS[sku_choice]
+    return sku_name, sku_tier
+
+
+def auto_generate_names(resource_group, defaults):
+    '''Return all technical resource names derived from the resource group, using a shared random suffix.'''
+    suffix        = rand6()
+    rg_slug       = re.sub(r'[^a-z0-9]', '', resource_group.lower())
+
+    account_name     = (rg_slug + 'zip')[:18] + suffix
+    table_name       = defaults.get('blob_logtable_name',    'statusupdate')
+    queue_name       = defaults.get('blob_queue_name',       'triagepackages')
+    container        = defaults.get('blob_container_input',  'uploads')
+    status_container = defaults.get('blob_container_status', 'status')
+
+    cluster_name  = (rg_slug[:13] + 'adx' + suffix)
+    database_name = defaults.get('adx_database_name', 'dfir')
+
+    watcher_app   = f'{resource_group[:43]}-watcher-{suffix}'
+    watcher_sa    = (re.sub(r'[^a-z0-9]', '', watcher_app.lower()))[:18] + suffix
+    processor_app = f'{resource_group[:41]}-processor-{suffix}'
+    processor_sa  = (re.sub(r'[^a-z0-9]', '', processor_app.lower()))[:18] + suffix
+    insights_name = f'{rg_slug[:50]}-insights'
+
+    return (account_name, table_name, queue_name, container, status_container,
+            cluster_name, database_name, watcher_app, watcher_sa, processor_app, processor_sa, insights_name)
+
+
 def collect_storage_config(defaults, resource_group, step_label='4/7'):
     section(f'Step {step_label} — Storage Account')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
     account_name     = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'zip')[:18] + rand6())
-    table_name       = prompt('Status table name',              default=defaults.get('blob_logtable_name', 'statusupdate'))
-    queue_name       = prompt('Queue name',                     default=defaults.get('blob_queue_name', 'triagepackages'))
-    container        = prompt('Blob container for uploads',     default=defaults.get('blob_container_input', 'uploads'))
+    table_name       = prompt('Status table name',              default=defaults.get('blob_logtable_name',    'statusupdate'))
+    queue_name       = prompt('Queue name',                     default=defaults.get('blob_queue_name',       'triagepackages'))
+    container        = prompt('Blob container for uploads',     default=defaults.get('blob_container_input',  'uploads'))
     status_container = prompt('Blob container for status JSON', default=defaults.get('blob_container_status', 'status'))
+    config_container = prompt('Blob container for config',      default=defaults.get('blob_container_config', 'config'))
 
-    return account_name, table_name, queue_name, container, status_container
+    return account_name, table_name, queue_name, container, status_container, config_container
 
 
 # ---------------------------------------------------------------------------
@@ -571,6 +622,7 @@ def provision_all(azure, credential, subscription_id,
                   cluster_name, database_name, sku_name, sku_tier,
                   admin_users,
                   account_name, table_name, queue_name, container, status_container,
+                  config_container,
                   defaults):
 
     section('Provisioning')
@@ -641,25 +693,25 @@ def provision_all(azure, credential, subscription_id,
     blob_mgr.create_container(status_container)
     success(f"Container '{status_container}' ready.")
 
-    step("Ensuring blob container 'config' exists...")
-    blob_mgr.create_container('config')
-    success("Container 'config' ready.")
+    step(f"Ensuring blob container '{config_container}' exists...")
+    blob_mgr.create_container(config_container)
+    success(f"Container '{config_container}' ready.")
 
-    step("Uploading initial velociraptor_artifacts.json to 'config' container...")
+    step(f"Uploading initial velociraptor_artifacts.json to '{config_container}' container...")
     import json as _json
     artifacts_src = Path(__file__).parent / 'velociraptor' / 'artifacts' / 'velociraptor_artifacts.json'
     if artifacts_src.exists():
-        blob_mgr.upload_json('config', 'velociraptor_artifacts.json', _json.loads(artifacts_src.read_text()))
+        blob_mgr.upload_json(config_container, 'velociraptor_artifacts.json', _json.loads(artifacts_src.read_text()))
         success('velociraptor_artifacts.json uploaded.')
     else:
         info('velociraptor_artifacts.json not found locally, skipping upload.')
 
-    step("Uploading Velociraptor definition YAMLs to 'config/definitions/' ...")
+    step(f"Uploading Velociraptor definition YAMLs to '{config_container}/definitions/' ...")
     definitions_src = Path(__file__).parent / 'velociraptor' / 'definitions'
     if definitions_src.is_dir():
         yaml_files = list(definitions_src.glob('*.yaml')) + list(definitions_src.glob('*.yml'))
         for yf in yaml_files:
-            blob_mgr.upload_text('config', f'definitions/{yf.name}', yf.read_text())
+            blob_mgr.upload_text(config_container, f'definitions/{yf.name}', yf.read_text())
         success(f'{len(yaml_files)} definition YAML(s) uploaded.')
     else:
         info('velociraptor/definitions/ not found locally, skipping YAML upload.')
@@ -684,7 +736,7 @@ def provision_all(azure, credential, subscription_id,
         'BLOB_QUEUE_URL':          queue_url,
         'BLOB_QUEUE_NAME':         queue_name,
         'BLOB_CONTAINER_STATUS':   status_container,
-        'BLOB_CONTAINER_CONFIG':   'config',
+        'BLOB_CONTAINER_CONFIG':   config_container,
     })
 
     success('.env updated.')
@@ -842,7 +894,7 @@ def provision_functions(credential, subscription_id,
 # ---------------------------------------------------------------------------
 
 def provision_webapp_all(credential, subscription_id, resource_group, location,
-                         account_name, status_container, webapp_app, allowed_ips):
+                         account_name, status_container, config_container, webapp_app, allowed_ips):
 
     section('Provisioning — Web Application')
 
@@ -872,9 +924,9 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
     webapp.assign_blob_container_reader(resource_group, account_name, status_container, principal_id)
     success(f"Blob Data Reader on '{status_container}' container assigned.")
 
-    step("Assigning Blob Data Contributor on 'config' container to web app managed identity...")
-    webapp.assign_blob_container_contributor(resource_group, account_name, 'config', principal_id)
-    success("Blob Data Contributor on 'config' container assigned.")
+    step(f"Assigning Blob Data Contributor on '{config_container}' container to web app managed identity...")
+    webapp.assign_blob_container_contributor(resource_group, account_name, config_container, principal_id)
+    success(f"Blob Data Contributor on '{config_container}' container assigned.")
 
     step(f"Configuring startup command on '{webapp_app}'...")
     webapp.configure_startup(resource_group, webapp_app,
@@ -996,21 +1048,36 @@ def main():
 
         resource_group, location, new_rg = collect_resource_group(azure, subscription_id, f'2/{total}')
 
-        cluster_name, database_name, sku_name, sku_tier = collect_adx_config(defaults, resource_group, f'3/{total}')
+        setup_mode = collect_setup_mode()
 
-        adx = AdxManager(credential, adx_cluster_uri='', adx_cluster_ingestion_uri='', adx_database_name=database_name)
-        admin_users = collect_admin_users(adx)
+        adx = AdxManager(credential, adx_cluster_uri='', adx_cluster_ingestion_uri='', adx_database_name='')
 
-        account_name, table_name, queue_name, container, status_container = collect_storage_config(defaults, resource_group, f'4/{total}')
-
-        input_sources = collect_input_sources(defaults, account_name, container, f'5/{total}')
+        if setup_mode == 'easy':
+            (account_name, table_name, queue_name, container, status_container,
+             cluster_name, database_name,
+             watcher_app, watcher_sa, processor_app, processor_sa, insights_name) = auto_generate_names(resource_group, defaults)
+            sku_name, sku_tier = collect_adx_sku(f'3/{total}')
+            admin_users = []
+            input_sources = collect_input_sources(defaults, account_name, container, f'4/{total}')
+        else:
+            cluster_name, database_name, sku_name, sku_tier = collect_adx_config(defaults, resource_group, f'3/{total}')
+            adx.adx_database_name = database_name
+            admin_users = collect_admin_users(adx)
+            account_name, table_name, queue_name, container, status_container, config_container = collect_storage_config(defaults, resource_group, f'4/{total}')
+            input_sources = collect_input_sources(defaults, account_name, container, f'5/{total}')
+            if run_mode == 'azurefunction':
+                watcher_app, watcher_sa, processor_app, processor_sa, insights_name = collect_functions_config(resource_group, f'6/{total}')
+            else:
+                watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
 
         if run_mode == 'azurefunction':
-            watcher_app, watcher_sa, processor_app, processor_sa, insights_name = collect_functions_config(resource_group, f'6/{total}')
-            keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
-            webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
+            if setup_mode == 'easy':
+                keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'5/{total}')
+                webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'6/{total}')
+            else:
+                keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
+                webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
         else:
-            watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
             keyvault_name = keyvault_password_location = zip_password = None
             webapp_mode = webapp_app = webapp_allowed_ips = None
 
@@ -1064,6 +1131,7 @@ def main():
                   cluster_name, database_name, sku_name, sku_tier,
                   admin_users,
                   account_name, table_name, queue_name, container, status_container,
+                  config_container,
                   defaults)
 
     step('Writing input source settings to .env...')
@@ -1098,7 +1166,7 @@ def main():
         elif webapp_mode == 'azure' and webapp_app:
             provision_webapp_all(credential, subscription_id,
                                  resource_group, location,
-                                 account_name, status_container, webapp_app, webapp_allowed_ips)
+                                 account_name, status_container, config_container, webapp_app, webapp_allowed_ips)
 
     state = load_state()
     if state:
