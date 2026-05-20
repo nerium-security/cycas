@@ -1059,9 +1059,16 @@ def main():
              cluster_name, database_name,
              watcher_app, watcher_sa, processor_app, processor_sa, insights_name) = auto_generate_names(resource_group, defaults)
             config_container = defaults.get('blob_container_config', 'config')
-            sku_name, sku_tier = collect_adx_sku(f'3/{total}')
+            sku_name, sku_tier, _ = SKUS['1']
             admin_users = []
-            input_sources = collect_input_sources(defaults, account_name, container, f'4/{total}')
+            blob_uri = f'https://{account_name}.blob.core.windows.net'
+            input_sources = {
+                'blob': {
+                    'BLOB_STORAGEACCOUNT_ENABLED': 'true',
+                    'BLOB_STORAGEACCOUNT_URI':     blob_uri,
+                    'BLOB_CONTAINER_INPUT':        container,
+                }
+            }
         else:
             cluster_name, database_name, sku_name, sku_tier = collect_adx_config(defaults, resource_group, f'3/{total}')
             adx.adx_database_name = database_name
@@ -1075,8 +1082,8 @@ def main():
 
         if run_mode == 'azurefunction':
             if setup_mode == 'easy':
-                keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'5/{total}')
-                webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'6/{total}')
+                keyvault_name = keyvault_password_location = zip_password = None
+                webapp_mode, webapp_app, webapp_allowed_ips = 'local', None, None
             else:
                 keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
                 webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
