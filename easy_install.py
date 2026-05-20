@@ -517,7 +517,7 @@ def confirm_plan(run_mode,
                  resource_group, location, new_rg,
                  cluster_name, database_name, sku_name,
                  admin_users,
-                 account_name, table_name, queue_name, container, status_container,
+                 account_name, table_name, queue_name, container, status_container, config_container,
                  input_sources,
                  watcher_app=None, watcher_sa=None,
                  processor_app=None, processor_sa=None,
@@ -546,6 +546,7 @@ def confirm_plan(run_mode,
     info(f'Queue           : {queue_name}')
     info(f'Container       : {container}')
     info(f'Status container: {status_container}')
+    info(f'Config container: {config_container}')
 
     print('\n  Input Sources')
     if 'blob' in input_sources:
@@ -1015,6 +1016,7 @@ def main():
             queue_name       = saved['queue_name']
             container        = saved['container']
             status_container = saved['status_container']
+            config_container = saved.get('config_container', 'config')
             input_sources    = saved['input_sources']
             if run_mode == 'azurefunction':
                 watcher_app                = saved['watcher_app']
@@ -1056,6 +1058,7 @@ def main():
             (account_name, table_name, queue_name, container, status_container,
              cluster_name, database_name,
              watcher_app, watcher_sa, processor_app, processor_sa, insights_name) = auto_generate_names(resource_group, defaults)
+            config_container = defaults.get('blob_container_config', 'config')
             sku_name, sku_tier = collect_adx_sku(f'3/{total}')
             admin_users = []
             input_sources = collect_input_sources(defaults, account_name, container, f'4/{total}')
@@ -1097,6 +1100,7 @@ def main():
             'queue_name':                queue_name,
             'container':                 container,
             'status_container':          status_container,
+            'config_container':          config_container,
             'input_sources':             input_sources,
         }
         if run_mode == 'azurefunction':
@@ -1118,7 +1122,7 @@ def main():
                         resource_group, location, new_rg,
                         cluster_name, database_name, sku_name,
                         admin_users,
-                        account_name, table_name, queue_name, container, status_container,
+                        account_name, table_name, queue_name, container, status_container, config_container,
                         input_sources,
                         watcher_app, watcher_sa, processor_app, processor_sa,
                         keyvault_name, keyvault_password_location,
