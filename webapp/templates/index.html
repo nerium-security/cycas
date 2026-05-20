@@ -69,12 +69,10 @@
                 <td>{{ e.Source or '-' }}</td>
                 <td>{{ e.StartTime or '-' }}</td>
                 <td>
-                    {% if e.Status == 'finished' %}
+                    {% if not e.StartTime or e.Status == 'finished' or (e.Status and e.Status.startswith('failed')) %}
                         {{ e.ComputedDuration or '-' }}
-                    {% elif e.StartTime %}
-                        <span class="live-duration" data-start="{{ e.StartTime }}">{{ e.ComputedDuration or '-' }}</span>
                     {% else %}
-                        {{ e.ComputedDuration or '-' }}
+                        <span class="live-duration" data-start="{{ e.StartTime }}">{{ e.ComputedDuration or '-' }}</span>
                     {% endif %}
                 </td>
                 <td title="{{ e.Status or 'new' }}">
@@ -299,8 +297,8 @@ function refreshTable() {
             const tbody = document.getElementById('entries-body');
             if (!tbody) return;
             tbody.innerHTML = data.map(e => {
-                const isFinished = e.Status === 'finished';
-                const durationCell = (isFinished || !e.StartTime)
+                const isTerminal = e.Status === 'finished' || (e.Status || '').startsWith('failed');
+                const durationCell = (isTerminal || !e.StartTime)
                     ? (e.Duration || '-')
                     : `<span class="live-duration" data-start="${e.StartTime}">-</span>`;
                 return `<tr data-rowkey="${e.RowKey}" data-uploadid="${e.UploadId || ''}">
