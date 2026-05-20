@@ -633,6 +633,7 @@ def provision_all(azure, credential, subscription_id,
 
     step(f"Ensuring blob container '{container}' exists...")
     blob_mgr.authenticate()
+    blob_mgr.switch_to_account_key(subscription_id, resource_group, account_name)
     blob_mgr.create_container(container)
     success(f"Container '{container}' ready.")
 

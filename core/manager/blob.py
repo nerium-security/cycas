@@ -318,6 +318,21 @@ class BlobManager:
             log.warning(f'Could not read {container_name}/{blob_name}: {e}')
             return None
 
+    def switch_to_account_key(self, subscription_id, resource_group, account_name):
+        '''Re-initialise the blob service client using the storage account key.
+
+        Useful during provisioning when the caller has ARM control-plane access
+        but the data-plane RBAC role has not yet been assigned or propagated.
+        '''
+        from azure.mgmt.storage import StorageManagementClient
+        mgmt = StorageManagementClient(self.credential, subscription_id)
+        keys = mgmt.storage_accounts.list_keys(resource_group, account_name)
+        self.blob_service_client = BlobServiceClient(
+            account_url=self.account_url,
+            credential=keys.keys[0].value,
+        )
+        log.info(f"Switched blob client to account-key auth for '{account_name}'.")
+
     def provision_storage_account(self, subscription_id, resource_group, location, account_name):
         '''
         Create a storage account if it does not already exist.
