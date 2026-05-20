@@ -171,7 +171,20 @@ thead th {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    position: relative;
 }
+
+.col-resize-handle {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 5px;
+    cursor: col-resize;
+    z-index: 1;
+}
+.col-resize-handle:hover { background: rgba(255,255,255,0.35); }
+.col-resize-active .col-resize-handle { background: rgba(255,255,255,0.35); }
 
 tbody tr { border-bottom: 1px solid var(--border); }
 tbody tr:last-child { border-bottom: none; }

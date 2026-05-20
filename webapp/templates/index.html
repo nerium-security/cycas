@@ -508,6 +508,84 @@ function renderUploads(data) {
     ].join('');
 }
 
+// ── Column resizing ───────────────────────────────────────────────────────────
+
+(function initColumnResize() {
+    const table = document.querySelector('.table-wrap table');
+    if (!table) return;
+
+    const cols    = Array.from(table.querySelectorAll('colgroup col'));
+    const headers = Array.from(table.querySelectorAll('thead th'));
+    const STORE   = 'cycas-col-widths';
+
+    function saveWidths() {
+        localStorage.setItem(STORE, JSON.stringify(cols.map(c => c.style.width)));
+    }
+
+    // Restore saved widths or snapshot current computed widths as px baseline
+    const saved = JSON.parse(localStorage.getItem(STORE) || 'null');
+    if (saved && saved.length === cols.length) {
+        saved.forEach((w, i) => { cols[i].style.width = w; });
+    } else {
+        const tableW = table.offsetWidth;
+        headers.forEach((th, i) => { cols[i].style.width = (th.offsetWidth / tableW * 100).toFixed(2) + '%'; });
+    }
+
+    // Add a drag handle to every header except the checkbox col (0) and last col
+    headers.forEach((th, i) => {
+        if (i === 0 || i === headers.length - 1) return;
+
+        const handle = document.createElement('div');
+        handle.className = 'col-resize-handle';
+        th.appendChild(handle);
+
+        handle.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            const startX    = e.clientX;
+            const tableW    = table.offsetWidth;
+            const startW    = headers[i].offsetWidth;
+            const startNext = headers[i + 1].offsetWidth;
+
+            th.classList.add('col-resize-active');
+            document.body.style.cursor     = 'col-resize';
+            document.body.style.userSelect = 'none';
+
+            function onMove(e) {
+                const delta  = e.clientX - startX;
+                const newW   = Math.max(40, startW + delta);
+                const newNxt = Math.max(40, startNext - delta);
+                cols[i    ].style.width = (newW   / tableW * 100).toFixed(2) + '%';
+                cols[i + 1].style.width = (newNxt / tableW * 100).toFixed(2) + '%';
+            }
+
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                th.classList.remove('col-resize-active');
+                document.body.style.cursor     = '';
+                document.body.style.userSelect = '';
+                saveWidths();
+            }
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    });
+})();
+
+// ── Truncation tooltips ───────────────────────────────────────────────────────
+
+document.querySelector('.table-wrap')?.addEventListener('mouseover', function (e) {
+    const td = e.target.closest('tbody td');
+    if (!td || td.classList.contains('col-check')) return;
+    // Only set if not already present and content is clipped
+    if (!td.hasAttribute('title') && td.scrollWidth > td.clientWidth) {
+        td.setAttribute('title', td.textContent.trim());
+    }
+});
+
+// ── Row click → detail drawer ─────────────────────────────────────────────────
+
 document.getElementById('entries-body').addEventListener('click', function (e) {
     if (e.target.closest('.col-check')) return;
     const row = e.target.closest('tr[data-uploadid]');
