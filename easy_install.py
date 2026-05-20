@@ -971,6 +971,7 @@ def main():
                 keyvault_name              = saved['keyvault_name']
                 keyvault_password_location = saved['keyvault_password_location']
                 insights_name              = saved['insights_name']
+                webapp_mode                = saved.get('webapp_mode')
                 webapp_app                 = saved['webapp_app']
                 webapp_allowed_ips         = saved['webapp_allowed_ips']
                 zip_password               = None  # not stored in state
@@ -980,7 +981,7 @@ def main():
             else:
                 watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
                 keyvault_name = keyvault_password_location = zip_password = None
-                webapp_app = webapp_allowed_ips = None
+                webapp_mode = webapp_app = webapp_allowed_ips = None
         else:
             clear_state()
             saved = None
