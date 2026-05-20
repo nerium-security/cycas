@@ -95,11 +95,11 @@ def determine_if_needs_processing(managers, Config, zipfile):
     
     status = status_all.get('Status')
 
-    if status in [Status.FAILED, Status.NEW, Status.UNQUEUED]:
+    if status in [Status.NEW, Status.UNQUEUED]:
         log.info(f'Should process. Status is: {status}')
         return True
     else:
-        log.debug('Is already processed or processing.')
+        log.debug(f'Skipping. Status is: {status}')
         return False
 
 def _prepare_dictionary_for_upload_to_adx(results_dict, dict_key):
