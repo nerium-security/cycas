@@ -702,9 +702,9 @@ nav .nav-link-active { opacity: 1; background: rgba(255,255,255,0.18); }
     border-radius: 8px;
     box-shadow: 0 8px 40px rgba(0,0,0,0.25);
     z-index: 201;
-    width: 560px;
+    width: 860px;
     max-width: 95vw;
-    max-height: 80vh;
+    max-height: 90vh;
     flex-direction: column;
     overflow: hidden;
 }
@@ -770,7 +770,7 @@ nav .nav-link-active { opacity: 1; background: rgba(255,255,255,0.18); }
 .yaml-editor {
     flex: 1;
     width: 100%;
-    min-height: 320px;
+    min-height: 480px;
     font-family: monospace;
     font-size: 0.82rem;
     border: 1px solid var(--border);
