@@ -543,26 +543,6 @@ def api_artifact_yaml_get(name):
         return jsonify({'error': str(exc)}), 500
 
 
-@app.route('/api/artifacts/<path:name>/yaml', methods=['POST'])
-def api_artifact_yaml_save(name):
-    try:
-        config    = load_config()
-        yaml_text = _read_yaml(config, name)
-        if yaml_text is None:
-            return jsonify({'error': 'YAML file not found'}), 404
-
-        params  = (request.get_json() or {}).get('parameters', [])
-        content = yaml.safe_load(yaml_text) or {}
-        lookup  = {p['name']: p for p in (content.get('parameters') or [])}
-        for p in params:
-            if p['name'] in lookup:
-                lookup[p['name']]['default'] = p['default']
-        content['parameters'] = list(lookup.values())
-        _write_yaml(config, name, yaml.dump(content, allow_unicode=True, sort_keys=False))
-        return jsonify({'saved': True})
-    except Exception as exc:
-        return jsonify({'error': str(exc)}), 500
-
 
 @app.route('/api/artifacts/<path:name>/yaml/raw', methods=['POST'])
 def api_artifact_yaml_raw_save(name):

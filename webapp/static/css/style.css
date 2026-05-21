@@ -760,22 +760,6 @@ nav .nav-link-active { opacity: 1; background: rgba(255,255,255,0.18); }
 }
 .param-input:focus { border-color: var(--teal); outline: none; }
 
-.modal-tabs {
-    display: flex;
-    gap: 0.25rem;
-}
-.modal-tab {
-    padding: 0.3rem 0.75rem;
-    font-size: 0.82rem;
-    font-weight: 600;
-    border: none;
-    border-radius: 4px;
-    background: rgba(255,255,255,0.15);
-    color: rgba(255,255,255,0.65);
-    cursor: pointer;
-}
-.modal-tab.active { background: rgba(255,255,255,0.28); color: var(--white); }
-.modal-tab:hover:not(.active) { background: rgba(255,255,255,0.22); color: var(--white); }
 
 .yaml-modal-body {
     overflow: hidden;

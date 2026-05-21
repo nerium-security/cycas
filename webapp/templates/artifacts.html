@@ -43,23 +43,18 @@
     <button class="btn-save-all" id="btn-save-all">Save all</button>
 </div>
 
-<!-- Edit params modal -->
+<!-- Edit YAML modal -->
 <div class="params-modal-backdrop" id="params-backdrop"></div>
 <div class="params-modal" id="params-modal">
     <div class="params-modal-header">
         <span id="params-modal-title"></span>
-        <div class="modal-tabs">
-            <button class="modal-tab active" data-tab="params">Parameters</button>
-            <button class="modal-tab" data-tab="yaml">YAML</button>
-        </div>
         <button class="drawer-close" id="params-modal-close">&#x2715;</button>
     </div>
-    <div class="params-modal-body" id="params-modal-body"></div>
-    <div class="params-modal-body yaml-modal-body" id="yaml-modal-body" style="display:none">
+    <div class="params-modal-body yaml-modal-body" id="yaml-modal-body">
         <textarea id="yaml-editor" class="yaml-editor" spellcheck="false"></textarea>
     </div>
     <div class="params-modal-footer">
-        <button class="btn-save-params" id="btn-save-params">Save parameters</button>
+        <button class="btn-save-params" id="btn-save-params">Save YAML</button>
         <span id="params-save-status" class="save-status"></span>
     </div>
 </div>
@@ -68,7 +63,6 @@
 // State: mirrors the JSON structure, mutated by user actions
 let state = { essential: [], full: [], skip: [] };
 let currentParamsName = null;
-let currentTab = 'params';
 let dirty = false;
 const collapsed = { essential: true, full: true, skip: true };
 
@@ -358,65 +352,21 @@ document.getElementById('btn-upload-yaml').addEventListener('click', async funct
 function openParamsModal(name) {
     currentParamsName = name;
     document.getElementById('params-modal-title').textContent = name;
-    document.getElementById('params-modal-body').innerHTML = '<p class="drawer-loading">Loading...</p>';
     document.getElementById('params-save-status').textContent = '';
     document.getElementById('params-modal').classList.add('open');
     document.getElementById('params-backdrop').classList.add('open');
-    switchModalTab('params');
 
-    for (const cat of CATEGORIES) {
-        const found = state[cat].find(a => a.name === name);
-        if (found) {
-            renderParamsForm(found.params);
-            return;
-        }
-    }
-    document.getElementById('params-modal-body').innerHTML = '<p class="drawer-empty">No parameters found.</p>';
-}
-
-function switchModalTab(tab) {
-    currentTab = tab;
-    document.querySelectorAll('.modal-tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.tab === tab);
-    });
-    document.getElementById('params-modal-body').style.display = tab === 'params' ? '' : 'none';
-    document.getElementById('yaml-modal-body').style.display   = tab === 'yaml'   ? '' : 'none';
-    document.getElementById('btn-save-params').textContent     = tab === 'params' ? 'Save parameters' : 'Save YAML';
-    if (tab === 'yaml') loadYamlEditor();
-}
-
-async function loadYamlEditor() {
     const editor = document.getElementById('yaml-editor');
     editor.value = 'Loading...';
     editor.disabled = true;
-    try {
-        const resp = await fetch(`/api/artifacts/${encodeURIComponent(currentParamsName)}/yaml`);
-        const data = await resp.json();
-        if (data.error) throw new Error(data.error);
-        editor.value = data.yaml;
-        editor.disabled = false;
-    } catch (err) {
-        editor.value = `Error loading YAML: ${err.message}`;
-    }
-}
-
-document.getElementById('params-modal').addEventListener('click', function (e) {
-    const tab = e.target.closest('.modal-tab');
-    if (tab) switchModalTab(tab.dataset.tab);
-});
-
-function renderParamsForm(params) {
-    if (!params.length) {
-        document.getElementById('params-modal-body').innerHTML = '<p class="drawer-empty">This artifact has no parameters.</p>';
-        return;
-    }
-    document.getElementById('params-modal-body').innerHTML = `
-        <div class="detail-grid">
-            ${params.map(p => `
-                <dt title="${p.name}">${p.name}</dt>
-                <dd><input class="param-input" data-param="${p.name}" type="text" value="${escHtml(String(p.default))}"></dd>
-            `).join('')}
-        </div>`;
+    fetch(`/api/artifacts/${encodeURIComponent(name)}/yaml`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) throw new Error(data.error);
+            editor.value = data.yaml;
+            editor.disabled = false;
+        })
+        .catch(err => { editor.value = `Error loading YAML: ${err.message}`; });
 }
 
 function closeParamsModal() {
@@ -437,26 +387,12 @@ document.getElementById('btn-save-params').addEventListener('click', async funct
     status.className = 'save-status';
 
     try {
-        let resp;
-        if (currentTab === 'yaml') {
-            const yamlText = document.getElementById('yaml-editor').value;
-            resp = await fetch(`/api/artifacts/${encodeURIComponent(currentParamsName)}/yaml/raw`, {
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify({ yaml: yamlText }),
-            });
-        } else {
-            const inputs = document.querySelectorAll('#params-modal-body .param-input');
-            const params = Array.from(inputs).map(inp => ({
-                name:    inp.dataset.param,
-                default: inp.value,
-            }));
-            resp = await fetch(`/api/artifacts/${encodeURIComponent(currentParamsName)}/yaml`, {
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify({ parameters: params }),
-            });
-        }
+        const yamlText = document.getElementById('yaml-editor').value;
+        const resp = await fetch(`/api/artifacts/${encodeURIComponent(currentParamsName)}/yaml/raw`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ yaml: yamlText }),
+        });
         const data = await resp.json();
         if (data.error) throw new Error(data.error);
         status.textContent = 'Saved.';
