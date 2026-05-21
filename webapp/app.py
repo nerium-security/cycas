@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -336,12 +337,7 @@ def api_status_detail(uploadid):
     from azure.core.exceptions import ResourceNotFoundError
     try:
         config = load_config()
-        credential = DefaultAzureCredential()
-        blob_service = BlobServiceClient(
-            account_url=config.blob_storageaccount_uri,
-            credential=credential,
-        )
-        blob_client = blob_service.get_blob_client(
+        blob_client = _get_blob_service(config.blob_storageaccount_uri).get_blob_client(
             container=config.blob_container_status,
             blob=f'{uploadid}.json',
         )
@@ -381,6 +377,21 @@ def adx_status():
 # Artifact management helpers
 # ---------------------------------------------------------------------------
 
+_blob_credential: DefaultAzureCredential | None = None
+_blob_clients: dict[str, BlobServiceClient] = {}
+_blob_lock = threading.Lock()
+
+def _get_blob_service(account_url: str) -> BlobServiceClient:
+    global _blob_credential
+    with _blob_lock:
+        if _blob_credential is None:
+            _blob_credential = DefaultAzureCredential()
+        if account_url not in _blob_clients:
+            _blob_clients[account_url] = BlobServiceClient(
+                account_url=account_url, credential=_blob_credential
+            )
+        return _blob_clients[account_url]
+
 def _artifact_name(entry):
     return entry.split('(')[0].strip()
 
@@ -391,11 +402,9 @@ def _yaml_path(config, name):
     return Path(config.velociraptor_definitions) / f'{name}.yaml'
 
 def _read_yaml(config, name):
-    '''Return YAML text for an artifact definition. Tries blob first, then local file.'''
     if config.blob_storageaccount_enabled:
         try:
-            credential = DefaultAzureCredential()
-            svc = BlobServiceClient(account_url=config.blob_storageaccount_uri, credential=credential)
+            svc = _get_blob_service(config.blob_storageaccount_uri)
             bc = svc.get_blob_client(container=config.blob_container_config, blob=_yaml_blob_name(name))
             return bc.download_blob().readall().decode('utf-8')
         except Exception:
@@ -406,18 +415,15 @@ def _read_yaml(config, name):
     return None
 
 def _write_yaml(config, name, text):
-    '''Write YAML text for an artifact definition to blob (or local if blob disabled).'''
     if config.blob_storageaccount_enabled:
-        credential = DefaultAzureCredential()
-        svc = BlobServiceClient(account_url=config.blob_storageaccount_uri, credential=credential)
+        svc = _get_blob_service(config.blob_storageaccount_uri)
         bc = svc.get_blob_client(container=config.blob_container_config, blob=_yaml_blob_name(name))
         bc.upload_blob(text.encode('utf-8'), overwrite=True)
     else:
         _yaml_path(config, name).write_text(text)
 
 def _config_blob_client(config):
-    credential = DefaultAzureCredential()
-    svc = BlobServiceClient(account_url=config.blob_storageaccount_uri, credential=credential)
+    svc = _get_blob_service(config.blob_storageaccount_uri)
     return svc.get_blob_client(container=config.blob_container_config, blob='velociraptor_artifacts.json')
 
 def _load_artifacts_json(config):
@@ -455,25 +461,27 @@ def api_artifacts_get():
     try:
         config = load_config()
         data   = _load_artifacts_json(config)
-        result = {}
-        for category, entries in data.items():
-            result[category] = []
-            for entry in entries:
-                name      = _artifact_name(entry)
-                yaml_text = _read_yaml(config, name)
-                params    = []
-                if yaml_text:
-                    parsed = yaml.safe_load(yaml_text) or {}
-                    params = [
-                        {'name': p['name'], 'default': str(p.get('default', '') or '')}
-                        for p in (parsed.get('parameters') or [])
-                    ]
-                result[category].append({
-                    'entry':    entry,
-                    'name':     name,
-                    'has_yaml': yaml_text is not None,
-                    'params':   params,
-                })
+
+        all_entries = [(cat, entry) for cat, entries in data.items() for entry in entries]
+
+        def fetch_entry(cat_entry):
+            cat, entry = cat_entry
+            name      = _artifact_name(entry)
+            yaml_text = _read_yaml(config, name)
+            params    = []
+            if yaml_text:
+                parsed = yaml.safe_load(yaml_text) or {}
+                params = [
+                    {'name': p['name'], 'default': str(p.get('default', '') or '')}
+                    for p in (parsed.get('parameters') or [])
+                ]
+            return cat, {'entry': entry, 'name': name, 'has_yaml': yaml_text is not None, 'params': params}
+
+        result = {cat: [] for cat in data}
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            for cat, artifact in pool.map(fetch_entry, all_entries):
+                result[cat].append(artifact)
+
         return jsonify(result)
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
