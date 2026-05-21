@@ -523,6 +523,18 @@ def api_artifacts_upload():
         return jsonify({'error': str(exc)}), 500
 
 
+@app.route('/api/artifacts/<path:name>/yaml', methods=['GET'])
+def api_artifact_yaml_get(name):
+    try:
+        config    = load_config()
+        yaml_text = _read_yaml(config, name)
+        if yaml_text is None:
+            return jsonify({'error': 'YAML file not found'}), 404
+        return jsonify({'yaml': yaml_text})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
 @app.route('/api/artifacts/<path:name>/yaml', methods=['POST'])
 def api_artifact_yaml_save(name):
     try:
@@ -540,6 +552,20 @@ def api_artifact_yaml_save(name):
         content['parameters'] = list(lookup.values())
         _write_yaml(config, name, yaml.dump(content, allow_unicode=True, sort_keys=False))
         return jsonify({'saved': True})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/artifacts/<path:name>/yaml/raw', methods=['POST'])
+def api_artifact_yaml_raw_save(name):
+    try:
+        config    = load_config()
+        yaml_text = (request.get_json() or {}).get('yaml', '')
+        yaml.safe_load(yaml_text)  # validate before writing
+        _write_yaml(config, name, yaml_text)
+        return jsonify({'saved': True})
+    except yaml.YAMLError as exc:
+        return jsonify({'error': f'Invalid YAML: {exc}'}), 400
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
 
