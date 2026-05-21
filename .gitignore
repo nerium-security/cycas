@@ -442,3 +442,6 @@ cycas.egg-info/*
 README-GITUSAGE.md
 
 build/*
+
+velociraptor/definitions/*.yaml
+!velociraptor/definitions/Custom.*.yaml
