@@ -176,7 +176,7 @@ function render() {
 
 function artifactRow(cat, idx, a) {
     const editBtn = a.has_yaml
-        ? `<button class="btn-artifact-action btn-edit-params" data-name="${a.name}">Edit params</button>`
+        ? `<button class="btn-artifact-action btn-edit-params" data-name="${a.name}">Edit YAML</button>`
         : `<span class="no-yaml">no YAML</span>`;
     return `<div class="artifact-row" data-cat="${cat}" data-idx="${idx}">
         <input type="checkbox" class="artifact-cb" data-cat="${cat}" data-idx="${idx}">
