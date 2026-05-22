@@ -708,23 +708,13 @@ def provision_all(azure, credential, subscription_id,
     else:
         info('velociraptor_artifacts.json not found locally, skipping upload.')
 
-    step(f"Uploading Velociraptor definition YAMLs to '{config_container}/definitions/' ...")
-    definitions_src = Path(__file__).parent / 'velociraptor' / 'definitions'
-    if definitions_src.is_dir():
-        yaml_files = list(definitions_src.glob('*.yaml')) + list(definitions_src.glob('*.yml'))
-        for yf in yaml_files:
-            blob_mgr.upload_text(config_container, f'definitions/{yf.name}', yf.read_text())
-        success(f'{len(yaml_files)} definition YAML(s) uploaded.')
-    else:
-        info('velociraptor/definitions/ not found locally, skipping YAML upload.')
-
     step('Exporting artifact definitions from Velociraptor binary...')
     if artifacts_src.exists():
-        env_vals     = read_env_defaults(ENV_FILE)
-        binary       = env_vals.get('velociraptor_binary', '/tmp/velociraptor')
-        defs_dest    = Path(env_vals.get('velociraptor_definitions', 'velociraptor/definitions/'))
+        env_vals       = read_env_defaults(ENV_FILE)
+        binary         = env_vals.get('velociraptor_binary', '/tmp/velociraptor')
+        defs_dest      = Path(env_vals.get('velociraptor_definitions', 'velociraptor/definitions/'))
         artifacts_data = json.loads(artifacts_src.read_text())
-        all_names    = [
+        all_names      = [
             entry.split('(')[0].strip()
             for entries in artifacts_data.values()
             for entry in entries
@@ -747,6 +737,15 @@ def provision_all(azure, credential, subscription_id,
         success(f'{exported} artifact definition(s) exported to {defs_dest}.')
     else:
         info('velociraptor_artifacts.json not found, skipping definition export.')
+
+    step(f"Uploading Velociraptor definition YAMLs to '{config_container}/definitions/' ...")
+    if defs_dest.is_dir():
+        yaml_files = list(defs_dest.glob('*.yaml')) + list(defs_dest.glob('*.yml'))
+        for yf in yaml_files:
+            blob_mgr.upload_text(config_container, f'definitions/{yf.name}', yf.read_text())
+        success(f'{len(yaml_files)} definition YAML(s) uploaded.')
+    else:
+        info('Definitions folder not found, skipping YAML upload.')
 
     step('Writing .env...')
 
