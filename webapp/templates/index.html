@@ -397,10 +397,7 @@ function renderPostprocessing(data) {
     if (!items.length) return '<p class="drawer-empty">No post-processing data.</p>';
 
     const optionalCols = [
-        { key: 'cmd',        label: 'Command' },
-        { key: 'stdout',     label: 'Stdout' },
-        { key: 'stderr',     label: 'Stderr' },
-        { key: 'returncode', label: 'Return code' },
+        { key: 'cmd', label: 'Command' },
     ];
 
     const toggles = optionalCols.map(c =>
@@ -413,10 +410,7 @@ function renderPostprocessing(data) {
         const size     = fmtBytes(p.size);
         const error    = fmt(p.error);
         const duration = p.duration_in_sec != null ? p.duration_in_sec.toFixed(1) + 's' : '-';
-        const cmd      = fmt(p.cmd);
-        const stdout   = fmt(p.stdout);
-        const stderr   = fmt(p.stderr);
-        const rc       = fmt(p.returncode);
+        const cmd = fmt(p.cmd);
         return `<tr>
             <td title="${artifact}">${artifact}</td>
             <td title="${basename}">${basename}</td>
@@ -424,10 +418,7 @@ function renderPostprocessing(data) {
             <td>${p.success ? '✓' : '✗'}</td>
             <td title="${duration}">${duration}</td>
             <td title="${error}">${error}</td>
-            <td class="col-opt col-cmd"    title="${cmd}">${cmd}</td>
-            <td class="col-opt col-stdout" title="${stdout}">${stdout}</td>
-            <td class="col-opt col-stderr" title="${stderr}">${stderr}</td>
-            <td class="col-opt col-returncode" title="${rc}">${rc}</td>
+            <td class="col-opt col-cmd" title="${cmd}">${cmd}</td>
         </tr>`;
     }).join('');
 
@@ -436,9 +427,6 @@ function renderPostprocessing(data) {
         <thead><tr>
             <th>Artifact</th><th>Basename</th><th>Size</th><th>Success</th><th>Duration</th><th>Error</th>
             <th class="col-opt col-cmd">Command</th>
-            <th class="col-opt col-stdout">Stdout</th>
-            <th class="col-opt col-stderr">Stderr</th>
-            <th class="col-opt col-returncode">Return code</th>
         </tr></thead>
         <tbody>${rows}</tbody>
     </table></div>`;
