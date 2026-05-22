@@ -609,12 +609,15 @@ document.querySelector('.table-wrap')?.addEventListener('mouseover', function (e
 
 // ── Row click → detail drawer ─────────────────────────────────────────────────
 
+let currentUploadId = null;
+
 document.getElementById('entries-body').addEventListener('click', function (e) {
     if (e.target.closest('.col-check')) return;
     const row = e.target.closest('tr[data-uploadid]');
     if (!row) return;
 
     const uploadId = row.dataset.uploadid;
+    currentUploadId = uploadId;
     const filename = row.querySelector('.filename')?.textContent?.trim() || uploadId || '-';
 
     drawerTitle.textContent = filename;

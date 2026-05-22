@@ -349,6 +349,23 @@ def api_status_detail(uploadid):
         return jsonify({'error': str(exc)}), 500
 
 
+@app.route('/api/status/<path:uploadid>/log/<path:artifact_name>')
+def api_artifact_log(uploadid, artifact_name):
+    from azure.core.exceptions import ResourceNotFoundError
+    try:
+        config = load_config()
+        bc = _get_blob_service(config.blob_storageaccount_uri).get_blob_client(
+            container=config.blob_container_status,
+            blob=f'logs/{uploadid}/{artifact_name}.log',
+        )
+        text = bc.download_blob().readall().decode('utf-8')
+        return jsonify({'log': text})
+    except ResourceNotFoundError:
+        return jsonify({'error': 'Log not found'}), 404
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
 @app.route('/api/adx-status')
 def adx_status():
     '''

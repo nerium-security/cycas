@@ -419,6 +419,7 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
     postprocess_results['cmd'] = cmd
     postprocess_results['size'] = filesize
     postprocess_results['fullpath'] = outputfile
+    postprocess_results['logfile'] = logfile if os.path.exists(logfile) else None
     postprocess_results['artifact'] = artifact
     postprocess_results['basename'] = os.path.basename(outputfile)
 

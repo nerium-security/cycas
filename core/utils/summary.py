@@ -74,7 +74,8 @@ def define_results_postprocess_dict():
         'error': None,
         'stdout': None,
         'stderr': None,
-        'returncode': None
+        'returncode': None,
+        'logfile': None
     }
 
 def define_results_upload_dict():

@@ -270,16 +270,30 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
 
             results['postprocessing'].append(result_postprocess)
             outputfile_path = result_postprocess.get('fullpath')
+            logfile_path    = result_postprocess.pop('logfile', None)
             result_postprocess.pop('fullpath', None)
             result_upload = define_results_upload_dict()
 
+            uploadid = results['summary'][0].get('uploadid')
+
             if Config.adx_cluster_enabled and outputfile_path:
-                uploadid = results['summary'][0].get('uploadid')
                 managers.adx.add_hostname_to_file(outputfile_path, hostname, zipfile, uploadid)
 
             result_upload.update(_upload_file_to_adx(managers, Config, outputfile_path))
 
             delete_file(outputfile_path)
+
+            if logfile_path and uploadid:
+                artifact_name = artifact.split('(')[0].strip()
+                try:
+                    managers.blob.upload_text(
+                        Config.blob_container_status,
+                        f'logs/{uploadid}/{artifact_name}.log',
+                        open(logfile_path).read(),
+                    )
+                except Exception as exc:
+                    log.warning(f'Could not upload logfile for {artifact_name}: {exc}')
+                delete_file(logfile_path)
 
             result_upload['was_postprocessed_with'] = artifact
             results['uploads'].append(result_upload)
