@@ -468,9 +468,9 @@ def _save_artifacts_json(config, data):
 # Artifact management routes
 # ---------------------------------------------------------------------------
 
-@app.route('/artifacts')
+@app.route('/settings')
 def artifacts_page():
-    return render_template('artifacts.html')
+    return render_template('settings.html')
 
 
 @app.route('/api/artifacts')
