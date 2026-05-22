@@ -94,31 +94,6 @@ class SasManager:
             log.error(f'Error listing blobs: {e}')
             return []
 
-    def download_all(self, download_path: str) -> None:
-        '''
-        Download all blobs from the container represented by a SAS URL.
-
-        Args:
-            download_path (str): Local directory to save blobs.
-        '''
-
-        try:
-            os.makedirs(download_path, exist_ok=True)
-            log.info(f'Downloading blobs to {download_path}')
-
-            for blob in self._container_client.list_blobs():
-                blob_path = os.path.join(download_path, blob.name)
-                os.makedirs(os.path.dirname(blob_path), exist_ok=True)
-
-                with open(blob_path, 'wb') as file:
-                    self._container_client.download_blob(blob.name, max_concurrency=4).readinto(file)
-
-                log.info(f'Downloaded blob: {blob.name}')
-
-            return blob_path
-        except Exception as e:
-            log.error(f'Error downloading blobs: {e}')
-
     def download(self, download_path: str, zip: str) -> None:
         '''
         Download a single blob from the container to the local filesystem.

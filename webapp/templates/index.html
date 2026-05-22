@@ -1,0 +1,649 @@
+{% extends "base.html" %}
+{% block title %}Ingestion Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Ingestion Dashboard</h1>
+    </div>
+</div>
+
+<!-- Stats bar -->
+<div class="stats-bar">
+    <div class="stat-card">
+        <div class="label">Total</div>
+        <div class="value">{{ stats.total }}</div>
+    </div>
+    <div class="stat-card finished">
+        <div class="label">Finished</div>
+        <div class="value">{{ stats.finished }}</div>
+    </div>
+    <div class="stat-card processing">
+        <div class="label">Processing</div>
+        <div class="value">{{ stats.processing }}</div>
+    </div>
+    <div class="stat-card failed">
+        <div class="label">Failed</div>
+        <div class="value">{{ stats.failed }}</div>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<form class="filter-bar" method="get" action="{{ url_for('index') }}">
+    <input type="search" name="q" placeholder="Search filename or host…" value="{{ q }}">
+    <select name="status" onchange="this.form.submit()">
+        <option value="">All statuses</option>
+        {% for s in statuses %}
+            <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s|capitalize }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit" style="display:none"></button>
+    <button type="button" id="btn-export" class="btn-export">Export CSV</button>
+</form>
+
+<!-- Table -->
+<div class="table-wrap">
+    {% if entries %}
+    <table>
+        <colgroup>
+            <col><col><col><col><col><col><col><col>
+        </colgroup>
+        <thead>
+            <tr>
+                <th class="col-check"><input type="checkbox" id="select-all" title="Select all"></th>
+                <th>Filename</th>
+                <th>Host</th>
+                <th>Source</th>
+                <th>Started</th>
+                <th>Duration</th>
+                <th>Status (Processing)</th>
+                <th>Status (ADX)</th>
+            </tr>
+        </thead>
+        <tbody id="entries-body">
+            {% for e in entries %}
+            <tr data-rowkey="{{ e.RowKey }}" data-uploadid="{{ e.UploadId or '' }}">
+                <td class="col-check"><input type="checkbox" class="row-check" value="{{ e.RowKey }}"></td>
+                <td class="filename">{{ e.ZipfileBasename or '-' }}</td>
+                <td class="hostname">{{ e.Extracted_Hostname or '-' }}</td>
+                <td>{{ e.Source or '-' }}</td>
+                <td>{{ e.StartTime or '-' }}</td>
+                <td>
+                    {% if not e.StartTime or e.Status == 'finished' or (e.Status and e.Status.startswith('failed')) %}
+                        {{ e.ComputedDuration or '-' }}
+                    {% else %}
+                        <span class="live-duration" data-start="{{ e.StartTime }}">{{ e.ComputedDuration or '-' }}</span>
+                    {% endif %}
+                </td>
+                <td title="{{ e.Status or 'new' }}">
+                    <span class="badge badge-{{ (e.Status or 'new').split(' ')[0]|lower }}">
+                        {{ e.Status or 'new' }}
+                    </span>
+                </td>
+                <td class="adx-cell" data-uploadid="{{ e.UploadId or '' }}">
+                    {% if e.AdxStatus == 'confirmed' %}
+                        <span class="adx-confirmed">● Queryable</span>
+                    {% elif e.AdxStatus == 'pending' %}
+                        <span class="adx-pending">⟳ Pending</span>
+                    {% elif e.AdxStatus == 'timeout' %}
+                        <span class="adx-timeout">Timeout</span>
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state" id="empty-state">
+        <strong>No entries found</strong>
+        <p>{% if q or status_filter %}No results match your filter.{% else %}The status table is empty.{% endif %}</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Detail drawer -->
+<div class="drawer-backdrop" id="drawer-backdrop"></div>
+<div class="drawer" id="detail-drawer">
+    <div class="drawer-header">
+        <h2 id="drawer-title">-</h2>
+        <button class="drawer-close" id="drawer-close" title="Close">&#x2715;</button>
+    </div>
+    <div class="drawer-tabs">
+        <button class="drawer-tab active" data-tab="summary">Summary</button>
+        <button class="drawer-tab" data-tab="postprocessing">Postprocessing</button>
+        <button class="drawer-tab" data-tab="uploads">Uploads</button>
+        <button class="drawer-tab" data-tab="logs">Logs</button>
+    </div>
+    <div class="drawer-body">
+        <div class="tab-panel active" id="tab-summary"></div>
+        <div class="tab-panel" id="tab-postprocessing"></div>
+        <div class="tab-panel" id="tab-uploads"></div>
+        <div class="tab-panel" id="tab-logs"></div>
+    </div>
+</div>
+
+<!-- Sticky action bar -->
+<div class="action-bar" id="action-bar">
+    <span id="action-bar-count"></span>
+    <button class="btn-retry" id="btn-retry">Retry selected</button>
+</div>
+
+<script>
+const selectedKeys = new Set();
+
+// ── Selection helpers ──────────────────────────────────────────────────────
+
+function updateActionBar() {
+    const bar   = document.getElementById('action-bar');
+    const count = document.getElementById('action-bar-count');
+    if (selectedKeys.size > 0) {
+        count.textContent = `${selectedKeys.size} selected`;
+        bar.classList.add('visible');
+    } else {
+        bar.classList.remove('visible');
+    }
+}
+
+function restoreCheckboxes() {
+    document.querySelectorAll('.row-check').forEach(cb => {
+        cb.checked = selectedKeys.has(cb.value);
+    });
+    const allChecks = document.querySelectorAll('.row-check');
+    const selectAll = document.getElementById('select-all');
+    if (selectAll && allChecks.length > 0) {
+        selectAll.checked = allChecks.length === selectedKeys.size && selectedKeys.size > 0;
+    }
+}
+
+document.getElementById('select-all').addEventListener('change', function () {
+    document.querySelectorAll('.row-check').forEach(cb => {
+        cb.checked = this.checked;
+        this.checked ? selectedKeys.add(cb.value) : selectedKeys.delete(cb.value);
+    });
+    updateActionBar();
+});
+
+document.getElementById('entries-body').addEventListener('change', function (e) {
+    if (!e.target.classList.contains('row-check')) return;
+    e.target.checked ? selectedKeys.add(e.target.value) : selectedKeys.delete(e.target.value);
+    updateActionBar();
+});
+
+// ── Retry ──────────────────────────────────────────────────────────────────
+
+document.getElementById('btn-retry').addEventListener('click', function () {
+    if (!selectedKeys.size) return;
+    this.disabled = true;
+    fetch('/api/retry', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ row_keys: [...selectedKeys] }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { alert('Retry failed: ' + data.error); return; }
+        selectedKeys.clear();
+        updateActionBar();
+        refreshTable();
+    })
+    .catch(() => alert('Retry request failed.'))
+    .finally(() => { this.disabled = false; });
+});
+
+// ── Live search ───────────────────────────────────────────────────────────
+
+const searchInput = document.querySelector('.filter-bar input[type="search"]');
+if (searchInput) {
+    searchInput.addEventListener('input', function () {
+        const q = this.value.toLowerCase();
+        document.querySelectorAll('#entries-body tr').forEach(row => {
+            const filename = row.querySelector('.filename')?.textContent.toLowerCase() || '';
+            const hostname = row.querySelector('.hostname')?.textContent.toLowerCase() || '';
+            row.style.display = (!q || filename.includes(q) || hostname.includes(q)) ? '' : 'none';
+        });
+    });
+}
+
+// ── Export CSV ────────────────────────────────────────────────────────────
+
+document.getElementById('btn-export')?.addEventListener('click', function () {
+    const headers = ['Filename', 'Host', 'Source', 'Started', 'Duration', 'Status (Processing)', 'Status (ADX)'];
+    const rows = [];
+    document.querySelectorAll('#entries-body tr').forEach(row => {
+        if (row.style.display === 'none') return;
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 8) return;
+        rows.push([
+            cells[1].textContent.trim(),
+            cells[2].textContent.trim(),
+            cells[3].textContent.trim(),
+            cells[4].textContent.trim(),
+            cells[5].textContent.trim(),
+            cells[6].textContent.trim(),
+            cells[7].textContent.trim(),
+        ]);
+    });
+    const escape = v => '"' + v.replace(/"/g, '""') + '"';
+    const csv    = [headers, ...rows].map(r => r.map(escape).join(',')).join('\r\n');
+    const blob   = new Blob([csv], { type: 'text/csv' });
+    const url    = URL.createObjectURL(blob);
+    const a      = Object.assign(document.createElement('a'), {
+        href:     url,
+        download: `cycas-export-${new Date().toISOString().slice(0,10)}.csv`,
+    });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+});
+
+// ── Live duration timer ────────────────────────────────────────────────────
+
+function fmtDuration(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h}h ${m}m ${s}s`;
+}
+
+function tickDurations() {
+    const now = Date.now();
+    document.querySelectorAll('.live-duration[data-start]').forEach(el => {
+        const start = new Date(el.dataset.start).getTime();
+        if (!isNaN(start)) el.textContent = fmtDuration(Math.floor((now - start) / 1000));
+    });
+}
+setInterval(tickDurations, 1000);
+tickDurations();
+
+// ── ADX status helpers ─────────────────────────────────────────────────────
+
+function adxBadge(status) {
+    if (status === 'confirmed') return '<span class="adx-confirmed">● Queryable</span>';
+    if (status === 'pending')   return '<span class="adx-pending">⟳ Pending</span>';
+    if (status === 'timeout')   return '<span class="adx-timeout">Timeout</span>';
+    return '-';
+}
+
+function refreshAdxStatus() {
+    fetch('/api/adx-status')
+        .then(r => r.json())
+        .then(data => {
+            document.querySelectorAll('.adx-cell[data-uploadid]').forEach(cell => {
+                const uid = cell.dataset.uploadid;
+                if (uid && data[uid]) cell.innerHTML = adxBadge(data[uid]);
+            });
+        })
+        .catch(() => {});
+}
+setInterval(refreshAdxStatus, 10000);
+
+// ── Table auto-refresh ─────────────────────────────────────────────────────
+
+function filesizeformat(bytes) {
+    if (!bytes) return '-';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let v = bytes, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function refreshTable() {
+    const params = new URLSearchParams(window.location.search);
+    fetch(`/api/entries?${params}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) return;
+            const tbody = document.getElementById('entries-body');
+            if (!tbody) return;
+            tbody.innerHTML = data.map(e => {
+                const isTerminal = e.Status === 'finished' || (e.Status || '').startsWith('failed');
+                const durationCell = (isTerminal || !e.StartTime)
+                    ? (e.Duration || '-')
+                    : `<span class="live-duration" data-start="${e.StartTime}">-</span>`;
+                return `<tr data-rowkey="${e.RowKey}" data-uploadid="${e.UploadId || ''}">
+                    <td class="col-check"><input type="checkbox" class="row-check" value="${e.RowKey}" ${selectedKeys.has(e.RowKey) ? 'checked' : ''}></td>
+                    <td class="filename">${e.ZipfileBasename || '-'}</td>
+                    <td class="hostname">${e.Extracted_Hostname || '-'}</td>
+                    <td>${e.Source || '-'}</td>
+                    <td>${e.StartTime || '-'}</td>
+                    <td>${durationCell}</td>
+                    <td title="${e.Status || 'new'}"><span class="badge badge-${(e.Status || 'new').split(' ')[0].toLowerCase()}">${e.Status || 'new'}</span></td>
+                    <td class="adx-cell" data-uploadid="${e.UploadId || ''}">${adxBadge(e.AdxStatus)}</td>
+                </tr>`;
+            }).join('');
+            restoreCheckboxes();
+            tickDurations();
+        })
+        .catch(() => {});
+}
+setInterval(refreshTable, 15000);
+
+// ── Detail drawer ──────────────────────────────────────────────────────────
+
+const drawer        = document.getElementById('detail-drawer');
+const drawerBackdrop = document.getElementById('drawer-backdrop');
+const drawerTitle   = document.getElementById('drawer-title');
+
+function openDrawer()  { drawer.classList.add('open'); }
+function closeDrawer() { drawer.classList.remove('open'); }
+
+document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+document.getElementById('tab-postprocessing').addEventListener('change', function (e) {
+    const cb = e.target.closest('input[data-col]');
+    if (!cb) return;
+    document.querySelectorAll(`.col-${cb.dataset.col}`)
+        .forEach(el => { el.style.display = cb.checked ? 'table-cell' : ''; });
+});
+
+document.getElementById('tab-uploads').addEventListener('input', function (e) {
+    if (!e.target.classList.contains('uploads-filter')) return;
+    const q = e.target.value.toLowerCase();
+    document.querySelectorAll('#tab-uploads .detail-table tbody tr').forEach(row => {
+        const filename = row.querySelector('td')?.textContent?.toLowerCase() || '';
+        row.style.display = q && !filename.includes(q) ? 'none' : '';
+    });
+});
+
+document.querySelectorAll('.drawer-tab').forEach(btn => {
+    btn.addEventListener('click', function () {
+        document.querySelectorAll('.drawer-tab').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        this.classList.add('active');
+        document.getElementById('tab-' + this.dataset.tab).classList.add('active');
+    });
+});
+
+function fmt(val) {
+    if (val === null || val === undefined || val === '') return '-';
+    if (typeof val === 'boolean') return val ? 'Yes' : 'No';
+    return String(val);
+}
+
+function fmtBytes(bytes) {
+    if (!bytes) return '-';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let v = bytes, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function renderSummary(data) {
+    const s = (data.summary || [])[0] || {};
+    const rows = [
+        ['Filename',   s.zipfile_basename],
+        ['Upload ID',  s.uploadid],
+        ['Session',    s.sessionid],
+        ['Source',     s.source_name],
+        ['Hostname',   s.hostname],
+        ['Size',       fmtBytes(s.zipfile_size)],
+        ['Encrypted',  s.is_encrypted],
+        ['Started',    s.starttime_script],
+        ['Finished',   data.finished],
+        ['Duration',   s.duration_in_sec != null ? s.duration_in_sec.toFixed(1) + 's' : null],
+    ];
+    return `<dl class="detail-grid">${rows.map(([k, v]) => {
+        const text = fmt(v);
+        return `<dt>${k}</dt><dd title="${text}">${text}</dd>`;
+    }).join('')}</dl>`;
+}
+
+function renderPostprocessing(data) {
+    const items = data.postprocessing || [];
+    if (!items.length) return '<p class="drawer-empty">No post-processing data.</p>';
+
+    const optionalCols = [
+        { key: 'cmd', label: 'Command' },
+    ];
+
+    const toggles = optionalCols.map(c =>
+        `<label class="col-toggle"><input type="checkbox" data-col="${c.key}"> ${c.label}</label>`
+    ).join('');
+
+    const rows = items.map(p => {
+        const artifact = fmt(p.artifact);
+        const basename = fmt(p.basename);
+        const size     = fmtBytes(p.size);
+        const error    = fmt(p.error);
+        const duration = p.duration_in_sec != null ? p.duration_in_sec.toFixed(1) + 's' : '-';
+        const cmd = fmt(p.cmd);
+        return `<tr>
+            <td title="${artifact}">${artifact}</td>
+            <td title="${basename}">${basename}</td>
+            <td title="${size}">${size}</td>
+            <td>${p.success ? '✓' : '✗'}</td>
+            <td title="${duration}">${duration}</td>
+            <td title="${error}">${error}</td>
+            <td class="col-opt col-cmd" title="${cmd}">${cmd}</td>
+        </tr>`;
+    }).join('');
+
+    return `<div class="col-toggles">Show: ${toggles}</div>
+        <div class="detail-table-wrap"><table class="detail-table">
+        <thead><tr>
+            <th>Artifact</th><th>Basename</th><th>Size</th><th>Success</th><th>Duration</th><th>Error</th>
+            <th class="col-opt col-cmd">Command</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+function renderUploads(data) {
+    const items = data.uploads || [];
+    if (!items.length) return '<p class="drawer-empty">No upload data.</p>';
+
+    const uploaded = items.filter(u => !u.ignored_upload && !u.upload_error && u.upload_initiated);
+    const failed   = items.filter(u => !u.ignored_upload && (u.upload_error || !u.upload_initiated));
+    const ignored  = items.filter(u => u.ignored_upload);
+
+    function group(cls, label, open, headings, rows) {
+        if (!rows.length) return '';
+        return `<details class="upload-group ${cls}"${open ? ' open' : ''}>
+            <summary class="upload-group-header">
+                <span>${label}</span><span class="group-count">${rows.length}</span>
+            </summary>
+            <div class="detail-table-wrap"><table class="detail-table">
+                <thead><tr>${headings.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+                <tbody>${rows.join('')}</tbody>
+            </table></div>
+        </details>`;
+    }
+
+    const uploadedRows = uploaded.map(u => {
+        const file    = fmt(u.location_in_zip);
+        const size    = fmtBytes(u.size);
+        const proc    = fmt(u.was_postprocessed_with);
+        const dur     = u.upload_duration_in_sec != null ? u.upload_duration_in_sec.toFixed(1) + 's' : '-';
+        return `<tr>
+            <td title="${file}">${file}</td>
+            <td title="${size}">${size}</td>
+            <td title="${proc}">${proc}</td>
+            <td title="${dur}">${dur}</td>
+        </tr>`;
+    });
+
+    const failedRows = failed.map(u => {
+        const file  = fmt(u.location_in_zip);
+        const size  = fmtBytes(u.size);
+        const error = fmt(u.upload_error);
+        return `<tr>
+            <td title="${file}">${file}</td>
+            <td title="${size}">${size}</td>
+            <td title="${error}">${error}</td>
+        </tr>`;
+    });
+
+    const ignoredRows = ignored.map(u => {
+        const file    = fmt(u.location_in_zip);
+        const size    = fmtBytes(u.size);
+        const reason  = fmt(u.ignored_reason);
+        const pattern = fmt(u.ignored_pattern);
+        return `<tr>
+            <td title="${file}">${file}</td>
+            <td title="${size}">${size}</td>
+            <td title="${reason}">${reason}</td>
+            <td title="${pattern}">${pattern}</td>
+        </tr>`;
+    });
+
+    return `<input type="search" class="uploads-filter" placeholder="Filter files…">` + [
+        group('group-failed',   'Failed',   !!failed.length,  ['File', 'Size', 'Error'],                  failedRows),
+        group('group-ignored',  'Ignored',  false,            ['File', 'Size', 'Reason', 'Pattern'],       ignoredRows),
+        group('group-uploaded', 'Uploaded', false,            ['File', 'Size', 'Postprocessed', 'Upload duration'], uploadedRows),
+    ].join('');
+}
+
+function renderLogs(data) {
+    const items = data.logs || [];
+    if (!items.length) return '<p class="drawer-empty">No log data available.</p>';
+
+    const levelClass = { ERROR: 'log-lvl-error', WARNING: 'log-lvl-warning', WARN: 'log-lvl-warning', INFO: 'log-lvl-info', DEBUG: 'log-lvl-debug' };
+
+    const rows = items.map(e => {
+        const lvl = (e.level || '').toUpperCase();
+        const cls = levelClass[lvl] || '';
+        return `<tr>
+            <td class="log-ts">${fmt(e.timestamp)}</td>
+            <td><span class="log-level ${cls}">${lvl}</span></td>
+            <td class="log-msg">${fmt(e.message)}</td>
+        </tr>`;
+    }).join('');
+
+    return `<div class="detail-table-wrap"><table class="detail-table">
+        <thead><tr><th style="width:145px">Time</th><th style="width:80px">Level</th><th>Message</th></tr></thead>
+        <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+// ── Column resizing ───────────────────────────────────────────────────────────
+
+(function initColumnResize() {
+    const table = document.querySelector('.table-wrap table');
+    if (!table) return;
+
+    const cols    = Array.from(table.querySelectorAll('colgroup col'));
+    const headers = Array.from(table.querySelectorAll('thead th'));
+    const STORE   = 'cycas-col-widths';
+
+    function saveWidths() {
+        localStorage.setItem(STORE, JSON.stringify(cols.map(c => c.style.width)));
+    }
+
+    // Restore saved widths or snapshot current computed widths as px baseline
+    const saved = JSON.parse(localStorage.getItem(STORE) || 'null');
+    if (saved && saved.length === cols.length) {
+        saved.forEach((w, i) => { cols[i].style.width = w; });
+    } else {
+        const tableW = table.offsetWidth;
+        headers.forEach((th, i) => { cols[i].style.width = (th.offsetWidth / tableW * 100).toFixed(2) + '%'; });
+    }
+
+    // Add a drag handle to every header except the checkbox col (0) and last col
+    headers.forEach((th, i) => {
+        if (i === 0 || i === headers.length - 1) return;
+
+        const handle = document.createElement('div');
+        handle.className = 'col-resize-handle';
+        th.appendChild(handle);
+
+        handle.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            const startX    = e.clientX;
+            const tableW    = table.offsetWidth;
+            const startW    = headers[i].offsetWidth;
+            const startNext = headers[i + 1].offsetWidth;
+
+            th.classList.add('col-resize-active');
+            document.body.style.cursor     = 'col-resize';
+            document.body.style.userSelect = 'none';
+
+            function onMove(e) {
+                const delta  = e.clientX - startX;
+                const newW   = Math.max(40, startW + delta);
+                const newNxt = Math.max(40, startNext - delta);
+                cols[i    ].style.width = (newW   / tableW * 100).toFixed(2) + '%';
+                cols[i + 1].style.width = (newNxt / tableW * 100).toFixed(2) + '%';
+            }
+
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                th.classList.remove('col-resize-active');
+                document.body.style.cursor     = '';
+                document.body.style.userSelect = '';
+                saveWidths();
+            }
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    });
+})();
+
+// ── Truncation tooltips ───────────────────────────────────────────────────────
+
+document.querySelector('.table-wrap')?.addEventListener('mouseover', function (e) {
+    const td = e.target.closest('tbody td');
+    if (!td || td.classList.contains('col-check')) return;
+    // Only set if not already present and content is clipped
+    if (!td.hasAttribute('title') && td.scrollWidth > td.clientWidth) {
+        td.setAttribute('title', td.textContent.trim());
+    }
+});
+
+// ── Row click → detail drawer ─────────────────────────────────────────────────
+
+let currentUploadId = null;
+
+document.getElementById('entries-body').addEventListener('click', function (e) {
+    if (e.target.closest('.col-check')) return;
+    const row = e.target.closest('tr[data-uploadid]');
+    if (!row) return;
+
+    const uploadId = row.dataset.uploadid;
+    currentUploadId = uploadId;
+    const filename = row.querySelector('.filename')?.textContent?.trim() || uploadId || '-';
+
+    drawerTitle.textContent = filename;
+    document.getElementById('tab-summary').innerHTML        = '<p class="drawer-loading">Loading…</p>';
+    document.getElementById('tab-postprocessing').innerHTML = '';
+    document.getElementById('tab-uploads').innerHTML        = '';
+    document.getElementById('tab-logs').innerHTML           = '';
+
+    // Reset to Summary tab
+    document.querySelectorAll('.drawer-tab').forEach((b, i) => b.classList.toggle('active', i === 0));
+    document.querySelectorAll('.tab-panel').forEach((p, i) => p.classList.toggle('active', i === 0));
+
+    openDrawer();
+
+    if (!uploadId) {
+        document.getElementById('tab-summary').innerHTML = '<p class="drawer-empty">No status data available for this entry.</p>';
+        return;
+    }
+
+    fetch(`/api/status/${encodeURIComponent(uploadId)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.pending) {
+                document.getElementById('tab-summary').innerHTML = '<p class="drawer-empty">Status not (yet) available.</p>';
+                return;
+            }
+            if (data.error) {
+                document.getElementById('tab-summary').innerHTML = `<p class="drawer-empty">Could not load status details.</p>`;
+                return;
+            }
+            document.getElementById('tab-summary').innerHTML        = renderSummary(data);
+            document.getElementById('tab-postprocessing').innerHTML = renderPostprocessing(data);
+            document.getElementById('tab-uploads').innerHTML        = renderUploads(data);
+            document.getElementById('tab-logs').innerHTML           = renderLogs(data);
+        })
+        .catch(() => {
+            document.getElementById('tab-summary').innerHTML = '<p class="drawer-empty">Failed to load status data.</p>';
+        });
+});
+</script>
+{% endblock %}

@@ -25,6 +25,7 @@ class Status:
     DOWNLOADING = 'downloading'
     DOWNLOADED = 'downloaded'
     DOWNLOADFAILED = 'downloadfailed'
+    POSTPROCESSING = 'postprocessing'
     UPLOADING = 'uploading'
     FAILED = 'failed'
     QUEUED = 'queued'
@@ -33,21 +34,17 @@ class Status:
 
 def update_status_in_log(managers, Config, processing_status, starttime, status_data):
     '''
-    Update the processing status in the Table Storage log.
-
-    Calls the Table Storage manager to update the status entry if Table
-    Storage logging is enabled in configuration.
-
-    Args:
-        managers: Container holding authenticated service managers.
-        Config: variables defined in .env file
-        processing_status (str): New status value to store.
-        status_data (dict): Metadata used to build the log entity.
+    Update the processing status in Table Storage and write a live snapshot
+    blob so the webapp can show progress before the run completes.
     '''
 
     if Config.blob_logtable_enabled:
-
         managers.table.update_status_in_log(processing_status, starttime, status_data)
+
+    if Config.blob_storageaccount_enabled:
+        upload_id = (status_data.get('summary') or [{}])[0].get('uploadid', '')
+        if upload_id:
+            managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', status_data)
 
 def write_logentry_if_new(managers, Config, processing_status, status_data):
     '''
@@ -98,11 +95,11 @@ def determine_if_needs_processing(managers, Config, zipfile):
     
     status = status_all.get('Status')
 
-    if status in [Status.FAILED, Status.NEW, Status.UNQUEUED]:
+    if status in [Status.NEW, Status.UNQUEUED]:
         log.info(f'Should process. Status is: {status}')
         return True
     else:
-        log.debug('Is already processed or processing.')
+        log.debug(f'Skipping. Status is: {status}')
         return False
 
 def _prepare_dictionary_for_upload_to_adx(results_dict, dict_key):
@@ -132,34 +129,29 @@ def _prepare_dictionary_for_upload_to_adx(results_dict, dict_key):
 
     return output
 
-def upload_detailed_status_to_adx(managers, Config, results, tablename):
+def upload_detailed_status_to_adx(managers, Config, results):
     '''
     Upload detailed pipeline status results to Azure Data Explorer (ADX).
 
     When ADX ingestion is enabled, uploads the 'postprocessing', 'uploads',
     and 'summary' parts of the results dictionary to separate ADX tables
-    derived from the provided base table name.
+    configured via Config.
 
     Args:
         managers: Container holding authenticated service managers.
         results (dict): Results dictionary containing keys 'postprocessing',
             'uploads', and 'summary'.
-        tablename (str): Base table name used to generate table names for
-            detailed status ingestion.
     '''
 
     if Config.adx_cluster_enabled:
 
         dict_status = {
-
-            'uploads': tablename + '_uploads',
-            'summary': tablename + '_summary'
-
+            'uploads': Config.adx_status_table_uploads,
+            'summary': Config.adx_status_table_summary,
         }
 
         if results.get('postprocessing'):
-
-            dict_status['postprocessing'] = tablename + '_postprocessing'
+            dict_status['postprocessing'] = Config.adx_status_table_postprocessing
 
         for key, tablename in dict_status.items():
             results_prepared = _prepare_dictionary_for_upload_to_adx(results, key)

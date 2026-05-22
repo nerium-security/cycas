@@ -12,6 +12,7 @@ from azure.mgmt.storage.models import StorageAccountCreateParameters, Sku, Kind
 from pathlib import Path
 import logging as log
 import os
+import sys
 
 log = log.getLogger(__name__)
 
@@ -139,24 +140,6 @@ class BlobManager:
             log.debug(f'Error: {str(e)}', exc_info=True)
             sys.exit(1)
 
-    def set_metadata(self, container_name, blob_name, metadata):
-        '''
-        Set metadata on a blob.
-
-        Args:
-            container_name (str): Name of the container containing the blob.
-            blob_name (str): Name of the blob.
-            metadata (dict): Metadata key/value pairs to set.
-
-        '''
-
-        blob_client = self.get_client(container_name, blob_name)
-        try:
-            blob_client.set_blob_metadata(metadata)
-            log.info(f'Successfully set metadata for blob {blob_name} in container {container_name}')
-        except Exception as e:
-            log.error(f'Failed to set metadata for blob {blob_name} in container {container_name}. Error: {str(e)}', exc_info=True)
-
     def create_container(self, container_name):
         '''
         Create a container if possible.
@@ -174,39 +157,6 @@ class BlobManager:
             log.info(f'Successfully created container {container_name}')         
         except:
             pass
-
-    def upload(self, container_name, blob_name, data):
-        '''
-        Upload data as a blob to the specified container.
-
-        Args:
-            container_name (str): Name of the destination container.
-            blob_name (str): Name of the blob to create.
-            data: Data to upload. Typically bytes, a file-like object,
-                or any type accepted by `upload_blob()`.
-
-        Returns:
-            bool or None: Returns True if a '.log' blob upload fails and is
-            intentionally skipped. Returns False on upload failure for other
-            blobs. Returns None on successful upload.
-
-        Notes:
-            - The current implementation does not set `overwrite=True`, so
-            uploading an existing blob will raise and be treated as a failure.
-            - '.log' uploads are treated as optional and may be skipped.
-        '''
-
-        blob_client = self.get_client(container_name, blob_name)
-        try:
-            blob_client.upload_blob(data)
-            log.info(f'Successfully uploaded blob {blob_name} to container {container_name}')
-        except Exception as e:
-            if blob_name.endswith('.log'):
-                log.info(f'Skipped blob upload of {blob_name} to container {container_name}.' )
-                return True
-            else:
-                log.warning(f'Failed to upload blob {blob_name} to container {container_name}. Error: {str(e)}')
-                return False
 
     def delete(self, container_name, blob_name):
         '''
@@ -292,6 +242,96 @@ class BlobManager:
             
             log.error(f'Failed to download blob {blob_name} from container {container_name}. Error: {str(e)}', exc_info=True)
             return False
+
+    def upload_json(self, container_name, blob_name, data):
+        '''
+        Serialize a dict to JSON and upload it as a blob.
+
+        Datetimes are converted to ISO-8601 strings. Existing blobs are
+        overwritten so re-runs always reflect the latest pipeline output.
+
+        Args:
+            container_name (str): Target container name.
+            blob_name (str): Blob name (e.g. '<uploadid>.json').
+            data (dict): Data to serialize and upload.
+        '''
+        import json
+        from datetime import datetime
+
+        def _default(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            raise TypeError(f'Object of type {type(obj).__name__} is not JSON serializable')
+
+        payload = json.dumps(data, default=_default, indent=2).encode('utf-8')
+        blob_client = self.get_client(container_name, blob_name)
+        try:
+            blob_client.upload_blob(payload, overwrite=True)
+            log.info(f'Uploaded status JSON to {container_name}/{blob_name}')
+        except Exception as e:
+            log.error(f'Failed to upload status JSON to {container_name}/{blob_name}. Error: {e}')
+
+    def list_blobs_prefix(self, container_name, prefix):
+        '''Return blob names in container whose names start with prefix.'''
+        try:
+            container_client = self.get_container_client(container_name)
+            return [b.name for b in container_client.list_blobs(name_starts_with=prefix)]
+        except Exception as e:
+            log.warning(f'Could not list blobs in {container_name} with prefix {prefix!r}: {e}')
+            return []
+
+    def upload_text(self, container_name, blob_name, text):
+        '''Upload a UTF-8 string as a blob, overwriting any existing content.'''
+        blob_client = self.get_client(container_name, blob_name)
+        try:
+            blob_client.upload_blob(text.encode('utf-8'), overwrite=True)
+            log.info(f'Uploaded text blob to {container_name}/{blob_name}')
+        except Exception as e:
+            log.error(f'Failed to upload text blob to {container_name}/{blob_name}: {e}')
+
+    def read_text(self, container_name, blob_name):
+        '''Download a blob and return its content as a UTF-8 string, or None if not found.'''
+        from azure.core.exceptions import ResourceNotFoundError
+        blob_client = self.get_client(container_name, blob_name)
+        try:
+            return blob_client.download_blob().readall().decode('utf-8')
+        except ResourceNotFoundError:
+            log.info(f'Blob {container_name}/{blob_name} not found.')
+            return None
+        except Exception as e:
+            log.warning(f'Could not read {container_name}/{blob_name}: {e}')
+            return None
+
+    def read_json(self, container_name, blob_name):
+        '''Download a blob and parse it as JSON. Returns the dict, or None if the blob
+        does not exist or cannot be read.'''
+        import json
+        from azure.core.exceptions import ResourceNotFoundError
+        blob_client = self.get_client(container_name, blob_name)
+        try:
+            data = blob_client.download_blob().readall()
+            return json.loads(data)
+        except ResourceNotFoundError:
+            log.info(f'Blob {container_name}/{blob_name} not found.')
+            return None
+        except Exception as e:
+            log.warning(f'Could not read {container_name}/{blob_name}: {e}')
+            return None
+
+    def switch_to_account_key(self, subscription_id, resource_group, account_name):
+        '''Re-initialise the blob service client using the storage account key.
+
+        Useful during provisioning when the caller has ARM control-plane access
+        but the data-plane RBAC role has not yet been assigned or propagated.
+        '''
+        from azure.mgmt.storage import StorageManagementClient
+        mgmt = StorageManagementClient(self.credential, subscription_id)
+        keys = mgmt.storage_accounts.list_keys(resource_group, account_name)
+        self.blob_service_client = BlobServiceClient(
+            account_url=self.account_url,
+            credential=keys.keys[0].value,
+        )
+        log.info(f"Switched blob client to account-key auth for '{account_name}'.")
 
     def provision_storage_account(self, subscription_id, resource_group, location, account_name):
         '''

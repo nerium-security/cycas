@@ -36,6 +36,8 @@ class Config(BaseSettings):
     blob_storageaccount_enabled: bool
     blob_storageaccount_uri: str
     blob_container_input: str
+    blob_container_status: str
+    blob_container_config: str = 'config'
     blob_storageaccount_sas_enabled: bool
     blob_storageaccount_sas: str
     blob_logtable_enabled: bool
@@ -48,6 +50,13 @@ class Config(BaseSettings):
     adx_database_name: str
     adx_cluster_uri: str
     adx_cluster_ingestion_uri: str
+    adx_table_prefix: str = ''
+    adx_status_table_summary: str = '_status_summary'
+    adx_status_table_uploads: str = '_status_uploads'
+    adx_status_table_postprocessing: str = '_status_postprocessing'
+    adx_ingestion_batching_timespan: str
+    adx_ingestion_batching_max_items: int
+    adx_ingestion_batching_max_size_mb: int
     keyvault_enabled: bool
     keyvault_url: str
     keyvault_passwordlocation: str
@@ -81,7 +90,6 @@ class Config(BaseSettings):
     velociraptor_definitions: str
     velociraptor_outputformat: str
     velociraptor_artifactslist: str
-    velociraptor_postprocess: str
     velociraptor_duration: int
 
 def load_config(env_file: str = None) -> Config:

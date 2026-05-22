@@ -1,8 +1,8 @@
 import logging
-from core.utils.log import setup_logging
+from core.utils.log import setup_logging, InMemoryLogHandler
 from core.pipeline.orchestrator import init, run_zip_processor
 from core.utils.zip import list_zipfiles, list_zipfiles_with_sizes
-from core.utils.status import Status, write_logentry_if_new, determine_if_needs_processing, add_summary_info_to_status, update_status_in_log
+from core.utils.status import Status, write_logentry_if_new, determine_if_needs_processing, add_summary_info_to_status, update_status_in_log, upload_detailed_status_to_adx
 from core.utils.config import load_config
 from core.utils.summary import define_results_dict
 from core.utils.queue import update_status_unqueued, decode_message
@@ -75,11 +75,6 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
 
     for message in messagequeue:
 
-        if message.dequeue_count > Config.var_max_retry:
-            if mode == 'manual':
-                managers.queue.delete_message(message)
-            continue
-
         items = decode_message(message)  # always a list of {triagepackage, source_name}
 
         all_succeeded = True
@@ -91,16 +86,25 @@ def run_azurefunction_processor(mode: str, messagequeue: Optional[object] = None
             results = define_results_dict()
             results = add_summary_info_to_status(results, zipfile, sessionid, source_name, start)
 
-            update_status_unqueued(managers, Config, zipfile, start, results)
+            log_handler = InMemoryLogHandler()
+            logging.getLogger().addHandler(log_handler)
+            results['logs'] = log_handler.records
 
             try:
-                run_zip_processor(managers, source_name, zipfile, sessionid, Config)
+                update_status_unqueued(managers, Config, zipfile, start, results)
+                run_zip_processor(managers, source_name, zipfile, sessionid, Config, _log_handler=log_handler)
             except Exception as e:
-                log.error(
-                    f'Processing failed for {zipfile} '
-                    f'(attempt {message.dequeue_count}/{Config.var_max_retry}): {e}'
-                )
+                log.error(f'Processing failed for {zipfile}: {e}')
+                update_status_in_log(managers, Config, Status.FAILED, start, results)
+                if results.get('summary'):
+                    results['summary'][0]['duration_in_sec'] = (datetime.now() - start).total_seconds()
+                upload_id = results['summary'][0].get('uploadid', '') if results.get('summary') else ''
+                if upload_id:
+                    managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)
+                upload_detailed_status_to_adx(managers, Config, results)
                 all_succeeded = False
+            finally:
+                logging.getLogger().removeHandler(log_handler)
 
         if mode == 'manual' and all_succeeded:
             managers.queue.delete_message(message)

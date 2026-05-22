@@ -48,45 +48,6 @@ def is_zip_encrypted(zipfile):
     except:
         return None
 
-def get_hostname_from_filename(fullpath):
-    ''' 
-    Extracts the hostname from filename using regex. 
-    
-    Examples of hostnames that are extracted:
-    
-    - Collection-HOSTNAME-2024-03-01T16_10_46Z.zip
-    - HOSTNAME-2025-03-01T16_10_46Z.zip
-    - LAPTOP-DC-C.65e548a6aa01faa1-F.D3DN1LABPD0OA
-
-    Args:
-        fullpath (str): Filename or full path to parse.
-
-    Returns:
-        str: Extracted hostname if matched, otherwise an empty string.
-    '''
-
-    if fullpath:
-        if fullpath.upper().startswith("H."):
-            return ''
-        elif fullpath.upper().startswith("Hunt H."):
-            return ''
-
-    pattern = re.compile(
-        r'(?:collection-)?'                                                     # optional prefix
-        r'([A-Z0-9-]+?)'                                                        # hostname
-        r'(?=_|-[A-Z]\.[0-9a-f]{6,}|-C\.|-202[0-9]-[0-9]{2}-[0-9]{2}T|\.|$)',   # stop here (lookahead)
-        re.IGNORECASE
-    )
-
-    if fullpath:
-        match = pattern.search(fullpath)
-        if match:
-            match = match.group(1)
-            log.info(f'Extracted hostname from zipfilename: {match}')
-            return match
-        else:
-            return ''
-
 def verify_if_password_works(zipfile, zip_password):
     '''
     Verify whether a password can decrypt at least one entry in an encrypted ZIP.
@@ -345,27 +306,6 @@ def list_files_in_zip(zip_path, password=None):
         log.error(f'Unexpected error while listing zip: {e}')
     
     return []
-
-def find_computername(filename):
-    '''
-    Extract a computer name from a filename of the form 'Collection-<name>-YYYY-MM-DD'.
-
-    Args:
-        filename (str): Filename to parse.
-
-    Returns:
-        str: Extracted computer name if matched, otherwise 'ComputernameNotFound'.
-    '''
-
-    match = re.search(r'Collection-(.*)-\d{4}-\d{2}-\d{2}', filename)
-
-    if match:
-        computer_name = match.group(1)
-        log.info(f'Computer name: {computer_name}')
-        return computer_name
-    else:
-        log.warning('Computer name not found.')
-        return 'ComputernameNotFound'
 
 def get_password(zipfile, passwords):
     '''

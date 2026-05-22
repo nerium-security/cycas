@@ -228,7 +228,7 @@ class FunctionsManager:
                         },
                         'scaleAndConcurrency': {
                             'instanceMemoryMB': instance_memory_mb,
-                            'maximumInstanceCount': 100,
+                            'maximumInstanceCount': 500,
                         },
                         'runtime': {'name': 'python', 'version': '3.13'},
                     },
@@ -252,7 +252,7 @@ class FunctionsManager:
     # RBAC
     # ------------------------------------------------------------------
 
-    def _assign_role(self, scope, principal_id, role_id):
+    def _assign_role(self, scope, principal_id, role_id, principal_type='ServicePrincipal'):
         role_def = (
             f'/subscriptions/{self.subscription_id}'
             f'/providers/Microsoft.Authorization/roleDefinitions/{role_id}'
@@ -263,7 +263,7 @@ class FunctionsManager:
                 RoleAssignmentCreateParameters(
                     role_definition_id=role_def,
                     principal_id=principal_id,
-                    principal_type='ServicePrincipal',
+                    principal_type=principal_type,
                 ),
             )
         except Exception as e:
@@ -272,7 +272,7 @@ class FunctionsManager:
             else:
                 raise
 
-    def assign_data_storage_roles(self, resource_group, storage_account, principal_id):
+    def assign_data_storage_roles(self, resource_group, storage_account, principal_id, principal_type='ServicePrincipal'):
         '''
         Grant Blob, Queue, and Table Data Contributor roles on a storage account
         to a managed identity principal.
@@ -283,7 +283,7 @@ class FunctionsManager:
             f'/providers/Microsoft.Storage/storageAccounts/{storage_account}'
         )
         for role in (ROLE_BLOB_DATA_CONTRIBUTOR, ROLE_QUEUE_DATA_CONTRIBUTOR, ROLE_TABLE_DATA_CONTRIBUTOR):
-            self._assign_role(scope, principal_id, role)
+            self._assign_role(scope, principal_id, role, principal_type)
         log.info(f"Storage roles assigned to '{principal_id}' on '{storage_account}'.")
 
     def assign_keyvault_roles(self, resource_group, keyvault_name, principal_id):

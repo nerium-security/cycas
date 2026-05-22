@@ -11,8 +11,10 @@ sources (blob, sas, sftp, localfolder) into Azure Data Explorer (ADX). It:
     - Uploads detailed run status to ADX
 '''
 
+import shutil
+import tempfile
 from core.utils.files import split_jsonl_by_size, delete_file, get_filesize_bytes
-from core.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, get_hostname_from_filename
+from core.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles
 from core.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
 from core.utils.summary import define_results_upload_dict, define_results_dict, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file
 from core.utils.misc import should_download, prepare_and_send_webhook_message
@@ -24,7 +26,7 @@ import logging as log
 
 log = log.getLogger(__name__)
 
-def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
+def run_zip_processor(managers, source_name, zipfile, sessionid, Config, _log_handler=None):
     '''
     Process a single zipfile end-to-end.
 
@@ -42,6 +44,9 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
     start = datetime.now()
 
     results = define_results_dict()
+
+    if _log_handler is not None:
+        results['logs'] = _log_handler.records
 
     results = add_summary_info_to_status(results, zipfile, sessionid, source_name, start)
     
@@ -61,11 +66,23 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
 
 
     # ----------------------------------------------------------------------
+    # Log available disk size
+    # ----------------------------------------------------------------------
+    stat = os.statvfs('/tmp')
+    free_mb  = (stat.f_bavail * stat.f_frsize) // (1024 * 1024)
+    total_mb = (stat.f_blocks * stat.f_frsize) // (1024 * 1024)
+    log.info(f'Disk space before processing {os.path.basename(zipfile)}: {free_mb} MB free of {total_mb} MB total')
+
+
+    # ----------------------------------------------------------------------
     # Download zip file
     # ----------------------------------------------------------------------
     if should_download(source_name):
 
         zipfile = _download_zip(managers, Config, source_name, zipfile, sessionid, start, results)
+
+        if zipfile and results.get('summary'):
+            results['summary'][0]['zipfile_size'] = os.path.getsize(zipfile)
 
 
     # ----------------------------------------------------------------------
@@ -87,8 +104,7 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
         zip_password, extracted_zip = get_password_from_env_or_prompt(source_name, unextracted_zip)
 
         if not zip_password:
-            log.info('Password false. Skipping zip.')
-            return
+            raise RuntimeError('ZIP is encrypted but no password could be retrieved. Check Key Vault connectivity and secret name.')
 
     zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
 
@@ -97,20 +113,23 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
     # ----------------------------------------------------------------------
     results = postprocess_velociraptor_and_upload(managers,
                                                   Config,
-                                                  extracted_zip, 
+                                                  extracted_zip,
                                                   zipfilecontent,
-                                                  results
+                                                  results,
+                                                  start
                                                   )
-    
+
     # ----------------------------------------------------------------------
     # Extract jsons from zip and upload
     # ----------------------------------------------------------------------
+    update_status_in_log(managers, Config, Status.UPLOADING, start, results)
+
     results = extract_all_json_from_zip_and_upload(managers,
                                                    Config,
-                                                   extracted_zip, 
-                                                   extract_path, 
-                                                   zip_password, 
-                                                   zipfilecontent, 
+                                                   extracted_zip,
+                                                   extract_path,
+                                                   zip_password,
+                                                   zipfilecontent,
                                                    results
                                                    )
 
@@ -122,11 +141,20 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config):
 
     update_status_in_log(managers, Config, Status.FINISHED, start, results)
 
-    upload_detailed_status_to_adx(managers, Config, results, tablename='_status')
+    if results.get('summary'):
+        results['summary'][0]['duration_in_sec'] = (datetime.now() - start).total_seconds()
+
+    upload_id = results['summary'][0].get('uploadid', '')
+    if upload_id:
+        managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)
+
+    upload_detailed_status_to_adx(managers, Config, results)
 
     prepare_and_send_webhook_message(Config.var_webhook_url, results)
 
-def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfilecontent, results):
+    log.info(f'Processing of {os.path.basename(zipfile)} finished.')
+
+def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfilecontent, results, start):
     '''
     Post-process raw artifacts in a triage zip using Velociraptor and upload outputs to ADX.
 
@@ -160,6 +188,7 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
     if not Config.velociraptor_enabled:
         return results
 
+    update_status_in_log(managers, Config, Status.POSTPROCESSING, start, results)
 
     # ----------------------------------------------------------------------
     # Loading config for Velociraptor
@@ -172,84 +201,122 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
     unzip_dir = Config.var_unzip_directory
     outputformat = Config.velociraptor_outputformat
     artifactslist = Config.velociraptor_artifactslist
-    postprocess_var = Config.velociraptor_postprocess
     velcociraptor_duration = Config.velociraptor_duration
 
     if not zip_contains_raw_artifacts(zipfilecontent):
         return results
 
-
     # ----------------------------------------------------------------------
-    # Downloading Velociraptor, build remap, and find hostname in SYSTEM
+    # Sync Velociraptor definitions from blob (blob-first, local fallback)
     # ----------------------------------------------------------------------
-    download_velociraptor(binary, url)
+    tmp_definitions = None
+    if Config.blob_storageaccount_enabled:
+        blobs = managers.blob.list_blobs_prefix(Config.blob_container_config, 'definitions/')
+        if blobs:
+            tmp_definitions = tempfile.mkdtemp(prefix='cycas_definitions_')
+            for blob_name in blobs:
+                text = managers.blob.read_text(Config.blob_container_config, blob_name)
+                if text:
+                    dest = os.path.join(tmp_definitions, os.path.basename(blob_name))
+                    with open(dest, 'w', encoding='utf-8') as fh:
+                        fh.write(text)
+            definitions = tmp_definitions
 
-    remappingfile = build_remap(zipfile, 
-                                remappingdir,
-                                binary,
-                                definitions,
-                                unzip_dir)
-    
-    hostname = find_hostname(remappingfile,
-                                binary,
-                                definitions)
-    
+    try:
+        # ------------------------------------------------------------------
+        # Downloading Velociraptor, build remap, and find hostname in SYSTEM
+        # ------------------------------------------------------------------
+        download_velociraptor(binary, url)
 
-    # ----------------------------------------------------------------------
-    # Loading Velociraptor artifacts
-    # ----------------------------------------------------------------------    
-    artifacts_json = load_artifacts(artifactslist)
-    artifacts = select_artifacts(artifacts_json, postprocess_var)
+        remappingfile = build_remap(zipfile,
+                                    remappingdir,
+                                    binary,
+                                    definitions,
+                                    unzip_dir)
 
-    start_postprocessing = datetime.now()
+        hostname = find_hostname(remappingfile,
+                                    binary,
+                                    definitions)
 
-    add_hostname_to_status(results, start_postprocessing, hostname)
+        # ------------------------------------------------------------------
+        # Loading Velociraptor artifacts (blob-first, local fallback)
+        # ------------------------------------------------------------------
+        blob_artifacts = None
+        if Config.blob_storageaccount_enabled:
+            blob_artifacts = managers.blob.read_json(Config.blob_container_config, 'velociraptor_artifacts.json')
+        artifacts_json = load_artifacts(blob_artifacts if blob_artifacts is not None else artifactslist)
+        artifacts = select_artifacts(artifacts_json)
 
+        start_postprocessing = datetime.now()
 
-    # ----------------------------------------------------------------------
-    # Post-processing raw-artifacts with Velociraptor
-    # ----------------------------------------------------------------------   
-    for artifact in artifacts:
+        add_hostname_to_status(results, start_postprocessing, hostname)
 
-        result_postprocess = postprocess(hostname, 
-                                            artifact, 
-                                            zipfile, 
-                                            definitions, 
-                                            unzip_dir, 
-                                            binary, 
-                                            outputformat,
-                                            remappingfile,
-                                            velcociraptor_duration)
+        # ------------------------------------------------------------------
+        # Post-processing raw-artifacts with Velociraptor
+        # ------------------------------------------------------------------
+        for artifact in artifacts:
 
-        results['postprocessing'].append(result_postprocess)
-        outputfile_path = result_postprocess.get('fullpath')
-        result_postprocess.pop('fullpath', None)
-        result_upload = define_results_upload_dict()
-        
-        result_upload.update(_upload_file_to_adx(managers, Config, outputfile_path))
+            update_status_in_log(managers, Config, artifact, start, results)
 
-        delete_file(outputfile_path)
-        
-        result_upload['was_postprocessed_with'] = artifact
-        results['uploads'].append(result_upload)
-        
-    duration = get_duration_from_timespan(start_postprocessing)
+            result_postprocess = postprocess(hostname,
+                                                artifact,
+                                                zipfile,
+                                                definitions,
+                                                unzip_dir,
+                                                binary,
+                                                outputformat,
+                                                remappingfile,
+                                                velcociraptor_duration)
 
-    if Config.adx_cluster_enabled:
+            results['postprocessing'].append(result_postprocess)
+            outputfile_path = result_postprocess.get('fullpath')
+            logfile_path    = result_postprocess.pop('logfile', None)
+            result_postprocess.pop('fullpath', None)
+            result_upload = define_results_upload_dict()
 
-        log.info(f'Processing and uploading all post-processed artifacts took {duration}..')
+            uploadid = results['summary'][0].get('uploadid')
 
-    else:
-        log.info(f'Post-processing all artifacts took {duration}..')
-    
+            if Config.adx_cluster_enabled and outputfile_path:
+                managers.adx.add_hostname_to_file(outputfile_path, hostname, zipfile, uploadid)
+
+            result_upload.update(_upload_file_to_adx(managers, Config, outputfile_path))
+
+            delete_file(outputfile_path)
+
+            if logfile_path and uploadid:
+                artifact_name = artifact.split('(')[0].strip()
+                try:
+                    managers.blob.upload_text(
+                        Config.blob_container_status,
+                        f'logs/{uploadid}/{artifact_name}.log',
+                        open(logfile_path).read(),
+                    )
+                except Exception as exc:
+                    log.warning(f'Could not upload logfile for {artifact_name}: {exc}')
+                delete_file(logfile_path)
+
+            result_upload['was_postprocessed_with'] = artifact
+            results['uploads'].append(result_upload)
+
+        duration = get_duration_from_timespan(start_postprocessing)
+
+        if Config.adx_cluster_enabled:
+            log.info(f'Processing and uploading all post-processed artifacts took {duration}..')
+        else:
+            log.info(f'Post-processing all artifacts took {duration}..')
+
+    finally:
+        if tmp_definitions:
+            shutil.rmtree(tmp_definitions, ignore_errors=True)
+
     return results
 
 def extract_all_json_from_zip_and_upload(managers,
                                          Config,
-                                         extracted_zip, 
-                                         extract_path, 
-                                         zip_password, 
-                                         zipfilecontent, 
+                                         extracted_zip,
+                                         extract_path,
+                                         zip_password,
+                                         zipfilecontent,
                                          results):
     '''
     Extract JSON and JSONL files from a zip archive and initiate ADX ingestion.
@@ -273,11 +340,14 @@ def extract_all_json_from_zip_and_upload(managers,
 
     # ----------------------------------------------------------------------
     # Initilializing the extraction
-    # ----------------------------------------------------------------------  
+    # ----------------------------------------------------------------------
     ignorelist = load_ignore_list(Config.var_location_ignorelist)
-    
+
+    hostname = None
+    uploadid = None
     if Config.adx_cluster_enabled:
         hostname = results['summary'][0].get('hostname')
+        uploadid = results['summary'][0].get('uploadid')
 
     # ----------------------------------------------------------------------
     # Extract file by file, add hostname to file, and upload jsons
@@ -300,7 +370,7 @@ def extract_all_json_from_zip_and_upload(managers,
             continue
 
         if hostname:
-            upload_dict.update(managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip))
+            upload_dict.update(managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip, uploadid))
 
             MAX_ADX_UPLOAD_SIZE = 6_442_450_944  # 6 GB
 

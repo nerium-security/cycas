@@ -258,62 +258,46 @@ def find_hostname(remappingfile, binary, definitions):
 
 def load_artifacts(artifactslist):
     '''
-    Load the Velociraptor artifact configuration from a JSON file.
+    Load the Velociraptor artifact configuration.
+
+    Accepts either a file path (str) or an already-parsed dict.  Passing a
+    dict allows callers that fetched the file from blob storage to skip the
+    local filesystem entirely.
 
     Args:
-        artifactslist (str): Path to the JSON file containing artifact groups.
+        artifactslist (str | dict): Path to the JSON file, or a pre-parsed dict.
 
     Returns:
-        dict or None: Parsed JSON content if successful, otherwise None.
+        dict or None: Parsed artifact groups if successful, otherwise None.
     '''
-
+    if isinstance(artifactslist, dict):
+        log.info('Loaded artifact list from in-memory dict.')
+        return artifactslist
     try:
         with open(artifactslist, 'r') as f:
-            artifacts = json.load(f)    
+            artifacts = json.load(f)
             log.info(f'Successfully loaded artifact list from {artifactslist}')
         return artifacts
     except Exception as e:
         log.error(f'Could not load artifact list. Error: {e}')
-
         return None
 
-def select_artifacts(artifacts, postprocess_var):
+def select_artifacts(artifacts):
     '''
-    Select the artifacts to run based on a post-processing mode.
-
-    Supports selecting:
-        - 'essential': only the essential artifact list
-        - 'full': essential plus full artifact list
-        - any other value: empty selection
-
-    Ensures items are unique while preserving the original order.
+    Return the default artifact list, deduplicated while preserving order.
 
     Args:
-        artifacts (dict): Artifact configuration containing 'essential' and 'full' lists.
-        postprocess_var (str): Mode selector (e.g. 'essential' or 'full').
+        artifacts (dict): Artifact configuration containing a 'default' list.
 
     Returns:
         list[str]: Ordered list of unique artifact names to run.
     '''
-
-    essentials = artifacts['essential']
-    full = artifacts['full']
-
     seen = set()
     result = []
-
-    if postprocess_var == 'full':
-        items = essentials + full
-    elif postprocess_var == 'essential':
-        items = essentials
-    else:
-        items = []
-
-    for item in items:
+    for item in artifacts.get('default', []):
         if item not in seen:
             seen.add(item)
             result.append(item)
-
     return result
 
 def get_zipfilename(zipfile, unzip_dir):
@@ -432,9 +416,10 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
     if os.path.exists(outputfile) and filesize == 0:
         log.debug(f'Empty file: {outputfile}')
 
-    postprocess_results['cmd'] = cmd
+    postprocess_results['cmd'] = shlex.join(cmd)
     postprocess_results['size'] = filesize
     postprocess_results['fullpath'] = outputfile
+    postprocess_results['logfile'] = logfile if os.path.exists(logfile) else None
     postprocess_results['artifact'] = artifact
     postprocess_results['basename'] = os.path.basename(outputfile)
 

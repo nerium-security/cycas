@@ -12,31 +12,31 @@ Overview
 The pipeline runs in five phases. Each ZIP file passes through all of them
 independently, in parallel with other ZIPs.
 
-**Discover** — The pipeline connects to the configured input source (local
+**Discover** - The pipeline connects to the configured input source (local
 folder, blob, SAS, or SFTP) and lists all ZIP files that match the configured
 prefix and suffix filters. Each discovered ZIP is checked against Table Storage
 to determine whether it has already been processed. ZIPs that are new or
 eligible for retry are passed to the next phase.
 
-**Download** — For remote sources, the ZIP is fetched from blob storage or
+**Download** - For remote sources, the ZIP is fetched from blob storage or
 SFTP and saved to a local directory. For the local folder source this phase is
 skipped, as the files are already on disk. The status of each ZIP is updated
 in Table Storage throughout so that interrupted runs can be safely resumed.
 
-**Extract** — The ZIP is unpacked into a working directory. Encrypted archives
+**Extract** - The ZIP is unpacked into a working directory. Encrypted archives
 have their password retrieved automatically from Azure Key Vault. Velociraptor
 triage packages often contain a nested inner archive (``data.zip``), which is
 detected and extracted automatically.
 
-**Post-process** *(optional)* — If the ZIP contains raw forensic artifacts
+**Post-process** *(optional)* - If the ZIP contains raw forensic artifacts
 and Velociraptor post-processing is enabled, Velociraptor is invoked to run
 the configured artifact queries against the archive contents. The hostname is
 identified from the SYSTEM registry hive inside the ZIP. Each artifact query
 produces a structured output file (JSONL, JSON, or CSV) that is passed
 directly to the ingestion phase.
 
-**Ingest** — JSON and JSONL files — whether produced by Velociraptor or
-already present in the ZIP — are uploaded to Azure Data Explorer. Each record
+**Ingest** - JSON and JSONL files - whether produced by Velociraptor or
+already present in the ZIP - are uploaded to Azure Data Explorer. Each record
 is enriched with the hostname before upload. Target tables are created or
 updated automatically based on the file contents. A detailed status record is
 written to ADX on completion, and an optional webhook notification is sent.
@@ -52,7 +52,7 @@ Before any ZIP files are processed, ``init()`` runs once per session to
 create required local directories, generate a unique session ID, and
 authenticate all service managers (ADX, Table Storage, Key Vault, Blob, SFTP)
 based on the enabled flags in ``.env``. Only managers required for the
-selected input source are authenticated — disabled services are bypassed.
+selected input source are authenticated - disabled services are bypassed.
 
 The pipeline then connects to the configured source and lists all files
 matching ``VAR_ZIPFILE_PREFIX`` and ``VAR_ZIPFILE_SUFFIX``. Each discovered
@@ -72,7 +72,7 @@ For remote sources (blob, SAS, SFTP), the ZIP is fetched and saved to
 ``DOWNLOADFAILED`` on error. A failed download causes the ZIP to be skipped
 for the remainder of the run.
 
-For the local folder source no download occurs — the file is already on disk
+For the local folder source no download occurs - the file is already on disk
 and the pipeline moves directly to extraction.
 
 .. list-table::
@@ -101,8 +101,8 @@ Extract
 The ZIP is extracted to a subdirectory of ``VAR_UNZIP_DIRECTORY``. Two
 scenarios are handled:
 
-- **Unencrypted ZIP** — extracted directly.
-- **Encrypted ZIP** — the password is read from Key Vault when
+- **Unencrypted ZIP** - extracted directly.
+- **Encrypted ZIP** - the password is read from Key Vault when
   ``KEYVAULT_ENABLED=true``. If Key Vault is disabled, the password is
   read from the ``ZIP_PASSWORD`` environment variable or prompted
   interactively.
@@ -139,8 +139,8 @@ pipeline proceeds directly to ingestion.
 Ingest
 ~~~~~~
 
-Every JSON and JSONL file — whether produced by Velociraptor or already
-present in the ZIP — is processed in turn:
+Every JSON and JSONL file - whether produced by Velociraptor or already
+present in the ZIP - is processed in turn:
 
 - Files matching patterns in ``VAR_LOCATION_IGNORELIST`` are recorded in the
   status output but not uploaded.
@@ -156,8 +156,8 @@ If the table does not yet exist, it is created automatically with a schema
 inferred from the file contents. If it already exists, the schema is merged.
 
 Once all files have been ingested, the status is updated to ``FINISHED`` in
-Table Storage. A detailed status record — including per-file upload results,
-post-processing metadata, hostname, and timing — is written to the ``_status``
+Table Storage. A detailed status record - including per-file upload results,
+post-processing metadata, hostname, and timing - is written to the ``_status``
 table in ADX. If ``VAR_WEBHOOK_URL`` is set, a summary message is posted to
 that URL.
 
@@ -167,7 +167,7 @@ Concurrency
 
 The pipeline uses a ``ThreadPoolExecutor`` to process multiple ZIP files in
 parallel. The pool size is controlled by ``VAR_LOCALDEVICE_CONCURRENCY``.
-Each ZIP runs in its own thread and is fully isolated — a failure in one ZIP
+Each ZIP runs in its own thread and is fully isolated - a failure in one ZIP
 does not affect others. Set the value to ``1`` to process ZIPs sequentially,
 which is useful for debugging.
 
@@ -250,14 +250,14 @@ in KQL.
    * - Table
      - Description
    * - ``_status_summary``
-     - High-level overview of each archive — session, source, file size,
+     - High-level overview of each archive - session, source, file size,
        timing, and encryption. Use this as the starting point when
        investigating a specific ZIP.
    * - ``_status_uploads``
-     - Tracks every file considered for upload — what was uploaded to ADX,
+     - Tracks every file considered for upload - what was uploaded to ADX,
        what was post-processed by Velociraptor, and what was ignored and why.
    * - ``_status_postprocessing``
-     - Tracks each artifact query that was run — success, duration, and any
+     - Tracks each artifact query that was run - success, duration, and any
        errors returned. Use this to diagnose Velociraptor failures.
 
 An example of the ``_status_uploads`` is depicted here. It shows which files in the zip are uploaded, wich are ignored (and why), etc:

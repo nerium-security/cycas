@@ -1,0 +1,367 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Settings</h1>
+        <div class="subtitle">Manage Velociraptor artifact definitions and categories</div>
+    </div>
+</div>
+
+<!-- Upload -->
+<div class="artifact-upload-bar">
+    <span class="artifact-upload-label">Upload YAML definition:</span>
+    <input type="file" id="yaml-file-input" accept=".yaml,.yml">
+    <select id="yaml-category-select">
+        <option value="default">Default</option>
+        <option value="skip">Skip</option>
+    </select>
+    <button class="btn-upload" id="btn-upload-yaml">Upload</button>
+    <span id="upload-status" class="upload-status"></span>
+</div>
+
+<!-- Artifact sections -->
+<div class="artifact-sections" id="artifact-sections">
+    <div class="artifact-loading">Loading artifacts...</div>
+</div>
+
+<!-- Save bar -->
+<div class="save-bar">
+    <span id="save-status" class="save-status"></span>
+    <button class="btn-save-all" id="btn-save-all">Save all</button>
+</div>
+
+<!-- Edit YAML modal -->
+<div class="params-modal-backdrop" id="params-backdrop"></div>
+<div class="params-modal" id="params-modal">
+    <div class="params-modal-header">
+        <span id="params-modal-title"></span>
+        <button class="drawer-close" id="params-modal-close">&#x2715;</button>
+    </div>
+    <div class="params-modal-body yaml-modal-body" id="yaml-modal-body">
+        <textarea id="yaml-editor" class="yaml-editor" spellcheck="false"></textarea>
+    </div>
+    <div class="params-modal-footer">
+        <button class="btn-save-params" id="btn-save-params">Save YAML</button>
+        <span id="params-save-status" class="save-status"></span>
+    </div>
+</div>
+
+<script>
+// State: mirrors the JSON structure, mutated by user actions
+let state = { default: [], skip: [] };
+let currentParamsName = null;
+let dirty = false;
+const collapsed = { default: true, skip: true };
+
+function markDirty() {
+    if (dirty) return;
+    dirty = true;
+    const status = document.getElementById('save-status');
+    status.textContent = 'Unsaved changes';
+    status.className = 'save-status save-warn';
+    document.getElementById('btn-save-all').classList.add('btn-save-all--dirty');
+}
+
+function markClean() {
+    dirty = false;
+    document.getElementById('btn-save-all').classList.remove('btn-save-all--dirty');
+}
+
+window.addEventListener('beforeunload', e => {
+    if (dirty) { e.preventDefault(); }
+});
+
+const CATEGORIES = ['default', 'skip'];
+const CAT_LABELS  = { default: 'Default', skip: 'Skip' };
+
+// ── Load ──────────────────────────────────────────────────────────────────
+
+async function load() {
+    const resp = await fetch('/api/artifacts');
+    const data = await resp.json();
+    if (data.error) { showError(data.error); return; }
+    state = data;
+    render();
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+
+function render() {
+    const container = document.getElementById('artifact-sections');
+    container.innerHTML = CATEGORIES.map(cat => {
+        const otherCats   = CATEGORIES.filter(c => c !== cat);
+        const moveOptions = otherCats.map(c =>
+            `<option value="${c}">${CAT_LABELS[c]}</option>`
+        ).join('');
+        return `
+        <div class="artifact-section">
+            <div class="artifact-section-header section-toggle" data-cat="${cat}">
+                <label class="select-all-label" title="Select all" onclick="event.stopPropagation()">
+                    <input type="checkbox" class="select-all-cb" data-cat="${cat}">
+                </label>
+                <span>${CAT_LABELS[cat]}</span>
+                <span class="group-count">${state[cat].length}</span>
+                <span class="section-chevron">${collapsed[cat] ? '&#9654;' : '&#9660;'}</span>
+            </div>
+            <div class="bulk-action-bar" id="bulk-${cat}" style="display:none">
+                <span class="bulk-count" id="bulk-count-${cat}"></span>
+                ${otherCats.map(c => `
+                <button class="btn-bulk-move btn-artifact-action" data-from="${cat}" data-to="${c}">
+                    Move to ${CAT_LABELS[c]}
+                </button>`).join('')}
+                <button class="btn-bulk-remove btn-artifact-action" data-cat="${cat}">Remove</button>
+            </div>
+            <div class="artifact-list" id="list-${cat}" ${collapsed[cat] ? 'hidden' : ''}>
+                ${state[cat].length
+                    ? state[cat].map((a, i) => artifactRow(cat, i, a)).join('')
+                    : '<div class="artifact-empty">No artifacts</div>'
+                }
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function artifactRow(cat, idx, a) {
+    const editBtn = a.has_yaml
+        ? `<button class="btn-artifact-action btn-edit-params" data-name="${a.name}">Edit YAML</button>`
+        : `<span class="no-yaml">no YAML</span>`;
+    return `<div class="artifact-row" data-cat="${cat}" data-idx="${idx}">
+        <input type="checkbox" class="artifact-cb" data-cat="${cat}" data-idx="${idx}">
+        <span class="artifact-name" title="${a.entry}">${a.name}</span>
+        ${editBtn}
+        <button class="btn-artifact-action btn-remove" data-cat="${cat}" data-idx="${idx}">Remove</button>
+    </div>`;
+}
+
+// ── Events ────────────────────────────────────────────────────────────────
+
+function checkedIndices(cat) {
+    return Array.from(document.querySelectorAll(`#list-${cat} .artifact-cb:checked`))
+        .map(cb => parseInt(cb.dataset.idx));
+}
+
+function updateBulkBar(cat) {
+    const indices = checkedIndices(cat);
+    const bar     = document.getElementById(`bulk-${cat}`);
+    const count   = document.getElementById(`bulk-count-${cat}`);
+    if (indices.length > 0) {
+        bar.style.display = 'flex';
+        count.textContent = `${indices.length} selected —`;
+    } else {
+        bar.style.display = 'none';
+    }
+    const allCb = document.querySelector(`.select-all-cb[data-cat="${cat}"]`);
+    if (allCb) allCb.checked = indices.length === state[cat].length && state[cat].length > 0;
+
+    document.querySelectorAll(`#list-${cat} .artifact-row`).forEach(row => {
+        const cb = row.querySelector('.artifact-cb');
+        row.classList.toggle('selected', cb && cb.checked);
+    });
+}
+
+document.getElementById('artifact-sections').addEventListener('change', function (e) {
+    const cb = e.target.closest('.artifact-cb');
+    if (cb) { updateBulkBar(cb.dataset.cat); return; }
+
+    const allCb = e.target.closest('.select-all-cb');
+    if (allCb) {
+        const cat     = allCb.dataset.cat;
+        const checked = allCb.checked;
+        document.querySelectorAll(`#list-${cat} .artifact-cb`)
+            .forEach(c => { c.checked = checked; });
+        updateBulkBar(cat);
+    }
+});
+
+document.getElementById('artifact-sections').addEventListener('click', function (e) {
+    const toggle = e.target.closest('.section-toggle');
+    if (toggle && !e.target.closest('.select-all-label')) {
+        const cat  = toggle.dataset.cat;
+        collapsed[cat] = !collapsed[cat];
+        const list = document.getElementById(`list-${cat}`);
+        if (list) list.hidden = collapsed[cat];
+        const chevron = toggle.querySelector('.section-chevron');
+        if (chevron) chevron.innerHTML = collapsed[cat] ? '&#9654;' : '&#9660;';
+        return;
+    }
+
+    const removeBtn = e.target.closest('.btn-remove');
+    if (removeBtn) {
+        const cat = removeBtn.dataset.cat;
+        const idx = parseInt(removeBtn.dataset.idx);
+        state[cat].splice(idx, 1);
+        markDirty(); render();
+        return;
+    }
+
+    const bulkRemove = e.target.closest('.btn-bulk-remove');
+    if (bulkRemove) {
+        const cat     = bulkRemove.dataset.cat;
+        const indices = checkedIndices(cat).sort((a, b) => b - a);
+        indices.forEach(i => state[cat].splice(i, 1));
+        markDirty(); render();
+        return;
+    }
+
+    const bulkMove = e.target.closest('.btn-bulk-move');
+    if (bulkMove) {
+        const fromCat = bulkMove.dataset.from;
+        const toCat   = bulkMove.dataset.to;
+        const indices = checkedIndices(fromCat).sort((a, b) => b - a);
+        indices.forEach(i => {
+            const [item] = state[fromCat].splice(i, 1);
+            state[toCat].push(item);
+        });
+        markDirty(); render();
+        return;
+    }
+
+    const editBtn = e.target.closest('.btn-edit-params');
+    if (editBtn) {
+        openParamsModal(editBtn.dataset.name);
+    }
+});
+
+// ── Save all ──────────────────────────────────────────────────────────────
+
+document.getElementById('btn-save-all').addEventListener('click', async function () {
+    this.disabled = true;
+    const status = document.getElementById('save-status');
+    status.textContent = 'Saving...';
+    status.className = 'save-status';
+
+    const payload = {
+        default: state.default.map(a => a.entry),
+        skip:    state.skip.map(a => a.entry),
+    };
+
+    try {
+        const resp = await fetch('/api/artifacts', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        markClean();
+        status.textContent = 'Saved.';
+        status.className = 'save-status save-ok';
+    } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'save-status save-err';
+    } finally {
+        this.disabled = false;
+        setTimeout(() => { if (!dirty) status.textContent = ''; }, 3000);
+    }
+});
+
+// ── Upload YAML ───────────────────────────────────────────────────────────
+
+document.getElementById('btn-upload-yaml').addEventListener('click', async function () {
+    const fileInput = document.getElementById('yaml-file-input');
+    const category  = document.getElementById('yaml-category-select').value;
+    const status    = document.getElementById('upload-status');
+
+    if (!fileInput.files.length) {
+        status.textContent = 'Select a YAML file first.';
+        status.className = 'upload-status save-err';
+        return;
+    }
+
+    const form = new FormData();
+    form.append('file', fileInput.files[0]);
+    form.append('category', category);
+
+    this.disabled = true;
+    status.textContent = 'Uploading...';
+    status.className = 'upload-status';
+
+    try {
+        const resp = await fetch('/api/artifacts/upload', { method: 'POST', body: form });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        status.textContent = `Added '${data.name}' to ${CAT_LABELS[data.category]}.`;
+        status.className = 'upload-status save-ok';
+        fileInput.value = '';
+        await load();
+    } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'upload-status save-err';
+    } finally {
+        this.disabled = false;
+        setTimeout(() => { status.textContent = ''; }, 4000);
+    }
+});
+
+// ── Params modal ──────────────────────────────────────────────────────────
+
+function openParamsModal(name) {
+    currentParamsName = name;
+    document.getElementById('params-modal-title').textContent = name;
+    document.getElementById('params-save-status').textContent = '';
+    document.getElementById('params-modal').classList.add('open');
+    document.getElementById('params-backdrop').classList.add('open');
+
+    const editor = document.getElementById('yaml-editor');
+    editor.value = 'Loading...';
+    editor.disabled = true;
+    fetch(`/api/artifacts/${encodeURIComponent(name)}/yaml`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) throw new Error(data.error);
+            editor.value = data.yaml;
+            editor.disabled = false;
+        })
+        .catch(err => { editor.value = `Error loading YAML: ${err.message}`; });
+}
+
+function closeParamsModal() {
+    document.getElementById('params-modal').classList.remove('open');
+    document.getElementById('params-backdrop').classList.remove('open');
+    currentParamsName = null;
+}
+
+document.getElementById('params-modal-close').addEventListener('click', closeParamsModal);
+document.getElementById('params-backdrop').addEventListener('click', closeParamsModal);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeParamsModal(); });
+
+document.getElementById('btn-save-params').addEventListener('click', async function () {
+    if (!currentParamsName) return;
+    const status = document.getElementById('params-save-status');
+    this.disabled = true;
+    status.textContent = 'Saving...';
+    status.className = 'save-status';
+
+    try {
+        const yamlText = document.getElementById('yaml-editor').value;
+        const resp = await fetch(`/api/artifacts/${encodeURIComponent(currentParamsName)}/yaml/raw`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ yaml: yamlText }),
+        });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        status.textContent = 'Saved.';
+        status.className = 'save-status save-ok';
+    } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'save-status save-err';
+    } finally {
+        this.disabled = false;
+    }
+});
+
+function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showError(msg) {
+    document.getElementById('artifact-sections').innerHTML =
+        `<div class="flash flash-error">Failed to load artifacts: ${msg}</div>`;
+}
+
+load();
+</script>
+{% endblock %}

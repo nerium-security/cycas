@@ -319,7 +319,7 @@ class AdxManager:
         if forcetablename:
             tablename = forcetablename
         else:
-            tablename = self.sanitize_adx_column_name(os.path.basename(file))
+            tablename = Config.adx_table_prefix + self.sanitize_adx_column_name(os.path.basename(file))
             if os.path.getsize(file) == 0:
                 return tablename
 
@@ -392,7 +392,7 @@ class AdxManager:
                 with column names as keys and data types as values.
         '''
         
-        end = ('Hostname', 'Sourcefile')
+        end = ('Hostname', 'Sourcefile', 'UploadId')
 
         schema = dict(
             [(k, schema[k]) for k in schema if k not in end] +
@@ -553,18 +553,19 @@ class AdxManager:
         except Exception as e:
             log.error(f'Failed to initiate the data upload request to table {tablename}. Error: {e}' )
 
-    def add_hostname_to_file(self, fullpath, hostname, zipfile):
+    def add_hostname_to_file(self, fullpath, hostname, zipfile, uploadid=None):
         '''
-        Add Hostname and Sourcefilename fields to each JSON object line in a file.
+        Add Hostname, Sourcefilename, and optionally UploadId fields to each JSON object line in a file.
 
         Performs an in-place modification of a JSON Lines file by appending
-        '"Sourcefilename":"<zipfile>","Hostname":"<hostname>"' to each line that
-        ends with '}'.
+        '"Sourcefilename":"<zipfile>","Hostname":"<hostname>"' (and optionally
+        '"UploadId":"<uploadid>"') to each line that ends with '}'.
 
         Args:
             fullpath (str): Path to the JSONL file to modify in place.
             hostname (str): Hostname value to add to each JSON object.
             zipfile (str): Source filename value to add to each JSON object.
+            uploadid (str | None): Optional upload identifier to add to each JSON object.
 
         Returns:
             dict: Result dictionary containing:
@@ -575,6 +576,8 @@ class AdxManager:
         start = time.time()
         basename = os.path.basename(fullpath)
         columns = f',"Sourcefilename":"{zipfile}","Hostname":"{hostname}"'
+        if uploadid:
+            columns += f',"UploadId":"{uploadid}"'
         replacement = columns + '}'
 
         try:
@@ -650,6 +653,23 @@ class AdxManager:
             log.error(f'Failed to launch command {cmd_createmergetable}. Error: {e}')
             return False
 
+    def set_ingestion_batching_policy(self, database_name,
+                                       max_time='00:00:30',
+                                       max_items=2500,
+                                       max_size_mb=4096):
+        '''Set the ingestion batching policy on a database.'''
+        cmd = (
+            f'.alter database {database_name} policy ingestionbatching '
+            f'@\'{{"MaximumBatchingTimeSpan":"{max_time}",'
+            f'"MaximumNumberOfItems":{max_items},'
+            f'"MaximumRawDataSizeMB":{max_size_mb}}}\''
+        )
+        try:
+            self.kusto_client.execute_mgmt(database_name, cmd)
+            log.info(f'Ingestion batching policy set on {database_name}.')
+        except Exception as e:
+            log.error(f'Failed to set ingestion batching policy: {e}')
+
     def get_current_user_id(self):
         '''
         Return the object ID and principal type of the currently authenticated identity.
@@ -710,14 +730,15 @@ class AdxManager:
         except Exception:
             pass
 
-        cluster = Cluster(location=location, sku=AzureSku(name=sku_name, capacity=1, tier=sku_tier))
+        capacity = 1 if sku_tier == 'Basic' else 2
+        cluster = Cluster(location=location, sku=AzureSku(name=sku_name, capacity=capacity, tier=sku_tier))
         log.info(f"Provisioning ADX cluster '{cluster_name}' (this may take several minutes)...")
         for attempt in range(1, 4):
             try:
                 result = mgmt.clusters.begin_create_or_update(resource_group, cluster_name, cluster).result()
                 break
             except Exception as e:
-                transient = any(t in str(e) for t in ('InternalServerError', 'GatewayTimeout', 'ServiceUnavailable'))
+                transient = any(t in str(e) for t in ('InternalServerError', 'GatewayTimeout', 'ServiceUnavailable', 'ServiceIsInMaintenance', 'Conflict'))
                 if attempt == 3 or not transient:
                     raise
                 log.warning(f"Transient error on attempt {attempt}/3, retrying in 30 s: {e}")

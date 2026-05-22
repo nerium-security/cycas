@@ -51,7 +51,8 @@ def define_results_dict():
         'postprocessing': [],
         'uploads': [],
         'files_in_zip_ignored': [],
-        'added_hostname_as_column_to_file': []
+        'added_hostname_as_column_to_file': [],
+        'logs': [],
     }
 
 def define_results_postprocess_dict():
@@ -73,7 +74,8 @@ def define_results_postprocess_dict():
         'error': None,
         'stdout': None,
         'stderr': None,
-        'returncode': None
+        'returncode': None,
+        'logfile': None
     }
 
 def define_results_upload_dict():

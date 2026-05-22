@@ -1,9 +1,7 @@
 {
-  "essential": [
-    "Custom.Windows.Registry.UserAssist()",
-    "Custom.Windows.Sys.Users()",
+  "default": [
     "Windows.Forensics.SRUM()",
-    "Windows.Forensics.Usn(USNFile='C:\\\\$Extend\\\\$UsnJrnl%3A$J', MFTFile='C:\\\\$MFT', Accessor='ntfs')",
+    "Custom.Windows.Forensics.Usn()",
     "Windows.Sys.AppcompatShims()",
     "Custom.Windows.Forensics.Bam()",
     "Windows.Forensics.RecentApps(RecentAppsKey='HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\**')",
@@ -26,9 +24,9 @@
     "Windows.Forensics.JumpLists()",
     "Windows.Forensics.Timeline()"
   ],
-  "full": [
-  ],
-  "skip":[
-    "Generic.Forensic.SQLiteHunter()"
+  "skip": [
+    "Generic.Forensic.SQLiteHunter()",
+    "Custom.Windows.Sys.Users()",
+    "Custom.Windows.Registry.UserAssist()"
   ]
 }
