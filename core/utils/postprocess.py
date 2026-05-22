@@ -282,43 +282,22 @@ def load_artifacts(artifactslist):
         log.error(f'Could not load artifact list. Error: {e}')
         return None
 
-def select_artifacts(artifacts, postprocess_var):
+def select_artifacts(artifacts):
     '''
-    Select the artifacts to run based on a post-processing mode.
-
-    Supports selecting:
-        - 'essential': only the essential artifact list
-        - 'full': essential plus full artifact list
-        - any other value: empty selection
-
-    Ensures items are unique while preserving the original order.
+    Return the default artifact list, deduplicated while preserving order.
 
     Args:
-        artifacts (dict): Artifact configuration containing 'essential' and 'full' lists.
-        postprocess_var (str): Mode selector (e.g. 'essential' or 'full').
+        artifacts (dict): Artifact configuration containing a 'default' list.
 
     Returns:
         list[str]: Ordered list of unique artifact names to run.
     '''
-
-    essentials = artifacts['essential']
-    full = artifacts['full']
-
     seen = set()
     result = []
-
-    if postprocess_var == 'full':
-        items = essentials + full
-    elif postprocess_var == 'essential':
-        items = essentials
-    else:
-        items = []
-
-    for item in items:
+    for item in artifacts.get('default', []):
         if item not in seen:
             seen.add(item)
             result.append(item)
-
     return result
 
 def get_zipfilename(zipfile, unzip_dir):

@@ -90,7 +90,6 @@ class Config(BaseSettings):
     velociraptor_definitions: str
     velociraptor_outputformat: str
     velociraptor_artifactslist: str
-    velociraptor_postprocess: str
     velociraptor_duration: int
 
 def load_config(env_file: str = None) -> Config:

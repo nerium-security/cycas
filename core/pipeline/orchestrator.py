@@ -201,7 +201,6 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
     unzip_dir = Config.var_unzip_directory
     outputformat = Config.velociraptor_outputformat
     artifactslist = Config.velociraptor_artifactslist
-    postprocess_var = Config.velociraptor_postprocess
     velcociraptor_duration = Config.velociraptor_duration
 
     if not zip_contains_raw_artifacts(zipfilecontent):
@@ -246,7 +245,7 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
         if Config.blob_storageaccount_enabled:
             blob_artifacts = managers.blob.read_json(Config.blob_container_config, 'velociraptor_artifacts.json')
         artifacts_json = load_artifacts(blob_artifacts if blob_artifacts is not None else artifactslist)
-        artifacts = select_artifacts(artifacts_json, postprocess_var)
+        artifacts = select_artifacts(artifacts_json)
 
         start_postprocessing = datetime.now()
 

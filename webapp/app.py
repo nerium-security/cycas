@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import json
 import yaml
-from dotenv import find_dotenv, set_key
+from dotenv import find_dotenv
 from flask import Flask, render_template, request, flash, jsonify
 from azure.identity import DefaultAzureCredential
 from azure.data.tables import EntityProperty
@@ -492,10 +492,10 @@ def api_artifacts_save():
     try:
         config = load_config()
         data   = request.get_json() or {}
-        for key in ('essential', 'full', 'skip'):
+        for key in ('default', 'skip'):
             if key not in data or not isinstance(data[key], list):
                 return jsonify({'error': f'Missing or invalid key: {key}'}), 400
-        _save_artifacts_json(config, {k: data[k] for k in ('essential', 'full', 'skip')})
+        _save_artifacts_json(config, {k: data[k] for k in ('default', 'skip')})
         return jsonify({'saved': True})
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
@@ -508,8 +508,8 @@ def api_artifacts_upload():
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400
         file     = request.files['file']
-        category = request.form.get('category', 'essential')
-        if category not in ('essential', 'full', 'skip'):
+        category = request.form.get('category', 'default')
+        if category not in ('default', 'skip'):
             return jsonify({'error': 'Invalid category'}), 400
 
         content = file.read().decode('utf-8')
@@ -521,7 +521,7 @@ def api_artifacts_upload():
         _write_yaml(config, name, content)
 
         data        = _load_artifacts_json(config)
-        all_entries = data['essential'] + data['full'] + data['skip']
+        all_entries = data['default'] + data['skip']
         if not any(_artifact_name(e) == name for e in all_entries):
             data[category].append(f'{name}()')
             _save_artifacts_json(config, data)
@@ -557,30 +557,6 @@ def api_artifact_yaml_raw_save(name):
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
 
-
-@app.route('/api/config/profile', methods=['GET'])
-def api_profile_get():
-    try:
-        config = load_config()
-        return jsonify({'profile': config.velociraptor_postprocess})
-    except Exception as exc:
-        return jsonify({'error': str(exc)}), 500
-
-
-@app.route('/api/config/profile', methods=['POST'])
-def api_profile_set():
-    try:
-        data    = request.get_json() or {}
-        profile = data.get('profile', '')
-        if profile not in ('essential', 'full'):
-            return jsonify({'error': 'Profile must be essential or full'}), 400
-        env_path = find_dotenv()
-        if not env_path:
-            return jsonify({'error': '.env file not found'}), 500
-        set_key(env_path, 'VELOCIRAPTOR_POSTPROCESS', profile)
-        return jsonify({'profile': profile})
-    except Exception as exc:
-        return jsonify({'error': str(exc)}), 500
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 {
-  "essential": [
+  "default": [
     "Windows.Forensics.SRUM()",
     "Custom.Windows.Forensics.Usn()",
     "Windows.Sys.AppcompatShims()",
@@ -24,7 +24,6 @@
     "Windows.Forensics.JumpLists()",
     "Windows.Forensics.Timeline()"
   ],
-  "full": [],
   "skip": [
     "Generic.Forensic.SQLiteHunter()",
     "Custom.Windows.Sys.Users()",
