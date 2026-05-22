@@ -24,7 +24,7 @@ class InMemoryLogHandler(log.Handler):
 
     def emit(self, record):
         self.records.append({
-            'timestamp': datetime.fromtimestamp(record.created).strftime('%H:%M:%S'),
+            'timestamp': datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S'),
             'level': record.levelname,
             'message': record.getMessage(),
         })
