@@ -416,7 +416,7 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
     if os.path.exists(outputfile) and filesize == 0:
         log.debug(f'Empty file: {outputfile}')
 
-    postprocess_results['cmd'] = cmd
+    postprocess_results['cmd'] = shlex.join(cmd)
     postprocess_results['size'] = filesize
     postprocess_results['fullpath'] = outputfile
     postprocess_results['logfile'] = logfile if os.path.exists(logfile) else None
