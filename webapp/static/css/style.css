@@ -491,6 +491,85 @@ nav .nav-link:hover { opacity: 1; background: rgba(255,255,255,0.12); }
 nav .nav-link-active { opacity: 1; background: rgba(255,255,255,0.18); }
 
 /* ── Artifact management ── */
+.settings-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 2px solid var(--border);
+    margin-bottom: 1.5rem;
+}
+
+.settings-tab {
+    padding: 0.55rem 1.25rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    border: none;
+    background: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.15s;
+}
+
+.settings-tab:hover { color: var(--teal); }
+
+.settings-tab.active {
+    color: var(--teal);
+    border-bottom-color: var(--teal);
+}
+
+.settings-panel { display: none; }
+.settings-panel.active { display: block; }
+
+.settings-description {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    margin-bottom: 1.25rem;
+    line-height: 1.5;
+}
+
+.kv-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+}
+
+.kv-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.7rem 1rem;
+    background: var(--teal);
+    color: var(--white);
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.kv-card-body {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.5rem 1.5rem;
+    padding: 0.9rem 1rem;
+    font-size: 0.875rem;
+    align-items: center;
+}
+
+.kv-label { color: var(--text-muted); }
+
+.kv-value { font-family: monospace; font-size: 0.85rem; }
+
+.kv-link {
+    color: var(--blue);
+    text-decoration: none;
+    font-family: monospace;
+    font-size: 0.85rem;
+}
+.kv-link:hover { text-decoration: underline; }
+
+.kv-not-configured { color: var(--text-muted); font-style: italic; }
+
 .artifact-upload-bar {
     display: flex;
     align-items: center;
