@@ -273,6 +273,9 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
             logfile_path    = result_postprocess.pop('logfile', None)
             result_postprocess.pop('fullpath', None)
             result_upload = define_results_upload_dict()
+            result_upload['location_in_zip'] = outputfile_path
+            result_upload['basename']        = os.path.basename(outputfile_path) if outputfile_path else None
+            result_upload['size']            = result_postprocess.get('size')
 
             uploadid = results['summary'][0].get('uploadid')
 
