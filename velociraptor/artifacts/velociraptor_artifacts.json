@@ -20,7 +20,7 @@
     "Windows.Registry.AppCompatCache()",
     "Windows.Forensics.Prefetch()",
     "Windows.Sys.Programs()",
-    "Windows.NTFS.MFT()",
+    "Windows.NTFS.MFT(AllDrives=True)",
     "Windows.Forensics.JumpLists()",
     "Windows.Forensics.Timeline()"
   ],
