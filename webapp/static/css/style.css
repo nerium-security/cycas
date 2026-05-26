@@ -447,7 +447,7 @@ tbody tr { cursor: pointer; }
     font-size: 0.72rem;
     font-weight: 700;
 }
-.upload-group.group-failed > .upload-group-header { background: #fdf0ef; }
+.upload-group.group-failed > .upload-group-header { background: #e8f3f7; }
 .upload-group.group-failed > .upload-group-header .group-count { background: #c0392b; }
 .upload-group.group-ignored > .upload-group-header .group-count { background: var(--text-muted); }
 .upload-group .detail-table th:first-child,
