@@ -1,10 +1,9 @@
-Easy installation
-=================
+Easy installation (recommended)
+===============================
 
 The easy installation uses the ``easy_install.py`` wizard to automatically provision
 all required Azure infrastructure and configure your ``.env`` file. This is the
-recommended approach for production deployments running at scale via Azure
-Functions.
+recommended approach for setting up Cycas.
 
 What gets created
 -----------------
@@ -14,7 +13,7 @@ What gets created
 - Input source configuration (Blob, SAS, and/or SFTP)
 - Two Azure Function Apps (watcher and processor)
 - Application Insights for monitoring
-- (Optional) Key Vault for ZIP password storage
+- (Optional) Key Vault for storing offline ZIP collection password
 
 Prerequisites
 -------------
@@ -34,8 +33,8 @@ Prerequisites
 
    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
-**Azure permissions** - Contributor access on the target resource group (or
-subscription if you want to create a new resource group).
+**Azure permissions** - Owner access on the target resource group or contributor combined with the User Access Administrator role (or
+owner on the subscription if you want to create a new resource group).
 
 **Azure Functions Core Tools** - installed automatically by the wizard if not
 already present (requires ``npm``).
@@ -47,7 +46,7 @@ Steps
 
    .. code-block:: bash
 
-      git clone <repository-url>
+      git clone https://github.com/nerium-security/cycas
       cd cycas
       python3.13 -m venv .venv
       source .venv/bin/activate

@@ -6,12 +6,14 @@
 cycas documentation
 ===================
 
-Cycas is a solution for post-processing raw forensic artifacts collected with `Velociraptor <https://github.com/Velocidex/velociraptor>`_. It optionally ingests data into `Azure Data Explorer (ADX) <https://azure.microsoft.com/nl-nl/products/data-explorer>`_.
+Cycas is a Digital Forensics & Incident Response (DFIR) pipeline for post-processing and ingesting forensic artifacts collected with `Velociraptor <https://github.com/Velocidex/velociraptor>`_. into `Azure Data Explorer (ADX) <https://azure.microsoft.com/nl-nl/products/data-explorer>`_. It handles raw artifacts like MFT, EVTX, Amcache, Prefetch, and many others, converting them to CSV/JSON/JSONL before ingesting them into ADX for analysis with Kusto Query Langue (KQL).
 
-.. figure:: /_static/images/webapp_status.png
+It concurrently processes the data (ZIP files collected to Blob storage or SFTP) at scale using Azure Functions that run horizontally. 
+
+.. figure:: /_static/images/overview_cycas.png
    :alt: Ingestion Dashboard
    :align: center
-   :target: /_static/images/webapp_status.png
+   :target: /_static/images/overview_cycas.png
 
 .. toctree::
    :maxdepth: 2
@@ -41,6 +43,8 @@ Cycas is a solution for post-processing raw forensic artifacts collected with `V
    /reference/pipelineinternals
 
    /reference/supportedartifacts
+
+   /reference/permissions
 
 .. toctree::
    :maxdepth: 2
