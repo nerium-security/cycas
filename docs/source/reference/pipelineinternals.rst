@@ -41,6 +41,34 @@ is enriched with the hostname before upload. Target tables are created or
 updated automatically based on the file contents. A detailed status record is
 written to ADX on completion, and an optional webhook notification is sent.
 
+Dashboard
+---------
+
+The dashboard is a Flask web application (``webapp/app.py``) that provides a
+live view of pipeline activity and a settings page for managing artifacts.
+
+**Status table** - the main view reads all entries from Azure Table Storage
+and displays them in a table ordered by start time. Each row shows the ZIP
+filename, extracted hostname, current status, source, size, and elapsed
+duration. The table supports filtering by status and free-text search on
+filename or hostname. Summary counters at the top show totals for finished,
+in-progress, and failed runs. The table auto-refreshes every few seconds via
+a background API call.
+
+**Retry** - failed or stuck entries can be reset to ``UNQUEUED`` directly
+from the dashboard. The watcher picks them up again on its next timer tick.
+
+**ADX confirmation** - after a run reaches ``FINISHED``, a background poller
+queries the ``_status_summary`` table in ADX every 10 seconds to confirm
+that the ingested data has become queryable. Each entry shows one of three
+states: ``pending``, ``confirmed``, or ``timeout`` (after 30 minutes).
+
+**Settings** - the ``/settings`` page allows the user to configure basic 
+settings, like the artifacts that need to be used for post-processing. 
+
+   .. image:: /_static/images/webapp_status.png
+      :target: /_static/images/webapp_status.png
+
 
 Phases
 ------
@@ -282,6 +310,8 @@ Pipeline
      - Entry point. Discovers ZIPs and manages the thread pool.
    * - ``core/pipeline/orchestrator.py``
      - Coordinates the full lifecycle of a single ZIP file.
+   * - ``webapp/app.py``
+     - Flask dashboard: status table, retry, ADX poller, and artifact settings.
  
 Utils
 ~~~~~

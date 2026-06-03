@@ -418,6 +418,7 @@ archive/*
 test*
 TODO
 blog.md
+blog v2.md
 
 #.env file
 .env
