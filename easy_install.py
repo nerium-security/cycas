@@ -374,8 +374,8 @@ def collect_keyvault_config(resource_group, step_label='7/7'):
     info('not password-protected.')
     print()
 
-    create_kv = input('  Create a Key Vault for ZIP password storage? [y/N]: ').strip().lower()
-    if create_kv not in ('y', 'yes'):
+    create_kv = input('  Create a Key Vault for ZIP password storage? [Y/n]: ').strip().lower()
+    if create_kv in ('n', 'no'):
         return None, None, None
 
     import getpass
@@ -491,9 +491,10 @@ def auto_generate_names(resource_group, defaults):
     processor_app = f'{resource_group[:41]}-processor-{suffix}'
     processor_sa  = (re.sub(r'[^a-z0-9]', '', processor_app.lower()))[:18] + suffix
     insights_name = f'{rg_slug[:50]}-insights'
+    keyvault_name = f'{rg_slug[:14]}-kv-{suffix}'
 
     return (account_name, table_name, queue_name, container, status_container,
-            cluster_name, database_name, watcher_app, watcher_sa, processor_app, processor_sa, insights_name)
+            cluster_name, database_name, watcher_app, watcher_sa, processor_app, processor_sa, insights_name, keyvault_name)
 
 
 def collect_storage_config(defaults, resource_group, step_label='4/7'):
@@ -601,15 +602,24 @@ def provision_keyvault(credential, subscription_id, resource_group, location,
     )
     success('Secrets Officer role assigned.')
 
-    step(f"Uploading ZIP password as secret '{password_location}'...")
-    kv = KeyvaultManager(vault_uri)
-    kv.authenticate(credential, verify_enabled=False)
-    kv.set_secret(password_location, zip_password)
-    success(f"Secret '{password_location}' uploaded.")
+    if zip_password is not None:
+        step(f"Uploading ZIP password as secret '{password_location}'...")
+        kv = KeyvaultManager(vault_uri)
+        kv.authenticate(credential, verify_enabled=False)
+        kv.set_secret(password_location, zip_password)
+        success(f"Secret '{password_location}' uploaded.")
+    else:
+        info(f"Skipping secret upload - set '{password_location}' in Key Vault manually if you use a password for the offline collector ZIP.")
 
+    portal_url = (
+        f'https://portal.azure.com/#resource/subscriptions/{subscription_id}'
+        f'/resourceGroups/{resource_group}'
+        f'/providers/Microsoft.KeyVault/vaults/{vault_name}'
+    )
     write_env_values({
         'KEYVAULT_ENABLED':          'true',
         'KEYVAULT_URL':              vault_uri,
+        'KEYVAULT_PORTAL_URL':       portal_url,
         'KEYVAULT_PASSWORDLOCATION': password_location,
     })
     success('.env updated with Key Vault settings.')
@@ -1087,7 +1097,8 @@ def main():
         if setup_mode == 'easy':
             (account_name, table_name, queue_name, container, status_container,
              cluster_name, database_name,
-             watcher_app, watcher_sa, processor_app, processor_sa, insights_name) = auto_generate_names(resource_group, defaults)
+             watcher_app, watcher_sa, processor_app, processor_sa, insights_name,
+             keyvault_name) = auto_generate_names(resource_group, defaults)
             config_container = defaults.get('blob_container_config', 'config')
             sku_name, sku_tier, _ = SKUS['1']
             admin_users = []
@@ -1112,7 +1123,8 @@ def main():
 
         if run_mode == 'azurefunction':
             if setup_mode == 'easy':
-                keyvault_name = keyvault_password_location = zip_password = None
+                keyvault_password_location = 'velo-password'
+                zip_password = None
                 webapp_mode, webapp_app, webapp_allowed_ips = 'local', None, None
             else:
                 keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')

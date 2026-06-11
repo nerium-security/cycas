@@ -5,31 +5,48 @@
 <div class="page-header">
     <div>
         <h1>Settings</h1>
-        <div class="subtitle">Manage Velociraptor artifact definitions and categories</div>
     </div>
 </div>
 
-<!-- Upload -->
-<div class="artifact-upload-bar">
-    <span class="artifact-upload-label">Upload YAML definition:</span>
-    <input type="file" id="yaml-file-input" accept=".yaml,.yml">
-    <select id="yaml-category-select">
-        <option value="default">Default</option>
-        <option value="skip">Skip</option>
-    </select>
-    <button class="btn-upload" id="btn-upload-yaml">Upload</button>
-    <span id="upload-status" class="upload-status"></span>
+<!-- Tabs -->
+<div class="settings-tabs">
+    <button class="settings-tab active" data-tab="artifacts">Artifacts</button>
+    <button class="settings-tab" data-tab="password">Offline collector ZIP password</button>
 </div>
 
-<!-- Artifact sections -->
-<div class="artifact-sections" id="artifact-sections">
-    <div class="artifact-loading">Loading artifacts...</div>
+<!-- Artifacts tab -->
+<div class="settings-panel active" id="panel-artifacts">
+    <div class="artifact-upload-bar">
+        <span class="artifact-upload-label">Upload YAML definition:</span>
+        <input type="file" id="yaml-file-input" accept=".yaml,.yml">
+        <select id="yaml-category-select">
+            <option value="default">Default</option>
+            <option value="skip">Skip</option>
+        </select>
+        <button class="btn-upload" id="btn-upload-yaml">Upload</button>
+        <span id="upload-status" class="upload-status"></span>
+    </div>
+
+    <div class="artifact-sections" id="artifact-sections">
+        <div class="artifact-loading">Loading artifacts...</div>
+    </div>
+
+    <div class="save-bar">
+        <span id="save-status" class="save-status"></span>
+        <button class="btn-save-all" id="btn-save-all">Save all</button>
+    </div>
 </div>
 
-<!-- Save bar -->
-<div class="save-bar">
-    <span id="save-status" class="save-status"></span>
-    <button class="btn-save-all" id="btn-save-all">Save all</button>
+<!-- Password tab -->
+<div class="settings-panel" id="panel-password">
+    <p class="settings-description">The ZIP password used to decrypt offline collector packages is stored as a secret in Azure Key Vault. To set or update the password, open the vault in the Azure portal and set the value of the secret listed below.</p>
+    <div class="kv-card">
+        <div class="kv-card-header">ZIP Password</div>
+        <div class="kv-card-body">
+            <span class="kv-label">Secret</span><span class="kv-value" id="kv-secret">—</span>
+            <span class="kv-label">Vault</span><span id="kv-vault">—</span>
+        </div>
+    </div>
 </div>
 
 <!-- Edit YAML modal -->
@@ -362,6 +379,31 @@ function showError(msg) {
         `<div class="flash flash-error">Failed to load artifacts: ${msg}</div>`;
 }
 
+document.querySelectorAll('.settings-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.settings-panel').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+    });
+});
+
+async function loadKeyvault() {
+    const resp = await fetch('/api/keyvault');
+    const data = await resp.json();
+    const secretEl = document.getElementById('kv-secret');
+    const vaultEl  = document.getElementById('kv-vault');
+    if (!data.enabled || !data.url) {
+        secretEl.innerHTML = '<span class="kv-not-configured">not configured</span>';
+        vaultEl.innerHTML  = '<span class="kv-not-configured">not configured</span>';
+        return;
+    }
+    const vaultName = data.url.replace(/^https?:\/\//, '').replace(/\/$/, '').replace('.vault.azure.net', '');
+    secretEl.textContent = data.password_secret;
+    vaultEl.innerHTML = `<a class="kv-link" href="${escHtml(data.portal_url)}" target="_blank" rel="noopener">${escHtml(vaultName)} ↗</a>`;
+}
+
 load();
+loadKeyvault();
 </script>
 {% endblock %}

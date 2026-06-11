@@ -144,15 +144,15 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config, _log_ha
     if results.get('summary'):
         results['summary'][0]['duration_in_sec'] = (datetime.now() - start).total_seconds()
 
-    upload_id = results['summary'][0].get('uploadid', '')
-    if upload_id:
-        managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)
-
     upload_detailed_status_to_adx(managers, Config, results)
 
     prepare_and_send_webhook_message(Config.var_webhook_url, results)
 
     log.info(f'Processing of {os.path.basename(zipfile)} finished.')
+
+    upload_id = results['summary'][0].get('uploadid', '')
+    if upload_id:
+        managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)
 
 def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfilecontent, results, start):
     '''
@@ -273,6 +273,9 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
             logfile_path    = result_postprocess.pop('logfile', None)
             result_postprocess.pop('fullpath', None)
             result_upload = define_results_upload_dict()
+            result_upload['location_in_zip'] = outputfile_path
+            result_upload['basename']        = os.path.basename(outputfile_path) if outputfile_path else None
+            result_upload['size']            = result_postprocess.get('size')
 
             uploadid = results['summary'][0].get('uploadid')
 

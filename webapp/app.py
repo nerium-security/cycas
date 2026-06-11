@@ -518,6 +518,20 @@ def api_artifacts_save():
         return jsonify({'error': str(exc)}), 500
 
 
+@app.route('/api/keyvault')
+def api_keyvault():
+    try:
+        config = load_config()
+        return jsonify({
+            'enabled':         config.keyvault_enabled,
+            'url':             config.keyvault_url,
+            'portal_url':      config.keyvault_portal_url,
+            'password_secret': config.keyvault_passwordlocation,
+        })
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
 @app.route('/api/artifacts/upload', methods=['POST'])
 def api_artifacts_upload():
     try:
