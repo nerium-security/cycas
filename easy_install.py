@@ -11,14 +11,17 @@ Requirements:
     - Contributor access on the target resource group
 '''
 
+import io
 import json
 import logging
 import os
 import re
+import secrets
 import subprocess
 import sys
 import random
 import string
+import zipfile
 from urllib.request import urlopen
 from pathlib import Path
 
@@ -30,6 +33,7 @@ from core.manager.queue import QueueManager
 from core.manager.functions import FunctionsManager
 from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 from core.manager.webapp import WebappManager
+from core.utils.postprocess import download_velociraptor
 
 logging.basicConfig(level=logging.WARNING, format='%(message)s')
 
@@ -37,6 +41,11 @@ ROOT        = Path(__file__).parent
 ENV_FILE    = ROOT / '.env'
 ENV_EXAMPLE = ROOT / '.env_example'
 STATE_FILE  = ROOT / '.install_state.json'
+
+TRIAGE_TARGETS_URL  = 'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip'
+COLLECTOR_SAS_VALID_DAYS = 90
+BINARIES_CONTAINER  = 'binaries'
+KEYVAULT_PASSWORD_LOCATION = 'velociraptor-collection-password'
 
 SKUS = {
     '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'Small engagements / Testing  (2 vCores,  16 GB RAM/node) ~$2.40/day when idle'),
@@ -383,7 +392,7 @@ def collect_keyvault_config(resource_group, step_label='7/7'):
     kv_suffix = f'-{rand6()}-keyvault'
     kv_default = rg_slug[:24 - len(kv_suffix)] + kv_suffix
     keyvault_name     = prompt('Key Vault name', default=kv_default)
-    password_location = prompt('Location for the ZIP password in Key Vault', default='velo-password')
+    password_location = prompt('Location for the ZIP password in Key Vault', default=KEYVAULT_PASSWORD_LOCATION)
     zip_password      = getpass.getpass('  ZIP password to store in Key Vault: ')
 
     return keyvault_name, password_location, zip_password
@@ -477,7 +486,7 @@ def auto_generate_names(resource_group, defaults):
     suffix        = rand6()
     rg_slug       = re.sub(r'[^a-z0-9]', '', resource_group.lower())
 
-    account_name     = (rg_slug + 'zip')[:18] + suffix
+    account_name     = (rg_slug + 'data')[:18] + suffix
     table_name       = defaults.get('blob_logtable_name',    'statusupdate')
     queue_name       = defaults.get('blob_queue_name',       'triagepackages')
     container        = defaults.get('blob_container_input',  'uploads')
@@ -501,7 +510,7 @@ def collect_storage_config(defaults, resource_group, step_label='4/7'):
     section(f'Step {step_label} — Storage Account')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
-    account_name     = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'input')[:18] + rand6())
+    account_name     = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'data')[:18] + rand6())
     table_name       = prompt('Status table name',              default=defaults.get('blob_logtable_name',    'statusupdate'))
     queue_name       = prompt('Queue name',                     default=defaults.get('blob_queue_name',       'triagepackages'))
     container        = prompt('Blob container for uploads',     default=defaults.get('blob_container_input',  'uploads'))
@@ -629,54 +638,18 @@ def provision_keyvault(credential, subscription_id, resource_group, location,
 # Phase 3: Provision
 # ---------------------------------------------------------------------------
 
-def provision_all(azure, credential, subscription_id,
-                  resource_group, location, new_rg,
-                  cluster_name, database_name, sku_name, sku_tier,
-                  admin_users,
-                  account_name, table_name, queue_name, container, status_container,
-                  config_container,
-                  defaults):
+def provision_storage(azure, credential, subscription_id,
+                      resource_group, location, new_rg,
+                      account_name, table_name, queue_name, container, status_container,
+                      config_container,
+                      defaults):
 
-    section('Provisioning')
+    section('Provisioning — Storage')
 
     if new_rg:
         step(f"Creating resource group '{resource_group}'...")
         azure.create_resource_group(subscription_id, resource_group, location)
         success(f"Resource group '{resource_group}' created.")
-
-    adx = AdxManager(credential, adx_cluster_uri='', adx_cluster_ingestion_uri='', adx_database_name=database_name)
-
-    step('Ensuring ADX cluster exists (may take 10+ minutes if new)...')
-    cluster = adx.provision_cluster(subscription_id, resource_group, location, cluster_name, sku_name, sku_tier)
-    success(f'Cluster ready: {cluster.uri}')
-
-    step(f"Ensuring database '{database_name}' exists...")
-    adx.provision_database(resource_group, cluster_name, database_name, location)
-    success(f"Database '{database_name}' ready.")
-
-    adx.adx_cluster_uri           = cluster.uri
-    adx.adx_cluster_ingestion_uri = cluster.data_ingestion_uri
-    adx.authenticate(verify_enabled=False)
-
-    step('Ensuring current user has AllDatabasesAdmin...')
-    principal_id, principal_type = adx.get_current_user_id()
-    adx.AllDatabasesAdmin(resource_group, cluster_name, principal_id, principal_type)
-    success('AllDatabasesAdmin ready for current user.')
-
-    for user in admin_users:
-        step(f"Ensuring AllDatabasesAdmin for '{user['displayName']}'...")
-        assignment_name = f'cycas-admin-{user["id"][:8]}'
-        adx.assign_cluster_admin(resource_group, cluster_name, user['id'], 'User', assignment_name)
-        success(f"'{user['displayName']}' has AllDatabasesAdmin.")
-
-    step(f"Setting ingestion batching policy on '{database_name}'...")
-    adx.set_ingestion_batching_policy(
-        database_name,
-        max_time=defaults.get('adx_ingestion_batching_timespan', '00:00:30'),
-        max_items=int(defaults.get('adx_ingestion_batching_max_items', 2500)),
-        max_size_mb=int(defaults.get('adx_ingestion_batching_max_size_mb', 4096)),
-    )
-    success('Ingestion batching policy set.')
 
     blob_uri       = f'https://{account_name}.blob.core.windows.net'
     table_endpoint = f'https://{account_name}.table.core.windows.net'
@@ -708,6 +681,10 @@ def provision_all(azure, credential, subscription_id,
     step(f"Ensuring blob container '{config_container}' exists...")
     blob_mgr.create_container(config_container)
     success(f"Container '{config_container}' ready.")
+
+    step(f"Ensuring blob container '{BINARIES_CONTAINER}' exists...")
+    blob_mgr.create_container(BINARIES_CONTAINER)
+    success(f"Container '{BINARIES_CONTAINER}' ready.")
 
     step(f"Uploading initial velociraptor_artifacts.json to '{config_container}' container...")
     import json as _json
@@ -760,17 +737,6 @@ def provision_all(azure, credential, subscription_id,
     step('Writing .env...')
 
     write_env_values({
-        'ADX_CLUSTER_ENABLED':                'true',
-        'ADX_CLUSTER_URI':                    cluster.uri,
-        'ADX_CLUSTER_INGESTION_URI':          cluster.data_ingestion_uri,
-        'ADX_DATABASE_NAME':                  database_name,
-        'ADX_TABLE_PREFIX':                   defaults.get('adx_table_prefix', 'cycas_'),
-        'ADX_INGESTION_BATCHING_TIMESPAN':    defaults.get('adx_ingestion_batching_timespan', '00:00:30'),
-        'ADX_INGESTION_BATCHING_MAX_ITEMS':   defaults.get('adx_ingestion_batching_max_items', '2500'),
-        'ADX_INGESTION_BATCHING_MAX_SIZE_MB': defaults.get('adx_ingestion_batching_max_size_mb', '4096'),
-    })
-
-    write_env_values({
         'BLOB_LOGTABLE_ENABLED':   'true',
         'BLOB_LOGTABLE_URI':       table_endpoint,
         'BLOB_LOGTABLE_NAME':      table_name,
@@ -779,6 +745,64 @@ def provision_all(azure, credential, subscription_id,
         'BLOB_QUEUE_NAME':         queue_name,
         'BLOB_CONTAINER_STATUS':   status_container,
         'BLOB_CONTAINER_CONFIG':   config_container,
+    })
+
+    success('.env updated.')
+
+
+def provision_adx(credential, subscription_id,
+                  resource_group, location,
+                  cluster_name, database_name, sku_name, sku_tier,
+                  admin_users,
+                  defaults):
+
+    section('Provisioning — Azure Data Explorer')
+
+    adx = AdxManager(credential, adx_cluster_uri='', adx_cluster_ingestion_uri='', adx_database_name=database_name)
+
+    step('Ensuring ADX cluster exists (may take 10+ minutes if new)...')
+    cluster = adx.provision_cluster(subscription_id, resource_group, location, cluster_name, sku_name, sku_tier)
+    success(f'Cluster ready: {cluster.uri}')
+
+    step(f"Ensuring database '{database_name}' exists...")
+    adx.provision_database(resource_group, cluster_name, database_name, location)
+    success(f"Database '{database_name}' ready.")
+
+    adx.adx_cluster_uri           = cluster.uri
+    adx.adx_cluster_ingestion_uri = cluster.data_ingestion_uri
+    adx.authenticate(verify_enabled=False)
+
+    step('Ensuring current user has AllDatabasesAdmin...')
+    principal_id, principal_type = adx.get_current_user_id()
+    adx.AllDatabasesAdmin(resource_group, cluster_name, principal_id, principal_type)
+    success('AllDatabasesAdmin ready for current user.')
+
+    for user in admin_users:
+        step(f"Ensuring AllDatabasesAdmin for '{user['displayName']}'...")
+        assignment_name = f'cycas-admin-{user["id"][:8]}'
+        adx.assign_cluster_admin(resource_group, cluster_name, user['id'], 'User', assignment_name)
+        success(f"'{user['displayName']}' has AllDatabasesAdmin.")
+
+    step(f"Setting ingestion batching policy on '{database_name}'...")
+    adx.set_ingestion_batching_policy(
+        database_name,
+        max_time=defaults.get('adx_ingestion_batching_timespan', '00:00:30'),
+        max_items=int(defaults.get('adx_ingestion_batching_max_items', 2500)),
+        max_size_mb=int(defaults.get('adx_ingestion_batching_max_size_mb', 4096)),
+    )
+    success('Ingestion batching policy set.')
+
+    step('Writing .env...')
+
+    write_env_values({
+        'ADX_CLUSTER_ENABLED':                'true',
+        'ADX_CLUSTER_URI':                    cluster.uri,
+        'ADX_CLUSTER_INGESTION_URI':          cluster.data_ingestion_uri,
+        'ADX_DATABASE_NAME':                  database_name,
+        'ADX_TABLE_PREFIX':                   defaults.get('adx_table_prefix', 'cycas_'),
+        'ADX_INGESTION_BATCHING_TIMESPAN':    defaults.get('adx_ingestion_batching_timespan', '00:00:30'),
+        'ADX_INGESTION_BATCHING_MAX_ITEMS':   defaults.get('adx_ingestion_batching_max_items', '2500'),
+        'ADX_INGESTION_BATCHING_MAX_SIZE_MB': defaults.get('adx_ingestion_batching_max_size_mb', '4096'),
     })
 
     success('.env updated.')
@@ -988,6 +1012,138 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
     success(f"Web App accessible at: https://{webapp_app}.azurewebsites.net")
 
 
+def download_triage_targets(dest_dir):
+    '''Download and extract the latest Windows.Triage.Targets artifact definition.'''
+    with urlopen(TRIAGE_TARGETS_URL) as resp:
+        data = resp.read()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        zf.extractall(dest_dir)
+
+
+def write_collector_spec(spec_path, sas_url, password):
+    '''Write a velociraptor `collector` spec that runs Windows.Triage.Targets with
+    its default settings and uploads the encrypted result via SAS URL.'''
+    spec_path.write_text(f'''OS: Windows
+
+Artifacts:
+  Windows.Triage.Targets: {{}}
+
+Target: Azure
+TargetArgs:
+  sas_url: "{sas_url}"
+
+EncryptionScheme: Password
+EncryptionArgs:
+  password: "{password}"
+
+OptVerbose: "Y"
+OptBanner: "Y"
+OptPrompt: "N"
+OptAdmin: "Y"
+OptLevel: "4"
+OptConcurrency: "2"
+OptFormat: "jsonl"
+OptFilenameTemplate: "Triage-%FQDN%-%TIMESTAMP%"
+OptProgressTimeout: "1800"
+OptTimeout: "0"
+OptDeleteAtExit: "Y"
+''')
+
+
+def provision_collector(credential, subscription_id, resource_group,
+                        account_name, container,
+                        keyvault_name, keyvault_password_location, zip_password,
+                        defaults):
+    '''Build a stand-alone Velociraptor collector that runs Windows.Triage.Targets
+    with its default settings and uploads the encrypted result straight to the
+    just-provisioned input container via a write-only SAS URL.'''
+
+    section('Provisioning — Offline Collector')
+
+    step('Resolving ZIP password for the collector...')
+    password_location = keyvault_password_location or KEYVAULT_PASSWORD_LOCATION
+    if keyvault_name:
+        kv = KeyvaultManager(f'https://{keyvault_name}.vault.azure.net')
+        kv.authenticate(credential, verify_enabled=False)
+        if zip_password:
+            password = zip_password
+        else:
+            password = kv.read_creds(password_location)
+            if password:
+                info(f"Reusing existing password from Key Vault secret '{password_location}'.")
+            else:
+                password = secrets.token_urlsafe(18)
+                kv.set_secret(password_location, password)
+                info(f"Generated a new password and stored it in Key Vault secret '{password_location}'.")
+    else:
+        password = zip_password or secrets.token_urlsafe(18)
+        info('No Key Vault configured - store this ZIP password securely:')
+        info(f'  {password}')
+    success('ZIP password ready.')
+
+    step('Generating write-only SAS URL for the input container...')
+    blob_uri = f'https://{account_name}.blob.core.windows.net'
+    blob = BlobManager(credential, blob_uri)
+    sas_url, expiry = blob.generate_container_sas_url(
+        subscription_id, resource_group, account_name, container,
+        expiry_days=COLLECTOR_SAS_VALID_DAYS,
+    )
+    success(f'SAS URL ready (expires {expiry:%Y-%m-%d}).')
+
+    step('Downloading latest Windows.Triage.Targets artifact definition...')
+    build_dir = ROOT / 'build' / 'collector'
+    datastore = build_dir / 'datastore'
+    try:
+        download_triage_targets(datastore / 'artifact_definitions' / 'Windows' / 'Triage')
+    except Exception as e:
+        info(f'Could not download Windows.Triage.Targets: {e}')
+        info('Re-run easy_install.py once you have network access to build the collector.')
+        return
+    success('Artifact definition downloaded.')
+
+    step('Ensuring Velociraptor binary is available...')
+    velo_binary = defaults.get('velociraptor_binary', '/tmp/velociraptor')
+    velo_url    = defaults.get('velociraptor_url', '')
+    download_velociraptor(velo_binary, velo_url)
+    if not os.path.exists(velo_binary):
+        info(f'Velociraptor binary not available at {velo_binary}.')
+        info('Re-run easy_install.py once it can be downloaded to build the collector.')
+        return
+    success(f'Using {velo_binary}.')
+
+    step('Writing collector spec...')
+    spec_path = build_dir / 'spec.yaml'
+    write_collector_spec(spec_path, sas_url, password)
+    success(f'Spec written to {spec_path}.')
+
+    step('Building offline collector...')
+    result = subprocess.run(
+        [velo_binary, 'collector', '--datastore', str(datastore), str(spec_path)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        info('Collector build failed:')
+        info((result.stderr.strip().splitlines() or ['Unknown error.'])[-1])
+        return
+
+    collector = next(datastore.glob('Collector_*'), None)
+    if not collector:
+        info('Collector build did not produce an output binary.')
+        return
+
+    success(f'Collector built: {collector}')
+    info('Run it on a Windows endpoint to collect Windows.Triage.Targets and')
+    info(f'upload the encrypted result to: {blob_uri}/{container}')
+    info(f'The SAS URL embedded in the collector expires {expiry:%Y-%m-%d}.')
+
+    step(f"Uploading collector binary to '{BINARIES_CONTAINER}' container...")
+    blob.authenticate()
+    blob.switch_to_account_key(subscription_id, resource_group, account_name)
+    blob.upload_file(BINARIES_CONTAINER, collector.name, collector)
+    success(f'Collector available at: {blob_uri}/{BINARIES_CONTAINER}/{collector.name}')
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1014,6 +1170,7 @@ def main():
     if run_mode == 'azurefunction':
         print('    - Two Azure Function Apps (watcher + processor)')
         print('    - (Optional) Key Vault for ZIP password storage')
+    print('    - Offline Velociraptor collector (Windows.Triage.Targets -> input container)')
     print()
     print('  Progress is saved automatically. If the script is interrupted,')
     print('  re-run it and choose to resume the saved session.')
@@ -1123,7 +1280,7 @@ def main():
 
         if run_mode == 'azurefunction':
             if setup_mode == 'easy':
-                keyvault_password_location = 'velo-password'
+                keyvault_password_location = KEYVAULT_PASSWORD_LOCATION
                 zip_password = None
                 webapp_mode, webapp_app, webapp_allowed_ips = 'local', None, None
             else:
@@ -1179,27 +1336,36 @@ def main():
         print('Aborted.')
         sys.exit(0)
 
-    provision_all(azure, credential, subscription_id,
-                  resource_group, location, new_rg,
-                  cluster_name, database_name, sku_name, sku_tier,
-                  admin_users,
-                  account_name, table_name, queue_name, container, status_container,
-                  config_container,
-                  defaults)
+    provision_storage(azure, credential, subscription_id,
+                      resource_group, location, new_rg,
+                      account_name, table_name, queue_name, container, status_container,
+                      config_container,
+                      defaults)
 
     step('Writing input source settings to .env...')
     for source_settings in input_sources.values():
         write_env_values(source_settings)
     success('Input source settings written.')
 
-    if run_mode == 'azurefunction':
-        if keyvault_name:
-            adx_tmp = AdxManager(credential, '', '', '')
-            principal_id, _ = adx_tmp.get_current_user_id()
-            provision_keyvault(credential, subscription_id, resource_group, location,
-                               keyvault_name, keyvault_password_location, zip_password,
-                               principal_id)
+    if run_mode == 'azurefunction' and keyvault_name:
+        adx_tmp = AdxManager(credential, '', '', '')
+        principal_id, _ = adx_tmp.get_current_user_id()
+        provision_keyvault(credential, subscription_id, resource_group, location,
+                           keyvault_name, keyvault_password_location, zip_password,
+                           principal_id)
 
+    provision_collector(credential, subscription_id, resource_group,
+                        account_name, container,
+                        keyvault_name, keyvault_password_location, zip_password,
+                        read_env_defaults(ENV_FILE))
+
+    provision_adx(credential, subscription_id,
+                  resource_group, location,
+                  cluster_name, database_name, sku_name, sku_tier,
+                  admin_users,
+                  defaults)
+
+    if run_mode == 'azurefunction':
         provision_functions(credential, subscription_id,
                             resource_group, location,
                             account_name,
@@ -1255,6 +1421,11 @@ def main():
         info(f'Web application:')
         info(f'  URL     — https://{webapp_app}.azurewebsites.net')
         info(f'  Access  — restricted to: {", ".join(webapp_allowed_ips)}')
+
+    collector = next((ROOT / 'build' / 'collector' / 'datastore').glob('Collector_*'), None)
+    if collector:
+        print()
+        info(f'Offline collector — {collector}')
     info('')
 
 

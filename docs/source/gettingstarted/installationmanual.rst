@@ -103,7 +103,7 @@ These steps are only required if triage packages collected with Velociraptor are
 
 #. Create an Azure Key Vault with RBAC authorization enabled.
 
-#. Add a secret named ``velo-password`` and set its value to the ZIP password.
+#. Add a secret named ``velociraptor-collection-password`` and set its value to the ZIP password.
 
    .. image:: /_static/images/keyvault-secret.png
 
@@ -193,7 +193,7 @@ Open ``.env`` in a text editor and fill in the values for your environment.
 
    KEYVAULT_ENABLED=true
    KEYVAULT_URL=https://<vault-name>.vault.azure.net
-   KEYVAULT_PASSWORDLOCATION=velo-password
+   KEYVAULT_PASSWORDLOCATION=velociraptor-collection-password
 
 
 Running Cycas

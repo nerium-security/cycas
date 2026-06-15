@@ -11,6 +11,7 @@ import json
 import time
 import uuid
 import requests
+from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from azure.keyvault.secrets import SecretClient
 import logging as log
 
@@ -208,9 +209,12 @@ class KeyvaultManager:
             return False
 
 
-    def read_creds(self, secret_name):
+    def read_creds(self, secret_name, retries=8, delay=15):
         '''
         Retrieve a secret value from Azure Key Vault.
+
+        Retries on 403 Forbidden to absorb RBAC propagation delay after a
+        role assignment (e.g. Secrets Officer) has only just been made.
 
         Args:
             secret_name (str): Name of the secret to retrieve.
@@ -220,13 +224,26 @@ class KeyvaultManager:
             otherwise None.
         '''
 
-        try:
-            log.debug(f'Retrieving secret "{secret_name}" from {self.vault_url}')
-            secret = self.client.get_secret(secret_name)
-            return secret.value
-        except Exception as e:
-            log.error(f'Failed to retrieve secret "{secret_name}": {e}')
-            return None
+        for attempt in range(1, retries + 1):
+            try:
+                log.debug(f'Retrieving secret "{secret_name}" from {self.vault_url}')
+                secret = self.client.get_secret(secret_name)
+                return secret.value
+            except ResourceNotFoundError:
+                return None
+            except HttpResponseError as e:
+                if e.status_code == 403 and attempt < retries:
+                    log.warning(
+                        f"Secret read attempt {attempt}/{retries} forbidden "
+                        f"(RBAC propagation?), retrying in {delay}s: {str(e).splitlines()[0]}"
+                    )
+                    time.sleep(delay)
+                    continue
+                log.error(f'Failed to retrieve secret "{secret_name}": {e}')
+                return None
+            except Exception as e:
+                log.error(f'Failed to retrieve secret "{secret_name}": {e}')
+                return None
         
     def fix_key_format(self, key_str: str) -> str:
         '''

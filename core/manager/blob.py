@@ -280,6 +280,16 @@ class BlobManager:
             log.warning(f'Could not list blobs in {container_name} with prefix {prefix!r}: {e}')
             return []
 
+    def upload_file(self, container_name, blob_name, file_path):
+        '''Upload a local file as a blob, overwriting any existing content.'''
+        blob_client = self.get_client(container_name, blob_name)
+        try:
+            with open(file_path, 'rb') as f:
+                blob_client.upload_blob(f, overwrite=True)
+            log.info(f'Uploaded {file_path} to {container_name}/{blob_name}')
+        except Exception as e:
+            log.error(f'Failed to upload {file_path} to {container_name}/{blob_name}: {e}')
+
     def upload_text(self, container_name, blob_name, text):
         '''Upload a UTF-8 string as a blob, overwriting any existing content.'''
         blob_client = self.get_client(container_name, blob_name)
@@ -317,6 +327,36 @@ class BlobManager:
         except Exception as e:
             log.warning(f'Could not read {container_name}/{blob_name}: {e}')
             return None
+
+    def generate_container_sas_url(self, subscription_id, resource_group, account_name,
+                                    container_name, expiry_days=30):
+        '''Generate a time-limited, write-only SAS URL for a container.
+
+        Useful for handing upload access to untrusted endpoints (e.g. an
+        offline Velociraptor collector) without exposing the account key
+        or granting read/delete access.
+
+        Returns:
+            tuple[str, datetime]: The SAS URL and its UTC expiry.
+        '''
+        from datetime import datetime, timedelta, timezone
+        from azure.storage.blob import generate_container_sas, ContainerSasPermissions
+
+        mgmt = StorageManagementClient(self.credential, subscription_id)
+        keys = mgmt.storage_accounts.list_keys(resource_group, account_name)
+        account_key = keys.keys[0].value
+
+        expiry = datetime.now(timezone.utc) + timedelta(days=expiry_days)
+        token = generate_container_sas(
+            account_name=account_name,
+            container_name=container_name,
+            account_key=account_key,
+            permission=ContainerSasPermissions(write=True, create=True),
+            expiry=expiry,
+        )
+        sas_url = f'{self.account_url}/{container_name}?{token}'
+        log.info(f"Generated write-only SAS URL for container '{container_name}' (expires {expiry.isoformat()}).")
+        return sas_url, expiry
 
     def switch_to_account_key(self, subscription_id, resource_group, account_name):
         '''Re-initialise the blob service client using the storage account key.
