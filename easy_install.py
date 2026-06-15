@@ -501,7 +501,7 @@ def collect_storage_config(defaults, resource_group, step_label='4/7'):
     section(f'Step {step_label} — Storage Account')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
-    account_name     = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'zip')[:18] + rand6())
+    account_name     = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'input')[:18] + rand6())
     table_name       = prompt('Status table name',              default=defaults.get('blob_logtable_name',    'statusupdate'))
     queue_name       = prompt('Queue name',                     default=defaults.get('blob_queue_name',       'triagepackages'))
     container        = prompt('Blob container for uploads',     default=defaults.get('blob_container_input',  'uploads'))
