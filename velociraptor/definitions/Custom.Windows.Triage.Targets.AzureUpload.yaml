@@ -2,11 +2,8 @@ name: Custom.Windows.Triage.Targets.AzureUpload
 description: |
   Collects Windows.Triage.Targets, zips the results on the endpoint,
   then uploads the single zip directly to Azure Blob Storage via SAS URL.
-
-  The zip is built in the endpoint's TEMP directory and cleaned up
-  automatically when the query completes.
-
-  Requires Velociraptor >= 0.6.9 for upload_azure() support.
+  Meaning the results are not uploaded to the Velociraptor server.
+  
 
   ## Generating a write-only SAS URL
   Azure Portal → Storage Account → Containers → <container> →
