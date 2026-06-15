@@ -4,6 +4,8 @@ description: |
   then uploads the single zip directly to Azure Blob Storage via SAS URL.
   Meaning the results are not uploaded to the Velociraptor server.
   
+  To run this artefact, you need to import Windows.Triage.Targets first: 
+  - https://triage.velocidex.com/docs/windows.triage.targets/
 
   ## Generating a write-only SAS URL
   Azure Portal → Storage Account → Containers → <container> →
