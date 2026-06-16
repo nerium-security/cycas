@@ -315,8 +315,8 @@ def get_zipfilename(zipfile, unzip_dir):
         str: Derived zipfile basename.
     '''
 
-    if zipfile.startswith(unzip_dir):
-        zipfile_basename = zipfile.removeprefix(unzip_dir)
+    if zipfile.startswith(unzip_dir + os.sep):
+        zipfile_basename = zipfile.removeprefix(unzip_dir + os.sep)
     else:
         zipfile_basename = os.path.basename(zipfile)
 
