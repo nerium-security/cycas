@@ -195,8 +195,8 @@ def main():
             if adx and result_postprocess.get('success') and result_postprocess.get('size', 0) > 0:
                 fullpath = result_postprocess.get('fullpath')
                 if fullpath:
-                    tablename = adx.create_new_table_if_required(adx_config, fullpath, forcetablename=None)
-                    adx.launch_upload_file(tablename, fullpath)
+                    tablename, col_mappings = adx.create_new_table_if_required(adx_config, fullpath, forcetablename=None)
+                    adx.launch_upload_file(tablename, fullpath, column_mappings=col_mappings)
 
         summary_per_zip = pretty_print_summary_per_zip(extract_path, results, mode='full')
 

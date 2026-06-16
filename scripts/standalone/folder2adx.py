@@ -130,8 +130,8 @@ def main():
 
         inject_sourcefilename(filepath)
 
-        tablename = adx.create_new_table_if_required(config, filepath, forcetablename=None)
-        result = adx.launch_upload_file(tablename, filepath)
+        tablename, col_mappings = adx.create_new_table_if_required(config, filepath, forcetablename=None)
+        result = adx.launch_upload_file(tablename, filepath, column_mappings=col_mappings)
 
         if result.get('upload_initiated'):
             succeeded += 1

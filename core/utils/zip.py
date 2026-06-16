@@ -287,6 +287,7 @@ def resolve_hostname(zip_path, zipfilecontent, extract_path, password=None):
     Returns:
         str: Hostname if found, otherwise an empty string.
     '''
+
     entry = next((f for f in zipfilecontent if f.filename == 'client_info.json'), None)
     if not entry:
         log.info('client_info.json not found in zip')
@@ -297,7 +298,7 @@ def resolve_hostname(zip_path, zipfilecontent, extract_path, password=None):
     try:
         with open(extracted) as f:
             data = json.load(f)
-            hostname = data.get('os_info', {}).get('hostname', '')
+            hostname = data.get('hostname', '')
             if hostname:
                 log.info(f'Resolved hostname from client_info.json: {hostname}')
             return hostname

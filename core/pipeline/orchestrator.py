@@ -106,6 +106,8 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config, _log_ha
         if not zip_password:
             raise RuntimeError('ZIP is encrypted but no password could be retrieved. Check Key Vault connectivity and secret name.')
 
+        extracted_zip, _ = extract_encrypted_and_non_encrypted_zipfiles(extracted_zip, extract_path, zip_password)
+
     zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
 
     # ----------------------------------------------------------------------
@@ -413,11 +415,14 @@ def _upload_file_to_adx(managers, Config, file):
         dict: Upload result metadata returned by the ADX ingestion client.
     '''
 
+    upload_result = {}
+
     if Config.adx_cluster_enabled:
 
-        tablename = managers.adx.create_new_table_if_required(Config, file, forcetablename=False)
+        tablename, col_mappings = managers.adx.create_new_table_if_required(Config, file, forcetablename=False)
 
-        upload_result = managers.adx.launch_upload_file(tablename, file)
+        if col_mappings:
+            upload_result = managers.adx.launch_upload_file(tablename, file, column_mappings=col_mappings)
 
     return upload_result
 
