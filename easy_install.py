@@ -66,6 +66,24 @@ def error(msg):     print(f'  [ERROR] {msg}', file=sys.stderr); sys.exit(1)
 def rand6():        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
 
+def _get_wsl_ip():
+    try:
+        with open('/proc/version') as f:
+            if 'microsoft' not in f.read().lower():
+                return None
+    except OSError:
+        return None
+    try:
+        out = subprocess.check_output(['ip', 'addr', 'show', 'eth0'], text=True)
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith('inet '):
+                return line.split()[1].split('/')[0]
+    except Exception:
+        pass
+    return None
+
+
 def prompt(label, default=None):
     suffix = f' [{default}]' if default is not None else ''
     while True:
@@ -1407,7 +1425,11 @@ def main():
             info('To run the webapp locally (optional, but recommended):')
             info('  cd <repo root>')
             info('  gunicorn --bind=0.0.0.0:8000 --timeout 600 webapp.app:app')
-            info('  Then open http://localhost:8000 in your browser.')
+            wsl_ip = _get_wsl_ip()
+            if wsl_ip:
+                info(f'  Then open http://{wsl_ip}:8000 in your browser (WSL IP).')
+            else:
+                info('  Then open http://localhost:8000 in your browser.')
             print()
     else:
         success('Installation complete.')
