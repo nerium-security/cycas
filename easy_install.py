@@ -46,6 +46,7 @@ TRIAGE_TARGETS_URL  = 'https://triage.velocidex.com/artifacts/Windows.Triage.Tar
 COLLECTOR_SAS_VALID_DAYS = 90
 BINARIES_CONTAINER  = 'binaries'
 KEYVAULT_PASSWORD_LOCATION = 'velociraptor-collection-password'
+KEYVAULT_SAS_LOCATION      = 'collector-sas-url'
 
 SKUS = {
     '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'Small engagements / Testing  (2 vCores,  16 GB RAM/node) ~$2.40/day when idle'),
@@ -1090,6 +1091,11 @@ def provision_collector(credential, subscription_id, resource_group,
         expiry_days=COLLECTOR_SAS_VALID_DAYS,
     )
     success(f'SAS URL ready (expires {expiry:%Y-%m-%d}).')
+
+    if keyvault_name:
+        step(f"Uploading SAS URL to Key Vault secret '{KEYVAULT_SAS_LOCATION}'...")
+        kv.set_secret(KEYVAULT_SAS_LOCATION, sas_url)
+        success(f"SAS URL stored in Key Vault secret '{KEYVAULT_SAS_LOCATION}'.")
 
     step('Downloading latest Windows.Triage.Targets artifact definition...')
     build_dir = ROOT / 'build' / 'collector'
