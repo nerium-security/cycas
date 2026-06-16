@@ -384,15 +384,15 @@ class AdxManager:
 
     def _move_columns_to_end(self, schema):
         '''
-        Reorder schema dictionary so that Hostname and Sourcefile
+        Reorder schema dictionary so that cycas_* columns
         appear as the last keys.
 
         Args:
             schema (dict): Dictionary representing the table schema
                 with column names as keys and data types as values.
         '''
-        
-        end = ('Hostname', 'Sourcefile', 'UploadId')
+
+        end = ('cycas_hostname', 'cycas_sourcezip', 'cycas_uploadid')
 
         schema = dict(
             [(k, schema[k]) for k in schema if k not in end] +
@@ -552,6 +552,42 @@ class AdxManager:
 
         except Exception as e:
             log.error(f'Failed to initiate the data upload request to table {tablename}. Error: {e}' )
+
+    def add_cycas_metadata(self, fullpath, hostname, sourcezip, uploadid):
+        '''
+        Add cycas_hostname, cycas_sourcezip, and cycas_uploadid to each JSON line in a file.
+
+        Performs an in-place modification of a JSON Lines file, appending
+        the three cycas_* fields to every line that ends with '}'.
+
+        Args:
+            fullpath (str): Path to the JSONL file to modify in place.
+            hostname (str): Hostname value (may be empty string).
+            sourcezip (str): Source ZIP filename.
+            uploadid (str): Upload identifier.
+
+        Returns:
+            dict: Result with added_cycas_metadata (bool) and duration, or added_cycas_metadata_error on failure.
+        '''
+        start = time.time()
+        basename = os.path.basename(fullpath)
+        columns = f',"cycas_hostname":"{hostname}","cycas_sourcezip":"{sourcezip}","cycas_uploadid":"{uploadid}"'
+        replacement = columns + '}'
+
+        try:
+            for line in fileinput.input(fullpath, inplace=True):
+                line = line.rstrip('\n')
+                if line.endswith('}'):
+                    line = line[:-1] + replacement
+                print(line)
+        except Exception as e:
+            log.error(f'Could not add cycas metadata to {basename}. Error: {e}')
+            return {'added_cycas_metadata_error': e}
+
+        return {
+            'added_cycas_metadata': True,
+            'added_cycas_metadata_duration': time.time() - start
+        }
 
     def add_hostname_to_file(self, fullpath, hostname, zipfile, uploadid=None):
         '''

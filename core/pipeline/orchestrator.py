@@ -14,7 +14,7 @@ sources (blob, sas, sftp, localfolder) into Azure Data Explorer (ADX). It:
 import shutil
 import tempfile
 from core.utils.files import split_jsonl_by_size, delete_file, get_filesize_bytes
-from core.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles
+from core.utils.zip import zip_contains_raw_artifacts, get_password_from_env_or_prompt, load_ignore_list, list_files_in_zip, extract_single_file, get_extract_path, is_ignored, extract_encrypted_and_non_encrypted_zipfiles, resolve_hostname
 from core.utils.postprocess import download_velociraptor, build_remap, find_hostname, load_artifacts, select_artifacts, postprocess
 from core.utils.summary import define_results_upload_dict, define_results_dict, get_duration_from_timespan, pretty_print_summary_per_zip, summary_per_zip_to_file
 from core.utils.misc import should_download, prepare_and_send_webhook_message
@@ -107,6 +107,12 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config, _log_ha
             raise RuntimeError('ZIP is encrypted but no password could be retrieved. Check Key Vault connectivity and secret name.')
 
     zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
+
+    # ----------------------------------------------------------------------
+    # Resolve hostname once for use by both processing paths
+    # ----------------------------------------------------------------------
+    hostname = resolve_hostname(extracted_zip, zipfilecontent, extract_path, zip_password)
+    results['summary'][0]['hostname'] = hostname
 
     # ----------------------------------------------------------------------
     # Post-process raw artifacts and upload it's results (json)
@@ -234,9 +240,10 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
                                     definitions,
                                     unzip_dir)
 
-        hostname = find_hostname(remappingfile,
-                                    binary,
-                                    definitions)
+        hostname = results['summary'][0].get('hostname') or find_hostname(remappingfile,
+                                                                           binary,
+                                                                           definitions)
+        results['summary'][0]['hostname'] = hostname
 
         # ------------------------------------------------------------------
         # Loading Velociraptor artifacts (blob-first, local fallback)
@@ -258,8 +265,7 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
 
             update_status_in_log(managers, Config, artifact, start, results)
 
-            result_postprocess = postprocess(hostname,
-                                                artifact,
+            result_postprocess = postprocess(artifact,
                                                 zipfile,
                                                 definitions,
                                                 unzip_dir,
@@ -280,22 +286,23 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
             uploadid = results['summary'][0].get('uploadid')
 
             if Config.adx_cluster_enabled and outputfile_path:
-                managers.adx.add_hostname_to_file(outputfile_path, hostname, zipfile, uploadid)
+                managers.adx.add_cycas_metadata(outputfile_path, hostname, zipfile, uploadid)
 
             result_upload.update(_upload_file_to_adx(managers, Config, outputfile_path))
 
             delete_file(outputfile_path)
 
-            if logfile_path and uploadid:
-                artifact_name = artifact.split('(')[0].strip()
-                try:
-                    managers.blob.upload_text(
-                        Config.blob_container_status,
-                        f'logs/{uploadid}/{artifact_name}.log',
-                        open(logfile_path).read(),
-                    )
-                except Exception as exc:
-                    log.warning(f'Could not upload logfile for {artifact_name}: {exc}')
+            if logfile_path:
+                if uploadid and Config.blob_storageaccount_enabled:
+                    artifact_name = artifact.split('(')[0].strip()
+                    try:
+                        managers.blob.upload_text(
+                            Config.blob_container_status,
+                            f'logs/{uploadid}/{artifact_name}.log',
+                            open(logfile_path).read(),
+                        )
+                    except Exception as exc:
+                        log.warning(f'Could not upload logfile for {artifact_name}: {exc}')
                 delete_file(logfile_path)
 
             result_upload['was_postprocessed_with'] = artifact
@@ -346,11 +353,8 @@ def extract_all_json_from_zip_and_upload(managers,
     # ----------------------------------------------------------------------
     ignorelist = load_ignore_list(Config.var_location_ignorelist)
 
-    hostname = None
-    uploadid = None
-    if Config.adx_cluster_enabled:
-        hostname = results['summary'][0].get('hostname')
-        uploadid = results['summary'][0].get('uploadid')
+    hostname = results['summary'][0].get('hostname', '')
+    uploadid = results['summary'][0].get('uploadid', '')
 
     # ----------------------------------------------------------------------
     # Extract file by file, add hostname to file, and upload jsons
@@ -372,34 +376,24 @@ def extract_all_json_from_zip_and_upload(managers,
         if not extracted_file:
             continue
 
-        if hostname:
-            upload_dict.update(managers.adx.add_hostname_to_file(extracted_file, hostname, extracted_zip, uploadid))
+        if Config.adx_cluster_enabled:
+            upload_dict.update(managers.adx.add_cycas_metadata(extracted_file, hostname, extracted_zip, uploadid))
 
-            MAX_ADX_UPLOAD_SIZE = 6_442_450_944  # 6 GB
+        MAX_ADX_UPLOAD_SIZE = 6_442_450_944  # 6 GB
 
-            if get_filesize_bytes(extracted_file) >= MAX_ADX_UPLOAD_SIZE:
-                file_is_split = True
-                files_to_upload = split_jsonl_by_size(extracted_file)
-            else:
-                file_is_split = False
-                files_to_upload = [extracted_file]
+        if get_filesize_bytes(extracted_file) >= MAX_ADX_UPLOAD_SIZE:
+            file_is_split = True
+            files_to_upload = split_jsonl_by_size(extracted_file)
+        else:
+            file_is_split = False
+            files_to_upload = [extracted_file]
 
-            for file_path in files_to_upload:
-
-                upload_dict.update(_upload_file_to_adx(managers, Config, file_path))
-
-                results['uploads'].append(upload_dict)
-                delete_file(file_path)
-            
-            if file_is_split:
-                delete_file(extracted_file)
-
-        if not hostname:
-            
-            upload_dict.update(_upload_file_to_adx(managers, Config, extracted_file))
-
+        for file_path in files_to_upload:
+            upload_dict.update(_upload_file_to_adx(managers, Config, file_path))
             results['uploads'].append(upload_dict)
+            delete_file(file_path)
 
+        if file_is_split:
             delete_file(extracted_file)
 
     return results

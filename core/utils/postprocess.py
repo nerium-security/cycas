@@ -300,28 +300,6 @@ def select_artifacts(artifacts):
             result.append(item)
     return result
 
-def get_zipfilename(zipfile, unzip_dir):
-    '''
-    Derive a zipfile basename used for output metadata.
-
-    If the zipfile path starts with the unzip directory, removes that prefix.
-    Otherwise falls back to `os.path.basename(zipfile)`.
-
-    Args:
-        zipfile (str): Zipfile path.
-        unzip_dir (str): Base unzip directory path.
-
-    Returns:
-        str: Derived zipfile basename.
-    '''
-
-    if zipfile.startswith(unzip_dir + os.sep):
-        zipfile_basename = zipfile.removeprefix(unzip_dir + os.sep)
-    else:
-        zipfile_basename = os.path.basename(zipfile)
-
-    return zipfile_basename
-
 def get_zipfiledir(zipfile, unzip_dir):
     '''
     Determine and create the output directory for a zipfile.
@@ -354,7 +332,7 @@ def get_zipfiledir(zipfile, unzip_dir):
 
     return unzip_dir_fullpath
 
-def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outputformat, remappingfile, dur):
+def postprocess(artifact, zipfile, definitions, unzipdir, binary, outputformat, remappingfile, dur):
     '''
     Run Velociraptor post-processing for a single artifact against a zipfile.
 
@@ -364,7 +342,6 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
     execution success, duration, output size, and paths.
 
     Args:
-        hostname (str): Hostname value to embed in each output row.
         artifact (str): Velociraptor artifact query target (e.g. 'Custom.Windows...()').
         zipfile (str): Path to the zipfile being processed.
         definitions (str): Path to Velociraptor artifact definitions.
@@ -389,8 +366,6 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
 
     artifact_name = re.sub(r'\(.*', '', artifact)
 
-    zipfile_basename = get_zipfilename(zipfile, unzipdir)
-
     unzip_dir_fullpath = get_zipfiledir(zipfile, unzipdir)
 
     outputfile = os.path.join(unzip_dir_fullpath, artifact_name + '.' + outputformat)
@@ -402,7 +377,7 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
         '--nobanner',
         '--definitions', f'{definitions}',
         'query', 
-        f"SELECT *, \'{hostname}\' as Hostname, \'{zipfile_basename}\' as Sourcefile FROM Artifact.{artifact}",
+        f"SELECT * FROM Artifact.{artifact}",
         '--format', f'{outputformat}',
         '--output', f'{outputfile}',
         '--logfile', f'{logfile}'
