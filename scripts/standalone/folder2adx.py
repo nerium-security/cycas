@@ -1,6 +1,7 @@
 import os
 import sys
 import argparse
+import fileinput
 import logging as log
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from azure.identity import DefaultAzureCredential
 
 from core.manager.adx import AdxManager
 from core.utils.log import setup_logging
+from core.utils.zip import load_ignore_list, is_ignored
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent.parent
@@ -20,13 +22,11 @@ script_path = sys.argv[0]
 scriptname = os.path.basename(script_path)
 
 parser = argparse.ArgumentParser(
-    description='Upload a folder of JSONL files directly into Azure Data Explorer (ADX).',
+    description='Upload a folder of JSONL files into Azure Data Explorer (ADX). Only .jsonl files are supported.',
     epilog=f'Example usage: python3 {scriptname} -i /path/to/folder'
 )
 parser.add_argument('-i', '--input', required=True,
-                    help='Path to the folder containing files to upload.')
-parser.add_argument('-p', '--pattern', default='*.jsonl',
-                    help='Glob pattern for files to upload (default: *.jsonl).')
+                    help='Path to the folder containing JSONL files to upload.')
 parser.add_argument('-r', '--recursive', action='store_true',
                     help='Recurse into subdirectories.')
 parser.add_argument('--adx-cluster-uri',
@@ -43,6 +43,9 @@ parser.add_argument('--table-prefix',
                     help='Optional prefix for ADX table names (overrides .env ADX_TABLE_PREFIX).')
 parser.add_argument('--sample-size', default=1000, type=int,
                     help='Rows sampled per file for ADX schema inference (default: 1000).')
+parser.add_argument('--ignorelist',
+                    default=str(PROJECT_ROOT / os.environ.get('VAR_LOCATION_IGNORELIST', '.ignorelist.json')),
+                    help='Path to ignore list JSON file (default: .ignorelist.json in project root).')
 parser.add_argument('-v', '--verbose', action='store_true',
                     help='Enable verbose (DEBUG) logging.')
 
@@ -51,10 +54,19 @@ args = parser.parse_args(args=None if sys.argv[1:] else ['--help'])
 log = log.getLogger(__name__)
 
 
-def find_files(folder: Path, pattern: str, recursive: bool) -> list[Path]:
+def inject_sourcefilename(filepath: str) -> None:
+    replacement = f',"Sourcefilename":"{filepath}"}}'
+    for line in fileinput.input(filepath, inplace=True):
+        line = line.rstrip('\n')
+        if line.endswith('}'):
+            line = line[:-1] + replacement
+        print(line)
+
+
+def find_files(folder: Path, recursive: bool) -> list[Path]:
     if recursive:
-        return sorted(folder.rglob(pattern))
-    return sorted(folder.glob(pattern))
+        return sorted(folder.rglob('*.jsonl'))
+    return sorted(folder.glob('*.jsonl'))
 
 
 def main():
@@ -69,12 +81,21 @@ def main():
         log.error(f'Input path is not a directory: {folder}')
         sys.exit(1)
 
-    files = find_files(folder, args.pattern, args.recursive)
+    files = find_files(folder, args.recursive)
     if not files:
-        log.info(f'No files matching "{args.pattern}" found in {folder}.')
+        log.info(f'No JSONL files found in {folder}.')
         sys.exit(0)
 
-    log.info(f'Found {len(files)} file(s) to upload.')
+    ignorelist = load_ignore_list(args.ignorelist)
+    files = [
+        f for f in files
+        if not is_ignored(
+            SimpleNamespace(filename=str(f), file_size=f.stat().st_size),
+            ignorelist
+        ).get('ignored_upload')
+    ]
+
+    log.info(f'Found {len(files)} file(s) to upload (after ignore list filtering).')
 
     missing = [
         (args.adx_cluster_uri,           'ADX_CLUSTER_URI / --adx-cluster-uri'),
@@ -106,6 +127,8 @@ def main():
     for file in files:
         filepath = str(file)
         log.info(f'Processing: {filepath}')
+
+        inject_sourcefilename(filepath)
 
         tablename = adx.create_new_table_if_required(config, filepath, forcetablename=None)
         result = adx.launch_upload_file(tablename, filepath)
