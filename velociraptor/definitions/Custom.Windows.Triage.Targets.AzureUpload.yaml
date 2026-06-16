@@ -442,6 +442,12 @@ parameters:
     type: bool
     default: Y
 
+  - name: TrustedPathRegex
+    type: regex
+    default: ^C:\\\\
+    description: |
+      Do not hash or upload any adaptive files matching this regex.
+
   - name: MaxFileSize
     type: int
     description: Max individual file size in bytes (0 = unlimited).
@@ -504,6 +510,7 @@ sources:
             Targets=serialize(item=Targets, format="json"),
             Devices=Devices,
             DropVerySlowRules=DropVerySlowRules,
+            TrustedPathRegex=TrustedPathRegex,
             MaxFileSize=MaxFileSize,
             VSS_MAX_AGE_DAYS=VSS_MAX_AGE_DAYS,
             WORKERS=WORKERS
