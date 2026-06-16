@@ -1140,7 +1140,7 @@ def provision_collector(credential, subscription_id, resource_group,
 
     success(f'Collector built: {collector}')
     info('Run it on a Windows endpoint to collect Windows.Triage.Targets and')
-    info(f'upload the encrypted result to: {blob_uri}/{container}')
+    info(f'uploads the encrypted result to: {blob_uri}/{container}')
     info(f'The SAS URL embedded in the collector expires {expiry:%Y-%m-%d}.')
 
     step(f"Uploading collector binary to '{BINARIES_CONTAINER}' container...")
