@@ -178,8 +178,7 @@ def main():
 
         for artifact in artifacts_selected:
 
-            result_postprocess = postprocess(hostname,
-                                        artifact,
+            result_postprocess = postprocess(artifact,
                                         zipfile,
                                         definitions,
                                         extract_path,
