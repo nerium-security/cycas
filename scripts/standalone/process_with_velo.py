@@ -95,6 +95,7 @@ def main():
     essentials_or_full = 'essential' if essentials else 'full'
     artifacts_fullpath = os.path.join(scriptlocation, artifacts)
     artifacts_json = load_artifacts(artifacts_fullpath)
+    artifacts_json = {'essential': artifacts_json.get('default', []), 'full': []}
     artifacts_selected = select_artifacts(artifacts_json, essentials_or_full)
 
     all_zip_summaries = []
