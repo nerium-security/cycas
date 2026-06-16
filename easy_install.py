@@ -1289,6 +1289,7 @@ def main():
                 keyvault_password_location = KEYVAULT_PASSWORD_LOCATION
                 zip_password = None
                 webapp_mode, webapp_app, webapp_allowed_ips = 'local', None, None
+                info('Web app configured for local use (optional - run with gunicorn when needed).')
             else:
                 keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
                 webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
@@ -1403,7 +1404,7 @@ def main():
         success('Installation complete.')
         print()
         if webapp_mode == 'local':
-            info('To run the webapp locally:')
+            info('To run the webapp locally (optional, but recommended):')
             info('  cd <repo root>')
             info('  gunicorn --bind=0.0.0.0:8000 --timeout 600 webapp.app:app')
             info('  Then open http://localhost:8000 in your browser.')
