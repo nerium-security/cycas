@@ -52,7 +52,6 @@ parser.add_argument('-u', '--url', default='https://github.com/Velocidex/velocir
 parser.add_argument('-i', '--input', nargs='+',  help='Path(s) to ZIP file(s). Supports wildcards (e.g. *.zip or **/*.zip)')
 parser.add_argument('-f', '--outputfolder', help='If not set it will output next to the zip file.')
 parser.add_argument('-a', '--artifacts', default=PROJECT_ROOT / 'velociraptor/artifacts/velociraptor_artifacts.json')
-parser.add_argument('-e', '--essentials', help='Only essential artifacts', action='store_true' )
 parser.add_argument('-v', '--verbose', help='Enables verbose logging', action='store_true')
 parser.add_argument('-m', '--master_summary', default='master_summary.csv', help='Outputs the master summary of all processed zips to a file')
 parser.add_argument('-s', '--artifact_summary', default='_summary.txt', help='Outputs detailed summary per single zip to a file.')
@@ -82,7 +81,6 @@ custom_definitions = args.custom_definitions
 outputtype = args.outputtype
 verbose = args.verbose
 artifacts = args.artifacts
-essentials = args.essentials
 outputfolder = args.outputfolder
 master_summary = args.master_summary
 artifact_summary = args.artifact_summary
@@ -139,11 +137,9 @@ def main():
 
     passwords = load_from_env_variable()
 
-    essentials_or_full = 'essential' if essentials else 'full'
     artifacts_fullpath = os.path.join(scriptlocation, artifacts)
     artifacts_json = load_artifacts(artifacts_fullpath)
-    artifacts_json = {'essential': artifacts_json.get('default', []), 'full': []}
-    artifacts_selected = select_artifacts(artifacts_json, essentials_or_full)
+    artifacts_selected = select_artifacts(artifacts_json)
 
     all_zip_summaries = []
     for zipfile in zipfiles:

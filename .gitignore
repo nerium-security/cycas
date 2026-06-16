@@ -446,4 +446,4 @@ build/*
 
 velociraptor/definitions/*.yaml
 !velociraptor/definitions/Custom.*.yaml
-*/master_summary.csv
+master_summary.csv
