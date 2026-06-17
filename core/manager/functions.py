@@ -202,8 +202,32 @@ class FunctionsManager:
         path = f'{self._rg_path(resource_group)}/providers/Microsoft.Web/sites/{app_name}'
         existing = self._arm_get(path)
         if existing:
-            log.info(f"Function app '{app_name}' already exists, skipping creation.")
-            return existing
+            log.info(f"Function app '{app_name}' already exists, updating functionAppConfig.")
+            self._arm(
+                'PATCH', path,
+                json={
+                    'properties': {
+                        'functionAppConfig': {
+                            'deployment': {
+                                'storage': {
+                                    'type': 'blobContainer',
+                                    'value': deployment_container_url,
+                                    'authentication': {
+                                        'type': 'StorageAccountConnectionString',
+                                        'storageAccountConnectionStringName': 'CYCAS_DEPLOY_STORAGE',
+                                    },
+                                },
+                            },
+                            'scaleAndConcurrency': {
+                                'instanceMemoryMB': instance_memory_mb,
+                                'maximumInstanceCount': 500,
+                            },
+                            'runtime': {'name': 'python', 'version': '3.13'},
+                        },
+                    },
+                },
+            )
+            return self._arm_get(path)
         result = self._arm(
             'PUT',
             f'{self._rg_path(resource_group)}/providers/Microsoft.Web/sites/{app_name}',

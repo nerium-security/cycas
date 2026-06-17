@@ -1248,10 +1248,7 @@ def main():
                 webapp_mode                = saved.get('webapp_mode')
                 webapp_app                 = saved['webapp_app']
                 webapp_allowed_ips         = saved['webapp_allowed_ips']
-                zip_password               = None  # not stored in state
-                if keyvault_name:
-                    import getpass
-                    zip_password = getpass.getpass('  Re-enter ZIP password for Key Vault secret upload: ')
+                zip_password               = None  # not stored in state; provision_collector reads it from Key Vault
             else:
                 watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
                 keyvault_name = keyvault_password_location = zip_password = None

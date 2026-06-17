@@ -35,6 +35,8 @@ It concurrently processes the data (ZIP files collected to Blob storage or SFTP)
 
    /guides/postprocessingraw
 
+   /guides/velociraptor-server-to-adx
+
 .. toctree::
    :maxdepth: 2
    :hidden:

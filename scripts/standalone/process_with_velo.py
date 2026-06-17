@@ -33,7 +33,9 @@ from core.utils.summary import (define_results_dict,
 from core.utils.zip import (extract_encrypted_and_non_encrypted_zipfiles,
                                  get_password,
                                  load_from_env_variable,
-                                 find_zip_files)
+                                 find_zip_files,
+                                 list_files_in_zip,
+                                 extract_single_file)
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent.parent
@@ -163,6 +165,11 @@ def main():
             continue
 
         extracted_zip, _ = extract_encrypted_and_non_encrypted_zipfiles(zipfile, extract_path, zip_password)
+
+        zipfilecontent = list_files_in_zip(extracted_zip, zip_password)
+        client_info_entry = next((f for f in zipfilecontent if f.filename == 'client_info.json'), None)
+        if client_info_entry:
+            extract_single_file(extracted_zip, client_info_entry, extract_path, zip_password)
 
         remappingfile = build_remap(extracted_zip,
                                     extract_path,

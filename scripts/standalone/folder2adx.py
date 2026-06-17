@@ -1,7 +1,7 @@
 import os
 import sys
+import json
 import argparse
-import fileinput
 import logging as log
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
 
 from core.manager.adx import AdxManager
-from core.utils.log import setup_logging
+from core.utils.log import setup_logging, generate_sessionid
 from core.utils.zip import load_ignore_list, is_ignored
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -54,13 +54,15 @@ args = parser.parse_args(args=None if sys.argv[1:] else ['--help'])
 log = log.getLogger(__name__)
 
 
-def inject_sourcefilename(filepath: str) -> None:
-    replacement = f',"Sourcefilename":"{filepath}"}}'
-    for line in fileinput.input(filepath, inplace=True):
-        line = line.rstrip('\n')
-        if line.endswith('}'):
-            line = line[:-1] + replacement
-        print(line)
+def read_hostname_from_client_info(folder: Path) -> str:
+    client_info = folder / 'client_info.json'
+    if not client_info.exists():
+        return ''
+    try:
+        data = json.loads(client_info.read_text())
+        return data.get('os_info', {}).get('fqdn', '')
+    except Exception:
+        return ''
 
 
 def find_files(folder: Path, recursive: bool) -> list[Path]:
@@ -121,6 +123,13 @@ def main():
         adx_table_prefix=args.table_prefix,
     )
 
+    hostname   = read_hostname_from_client_info(folder)
+    sourcezip  = folder.name
+    uploadid   = 'id' + generate_sessionid()
+
+    if hostname:
+        log.info(f'Hostname from client_info.json: {hostname}')
+
     succeeded = 0
     failed = 0
 
@@ -128,9 +137,14 @@ def main():
         filepath = str(file)
         log.info(f'Processing: {filepath}')
 
-        inject_sourcefilename(filepath)
+        adx.add_cycas_metadata(filepath, hostname, sourcezip, uploadid)
 
         tablename, col_mappings = adx.create_new_table_if_required(config, filepath, forcetablename=None)
+
+        if not col_mappings:
+            log.info(f'Skipping empty file: {file.name}')
+            continue
+
         result = adx.launch_upload_file(tablename, filepath, column_mappings=col_mappings)
 
         if result.get('upload_initiated'):
