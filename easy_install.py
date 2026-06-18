@@ -19,6 +19,7 @@ import re
 import secrets
 import subprocess
 import sys
+import time
 import random
 import string
 import zipfile
@@ -515,9 +516,9 @@ def auto_generate_names(resource_group, defaults):
     database_name = defaults.get('adx_database_name', 'dfir')
 
     watcher_app   = f'{resource_group[:43]}-watcher-{suffix}'
-    watcher_sa    = (re.sub(r'[^a-z0-9]', '', watcher_app.lower()))[:18] + suffix
+    watcher_sa    = (rg_slug + 'watcher')[:18] + suffix
     processor_app = f'{resource_group[:41]}-processor-{suffix}'
-    processor_sa  = (re.sub(r'[^a-z0-9]', '', processor_app.lower()))[:18] + suffix
+    processor_sa  = (rg_slug + 'processor')[:18] + suffix
     insights_name = f'{rg_slug[:50]}-insights'
     keyvault_name = f'{rg_slug[:14]}-kv-{suffix}'
 
@@ -960,6 +961,15 @@ def provision_functions(credential, subscription_id,
     step(f"Applying app settings to '{processor_app}'...")
     funcs.set_app_settings(resource_group, processor_app, processor_settings)
     success('Processor settings applied.')
+
+    # The Flex Consumption scale controller can keep using a stale cached
+    # config for a while after the ARM update above — restart both apps to
+    # force a reload, or the deploy below can fail with MissingDeploymentConfigException.
+    step('Restarting function apps to refresh deployment config...')
+    funcs.restart(resource_group, watcher_app)
+    funcs.restart(resource_group, processor_app)
+    time.sleep(30)
+    success('Function apps restarted.')
 
     # Deploy code (ZIP includes function files + core/ package)
     root     = Path(__file__).parent
