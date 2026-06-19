@@ -1062,9 +1062,7 @@ def write_collector_spec(spec_path, sas_url, password):
 
 Artifacts:
   Windows.Triage.Targets:
-    HighLevelTargets:
-      - _KapeTriage
-      - _Live
+    HighLevelTargets: '["_KapeTriage","_Live"]'
 
 Target: Azure
 TargetArgs:
@@ -1074,17 +1072,17 @@ EncryptionScheme: Password
 EncryptionArgs:
   password: "{password}"
 
-OptVerbose: "Y"
-OptBanner: "Y"
-OptPrompt: "N"
-OptAdmin: "Y"
-OptLevel: "4"
-OptConcurrency: "2"
+OptVerbose: true
+OptBanner: true
+OptPrompt: false
+OptAdmin: true
+OptLevel: 4
+OptConcurrency: 2
 OptFormat: "jsonl"
 OptFilenameTemplate: "Triage-%FQDN%-%TIMESTAMP%"
-OptProgressTimeout: "1800"
-OptTimeout: "0"
-OptDeleteAtExit: "Y"
+OptProgressTimeout: 1800
+OptTimeout: 0
+OptDeleteAtExit: true
 ''')
 
 
