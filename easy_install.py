@@ -389,8 +389,12 @@ def collect_functions_config(resource_group, step_label='6/7'):
     processor_sa  = prompt('Processor storage account name (3-24 alphanumeric)',
                            default=processor_clean[:18] + rand6())
 
-    rg_slug       = re.sub(r'[^a-z0-9]', '', resource_group.lower())
-    insights_name = prompt('Application Insights name', default=f'{rg_slug[:50]}-insights')
+    rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
+    while True:
+        insights_name = prompt('Application Insights name', default=f'{rg_slug[:50]}-insights')
+        if re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$', insights_name) and not insights_name.endswith('.'):
+            break
+        print("  Name must start with a letter or digit and contain only letters, digits, '.', '_' or '-'.")
 
     return watcher_app, watcher_sa, processor_app, processor_sa, insights_name
 
