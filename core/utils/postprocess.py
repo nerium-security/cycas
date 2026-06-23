@@ -405,9 +405,12 @@ def postprocess(artifact, zipfile, definitions, unzipdir, binary, outputformat, 
 
     postprocess_results = run_command(cmd, postprocess_results, False, dur)
 
-    filesize = os.path.getsize(outputfile)
-    if os.path.exists(outputfile) and filesize == 0:
-        log.debug(f'Empty file: {outputfile}')
+    if os.path.exists(outputfile):
+        filesize = os.path.getsize(outputfile)
+        if filesize == 0:
+            log.debug(f'Empty file: {outputfile}')
+    else:
+        filesize = 0
 
     postprocess_results['cmd'] = shlex.join(cmd)
     postprocess_results['size'] = filesize
