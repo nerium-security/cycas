@@ -723,29 +723,34 @@ def provision_storage(azure, credential, subscription_id,
     if artifacts_src.exists():
         env_vals       = read_env_defaults(ENV_FILE)
         binary         = env_vals.get('velociraptor_binary', '/tmp/velociraptor')
+        binary_url     = env_vals.get('velociraptor_url', defaults.get('velociraptor_url', ''))
         defs_dest      = Path(env_vals.get('velociraptor_definitions', 'velociraptor/definitions/'))
-        artifacts_data = json.loads(artifacts_src.read_text())
-        all_names      = [
-            entry.split('(')[0].strip()
-            for entries in artifacts_data.values()
-            for entry in entries
-        ]
-        defs_dest.mkdir(parents=True, exist_ok=True)
-        exported = 0
-        for name in all_names:
-            dest = defs_dest / f'{name}.yaml'
-            if dest.exists():
-                continue
-            result = subprocess.run(
-                [binary, 'artifacts', 'show', name],
-                capture_output=True, text=True,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                dest.write_text(result.stdout)
-                exported += 1
-            else:
-                info(f'Could not export {name}: {result.stderr.strip()}')
-        success(f'{exported} artifact definition(s) exported to {defs_dest}.')
+        download_velociraptor(binary, binary_url)
+        if not os.path.exists(binary):
+            info(f'Velociraptor binary not available at {binary}, skipping definition export.')
+        else:
+            artifacts_data = json.loads(artifacts_src.read_text())
+            all_names      = [
+                entry.split('(')[0].strip()
+                for entries in artifacts_data.values()
+                for entry in entries
+            ]
+            defs_dest.mkdir(parents=True, exist_ok=True)
+            exported = 0
+            for name in all_names:
+                dest = defs_dest / f'{name}.yaml'
+                if dest.exists():
+                    continue
+                result = subprocess.run(
+                    [binary, 'artifacts', 'show', name],
+                    capture_output=True, text=True,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    dest.write_text(result.stdout)
+                    exported += 1
+                else:
+                    info(f'Could not export {name}: {result.stderr.strip()}')
+            success(f'{exported} artifact definition(s) exported to {defs_dest}.')
     else:
         info('velociraptor_artifacts.json not found, skipping definition export.')
 
