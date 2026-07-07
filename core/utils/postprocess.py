@@ -123,12 +123,23 @@ def run_command(cmd, result, store_output, max_duration_sec=400):
 
     return result
 
+def get_velociraptor_version(binary):
+    '''Return the version string reported by an existing Velociraptor binary, or None.'''
+    try:
+        result = subprocess.run([binary, 'version'], capture_output=True, text=True, timeout=10)
+        match = re.search(r'^version:\s*(\S+)', result.stdout, re.MULTILINE)
+        return match.group(1) if match else None
+    except Exception:
+        return None
+
+
 def download_velociraptor(binary, url):
     '''
-    Download the Velociraptor binary if it does not already exist.
+    Download the Velociraptor binary if it does not already exist or is out of date.
 
     Fetches the binary from the provided URL and writes it to `binary`.
-    If the destination file already exists, no download is performed.
+    If the destination file already exists and matches the version encoded in
+    `url`, no download is performed.
 
     Args:
         binary (str): Destination path for the Velociraptor binary.
@@ -136,8 +147,15 @@ def download_velociraptor(binary, url):
     '''
 
     if os.path.exists(binary):
-        log.info(f'Download is not required of {url} as {binary} already exists.')
-        return
+        url_version_match = re.search(r'velociraptor-v([\d.]+)-', url)
+        url_version = url_version_match.group(1) if url_version_match else None
+        local_version = get_velociraptor_version(binary)
+
+        if url_version is None or local_version == url_version:
+            log.info(f'Download is not required of {url} as {binary} already exists (version {local_version}).')
+            return
+
+        log.info(f'{binary} is version {local_version}, but {url} is version {url_version}. Re-downloading.')
 
     try:
         response = requests.get(url, stream=True)
@@ -300,28 +318,6 @@ def select_artifacts(artifacts):
             result.append(item)
     return result
 
-def get_zipfilename(zipfile, unzip_dir):
-    '''
-    Derive a zipfile basename used for output metadata.
-
-    If the zipfile path starts with the unzip directory, removes that prefix.
-    Otherwise falls back to `os.path.basename(zipfile)`.
-
-    Args:
-        zipfile (str): Zipfile path.
-        unzip_dir (str): Base unzip directory path.
-
-    Returns:
-        str: Derived zipfile basename.
-    '''
-
-    if zipfile.startswith(unzip_dir):
-        zipfile_basename = zipfile.removeprefix(unzip_dir)
-    else:
-        zipfile_basename = os.path.basename(zipfile)
-
-    return zipfile_basename
-
 def get_zipfiledir(zipfile, unzip_dir):
     '''
     Determine and create the output directory for a zipfile.
@@ -354,7 +350,7 @@ def get_zipfiledir(zipfile, unzip_dir):
 
     return unzip_dir_fullpath
 
-def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outputformat, remappingfile, dur):
+def postprocess(artifact, zipfile, definitions, unzipdir, binary, outputformat, remappingfile, dur):
     '''
     Run Velociraptor post-processing for a single artifact against a zipfile.
 
@@ -364,7 +360,6 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
     execution success, duration, output size, and paths.
 
     Args:
-        hostname (str): Hostname value to embed in each output row.
         artifact (str): Velociraptor artifact query target (e.g. 'Custom.Windows...()').
         zipfile (str): Path to the zipfile being processed.
         definitions (str): Path to Velociraptor artifact definitions.
@@ -389,8 +384,6 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
 
     artifact_name = re.sub(r'\(.*', '', artifact)
 
-    zipfile_basename = get_zipfilename(zipfile, unzipdir)
-
     unzip_dir_fullpath = get_zipfiledir(zipfile, unzipdir)
 
     outputfile = os.path.join(unzip_dir_fullpath, artifact_name + '.' + outputformat)
@@ -402,7 +395,7 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
         '--nobanner',
         '--definitions', f'{definitions}',
         'query', 
-        f"SELECT *, \'{hostname}\' as Hostname, \'{zipfile_basename}\' as Sourcefile FROM Artifact.{artifact}",
+        f"SELECT * FROM Artifact.{artifact}",
         '--format', f'{outputformat}',
         '--output', f'{outputfile}',
         '--logfile', f'{logfile}'
@@ -412,9 +405,12 @@ def postprocess(hostname, artifact, zipfile, definitions, unzipdir, binary, outp
 
     postprocess_results = run_command(cmd, postprocess_results, False, dur)
 
-    filesize = os.path.getsize(outputfile)
-    if os.path.exists(outputfile) and filesize == 0:
-        log.debug(f'Empty file: {outputfile}')
+    if os.path.exists(outputfile):
+        filesize = os.path.getsize(outputfile)
+        if filesize == 0:
+            log.debug(f'Empty file: {outputfile}')
+    else:
+        filesize = 0
 
     postprocess_results['cmd'] = shlex.join(cmd)
     postprocess_results['size'] = filesize

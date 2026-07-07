@@ -202,8 +202,32 @@ class FunctionsManager:
         path = f'{self._rg_path(resource_group)}/providers/Microsoft.Web/sites/{app_name}'
         existing = self._arm_get(path)
         if existing:
-            log.info(f"Function app '{app_name}' already exists, skipping creation.")
-            return existing
+            log.info(f"Function app '{app_name}' already exists, updating functionAppConfig.")
+            self._arm(
+                'PATCH', path,
+                json={
+                    'properties': {
+                        'functionAppConfig': {
+                            'deployment': {
+                                'storage': {
+                                    'type': 'blobContainer',
+                                    'value': deployment_container_url,
+                                    'authentication': {
+                                        'type': 'StorageAccountConnectionString',
+                                        'storageAccountConnectionStringName': 'CYCAS_DEPLOY_STORAGE',
+                                    },
+                                },
+                            },
+                            'scaleAndConcurrency': {
+                                'instanceMemoryMB': instance_memory_mb,
+                                'maximumInstanceCount': 500,
+                            },
+                            'runtime': {'name': 'python', 'version': '3.13'},
+                        },
+                    },
+                },
+            )
+            return self._arm_get(path)
         result = self._arm(
             'PUT',
             f'{self._rg_path(resource_group)}/providers/Microsoft.Web/sites/{app_name}',
@@ -247,6 +271,19 @@ class FunctionsManager:
             json={'properties': settings},
         )
         log.info(f"App settings applied to '{app_name}'.")
+
+    def restart(self, resource_group, app_name):
+        '''
+        Restart a Function App. The Flex Consumption scale controller can
+        keep serving a stale cached copy of functionAppConfig/app settings
+        for a while after an ARM update — restarting forces it to reload,
+        which is the only reliable way found to clear MissingDeploymentConfigException.
+        '''
+        self._arm(
+            'POST',
+            f'{self._rg_path(resource_group)}/providers/Microsoft.Web/sites/{app_name}/restart',
+        )
+        log.info(f"'{app_name}' restarted.")
 
     # ------------------------------------------------------------------
     # RBAC
@@ -302,7 +339,20 @@ class FunctionsManager:
     # Deployment
     # ------------------------------------------------------------------
 
-    def deploy(self, app_name, function_dir: Path, core_dir: Path):
+    def _run_publish(self, app_name, tmp_dir):
+        '''Run `func azure functionapp publish`, streaming output while also capturing it.'''
+        proc = subprocess.Popen(
+            ['func', 'azure', 'functionapp', 'publish', app_name],
+            cwd=tmp_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        )
+        lines = []
+        for line in proc.stdout:
+            print(line, end='')
+            lines.append(line)
+        proc.wait()
+        return proc.returncode, ''.join(lines)
+
+    def deploy(self, app_name, function_dir: Path, core_dir: Path, max_attempts=6, retry_delay=30):
         '''
         Deploy a Function App using the Azure Functions Core Tools CLI.
 
@@ -310,6 +360,11 @@ class FunctionsManager:
         then runs: func azure functionapp publish <app_name>
 
         Installs azure-functions-core-tools via npm if func is not found.
+
+        Newly created/updated Flex Consumption deployment-storage app settings
+        can take a while to become visible to the publish pipeline, which
+        fails with MissingDeploymentConfigException in the meantime — retried
+        with a delay rather than treated as a hard failure.
         '''
         if not shutil.which('func'):
             log.info('func not found — installing azure-functions-core-tools via npm...')
@@ -327,12 +382,17 @@ class FunctionsManager:
             shutil.copytree(function_dir, tmp_dir, dirs_exist_ok=True, ignore=_STAGE_IGNORE)
             shutil.copytree(core_dir, Path(tmp_dir) / 'core', dirs_exist_ok=True, ignore=_STAGE_IGNORE)
 
-            result = subprocess.run(
-                ['func', 'azure', 'functionapp', 'publish', app_name],
-                cwd=tmp_dir,
-                text=True,
-            )
-            if result.returncode != 0:
+            for attempt in range(1, max_attempts + 1):
+                returncode, output = self._run_publish(app_name, tmp_dir)
+                if returncode == 0:
+                    break
+                if 'MissingDeploymentConfigException' in output and attempt < max_attempts:
+                    log.warning(
+                        f"Deployment storage config not yet visible to the publish pipeline for "
+                        f"'{app_name}', retrying in {retry_delay}s (attempt {attempt}/{max_attempts})..."
+                    )
+                    time.sleep(retry_delay)
+                    continue
                 raise RuntimeError(f'func azure functionapp publish failed for {app_name}')
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)

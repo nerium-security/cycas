@@ -22,7 +22,7 @@ from datetime import timedelta, datetime
 from collections import Counter
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat, ClientRequestProperties
 from azure.kusto.data.exceptions import KustoApiError
-from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel
+from azure.kusto.ingest import QueuedIngestClient, IngestionProperties, ReportLevel, ColumnMapping, IngestionMappingKind
 from azure.kusto.ingest.status import KustoIngestStatusQueues
 from azure.mgmt.kusto import KustoManagementClient
 from azure.mgmt.kusto.models import Cluster, AzureSku, ReadWriteDatabase, ClusterPrincipalAssignment
@@ -183,17 +183,19 @@ class AdxManager:
         '''
 
         parts = []
-        
+        column_mappings = []
+
         for columnname in dict.fromkeys(schema):  # preserves order, removes duplicates
 
             clean_name = self.sanitize_adx_column_name(columnname)
-            
-            # default safely to string if missing from schema
-            adx_type = schema.get(clean_name, 'string')
+            adx_type = schema.get(columnname, 'string')
 
             parts.append(f"['{clean_name}']:{adx_type}")
+            column_mappings.append(
+                ColumnMapping(column_name=clean_name, column_type=adx_type, path=f"$['{columnname}']")
+            )
 
-        return ', '.join(parts)
+        return ', '.join(parts), column_mappings
 
     def _classify_value(self, value: str):
         '''
@@ -319,21 +321,21 @@ class AdxManager:
         if forcetablename:
             tablename = forcetablename
         else:
-            tablename = Config.adx_table_prefix + self.sanitize_adx_column_name(os.path.basename(file))
+            tablename = Config.adx_table_prefix + self.sanitize_adx_column_name(Path(os.path.basename(file)).stem)
             if os.path.getsize(file) == 0:
-                return tablename
+                return tablename, []
 
         table_exists, existing_columns = self.check_if_table_exists(tablename)
 
-        cmd_createmergetable, new_columns = self.get_table_createcommand(file, Config, tablename)
-            
+        cmd_createmergetable, new_columns, column_mappings = self.get_table_createcommand(file, Config, tablename)
+
         new_columns_exists = self.checking_if_new_columns_exists(existing_columns, new_columns)
 
         if not table_exists or new_columns_exists:
 
             self.launch_createmerge_table(cmd_createmergetable)
 
-        return tablename
+        return tablename, column_mappings
         
     def checking_if_new_columns_exists(self, existing_columns, new_columns):
         '''
@@ -372,9 +374,6 @@ class AdxManager:
             str: Sanitized column name.
         '''
 
-        # removes extension
-        name = Path(name).stem
-
         # removes any special characters
         name = re.sub(r"[<>\[\]{}\"'`\\]", "_", name)
         name = re.sub(r"\s+", "_", name)
@@ -384,15 +383,15 @@ class AdxManager:
 
     def _move_columns_to_end(self, schema):
         '''
-        Reorder schema dictionary so that Hostname and Sourcefile
+        Reorder schema dictionary so that cycas_* columns
         appear as the last keys.
 
         Args:
             schema (dict): Dictionary representing the table schema
                 with column names as keys and data types as values.
         '''
-        
-        end = ('Hostname', 'Sourcefile', 'UploadId')
+
+        end = ('cycas_hostname', 'cycas_sourcezip', 'cycas_uploadid')
 
         schema = dict(
             [(k, schema[k]) for k in schema if k not in end] +
@@ -425,11 +424,11 @@ class AdxManager:
         
         schema = self._move_columns_to_end(schema)
 
-        columnstring = self.prepare_string_with_columnames(schema)
+        columnstring, column_mappings = self.prepare_string_with_columnames(schema)
 
-        clean_columnames = list(schema.keys())
+        clean_columnames = [cm.column for cm in column_mappings]
 
-        return f'.create-merge table {tablename} ({columnstring})', clean_columnames
+        return f'.create-merge table {tablename} ({columnstring})', clean_columnames, column_mappings
 
     def upload_detailed_status(self, results, Config, tablename):
         '''
@@ -445,12 +444,12 @@ class AdxManager:
             tablename (str): Table name to use or force for detailed status.
         '''
 
-        table = self.create_new_table_if_required(Config, results, tablename)
+        table, _ = self.create_new_table_if_required(Config, results, tablename)
         results_df = pd.DataFrame(results)
 
         self.launch_upload_df(results_df, table)
 
-    def read_ingestion_properties(self, tablename):
+    def read_ingestion_properties(self, tablename, column_mappings=None):
         '''
         Build ingestion properties for JSON ingestion into an ADX table.
 
@@ -466,9 +465,11 @@ class AdxManager:
             database=self.adx_database_name,
             table=tablename,
             data_format=DataFormat.JSON,
-            report_level=ReportLevel.FailuresAndSuccesses)
+            report_level=ReportLevel.FailuresAndSuccesses,
+            column_mappings=column_mappings,
+            ingestion_mapping_kind=IngestionMappingKind.JSON if column_mappings else None)
 
-    def launch_upload_file(self, tablename: str, fullpath: str) -> bool:
+    def launch_upload_file(self, tablename: str, fullpath: str, column_mappings=None) -> bool:
         '''
         Initiate queued ingestion of a local file into ADX.
 
@@ -491,7 +492,7 @@ class AdxManager:
 
         result = {}
         start = time.time()
-        ingestion_props = self.read_ingestion_properties(tablename)
+        ingestion_props = self.read_ingestion_properties(tablename, column_mappings)
 
         size = os.path.getsize(fullpath)
         basename = os.path.basename(fullpath)
@@ -552,6 +553,42 @@ class AdxManager:
 
         except Exception as e:
             log.error(f'Failed to initiate the data upload request to table {tablename}. Error: {e}' )
+
+    def add_cycas_metadata(self, fullpath, hostname, sourcezip, uploadid):
+        '''
+        Add cycas_hostname, cycas_sourcezip, and cycas_uploadid to each JSON line in a file.
+
+        Performs an in-place modification of a JSON Lines file, appending
+        the three cycas_* fields to every line that ends with '}'.
+
+        Args:
+            fullpath (str): Path to the JSONL file to modify in place.
+            hostname (str): Hostname value (may be empty string).
+            sourcezip (str): Source ZIP filename.
+            uploadid (str): Upload identifier.
+
+        Returns:
+            dict: Result with added_cycas_metadata (bool) and duration, or added_cycas_metadata_error on failure.
+        '''
+        start = time.time()
+        basename = os.path.basename(fullpath)
+        columns = f',"cycas_hostname":"{hostname}","cycas_sourcezip":"{sourcezip}","cycas_uploadid":"{uploadid}"'
+        replacement = columns + '}'
+
+        try:
+            for line in fileinput.input(fullpath, inplace=True):
+                line = line.rstrip('\n')
+                if line.endswith('}'):
+                    line = line[:-1] + replacement
+                print(line)
+        except Exception as e:
+            log.error(f'Could not add cycas metadata to {basename}. Error: {e}')
+            return {'added_cycas_metadata_error': e}
+
+        return {
+            'added_cycas_metadata': True,
+            'added_cycas_metadata_duration': time.time() - start
+        }
 
     def add_hostname_to_file(self, fullpath, hostname, zipfile, uploadid=None):
         '''
@@ -738,7 +775,7 @@ class AdxManager:
                 result = mgmt.clusters.begin_create_or_update(resource_group, cluster_name, cluster).result()
                 break
             except Exception as e:
-                transient = any(t in str(e) for t in ('InternalServerError', 'GatewayTimeout', 'ServiceUnavailable', 'ServiceIsInMaintenance', 'Conflict'))
+                transient = any(t in str(e) for t in ('InternalServerError', 'Internal Server Error', 'PartiallySucceeded', 'GatewayTimeout', 'ServiceUnavailable', 'ServiceIsInMaintenance', 'Conflict'))
                 if attempt == 3 or not transient:
                     raise
                 log.warning(f"Transient error on attempt {attempt}/3, retrying in 30 s: {e}")

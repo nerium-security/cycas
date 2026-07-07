@@ -1,0 +1,533 @@
+name: Custom.Windows.Triage.Targets.AzureUpload
+description: |
+  Collects Windows.Triage.Targets, zips the results on the endpoint,
+  then uploads the single zip directly to Azure Blob Storage via SAS URL.
+  Meaning the results are not uploaded to the Velociraptor server.
+  
+  To run this artefact, you need to import Windows.Triage.Targets first: 
+  - https://triage.velocidex.com/docs/windows.triage.targets/
+
+  ## Generating a write-only SAS URL
+  Azure Portal → Storage Account → Containers → <container> →
+  Shared access tokens → Permissions: Write + Create (NOT Read/Delete) →
+  Set expiry → Generate SAS token and URL → copy the Blob SAS URL.
+
+parameters:
+  - name: SasURL
+    description: |
+      Azure Blob Storage container SAS URL (Write + Create permissions only).
+      e.g. https://myaccount.blob.core.windows.net/triage?sv=2022-11-02&...
+    type: string
+
+  - name: UploadPrefix
+    description: |
+      Optional folder prefix inside the container, e.g. "2024-IR/endpoint1".
+      Leave blank to upload to the container root.
+    default: ""
+    type: string
+
+  - name: ZipPassword
+    description: |
+      Optional password to encrypt the zip archive before upload.
+      Leave blank for no encryption.
+    default: ""
+    type: string
+
+  - name: HighLevelTargets
+    type: multichoice
+    default: "[]"
+    choices:
+      - _BasicCollection
+      - _KapeTriage
+      - _Live
+      - _SANS_Triage
+
+  - name: Targets
+    type: multichoice
+    default: "[]"
+    choices:
+    - _BasicCollection
+    - _KapeTriage
+    - _Live
+    - _SANS_Triage
+    - 1Password
+    - 360SecureBrowser
+    - 4KVideoDownloader
+    - AVG
+    - AceText
+    - AcronisTrueImage
+    - Action1
+    - ActiveDirectoryNTDS
+    - ActiveDirectorySysvol
+    - AdaptiveScheduledTasks
+    - AdaptiveServices
+    - AdvancedIPScanner
+    - AdvancedPortScanner
+    - AgentRansack
+    - Amcache
+    - Ammyy
+    - Antivirus
+    - AnyDesk
+    - ApacheAccessLog
+    - AppCompatPCA
+    - AppData
+    - AppXPackages
+    - ApplicationEvents
+    - Arc
+    - AsperaConnect
+    - AteraAgent
+    - Avast
+    - AviraAVLogs
+    - BCD
+    - BITS
+    - BitTorrent
+    - Bitdefender
+    - Bitmap
+    - Boot
+    - BoxDrive_Metadata
+    - BoxDrive_UserFiles
+    - BraveBrowser
+    - BrowserCache
+    - CapabilityAccessManager
+    - CertUtil
+    - ChatGPT
+    - Chocolatey
+    - Chrome
+    - ChromeBeta
+    - ChromeDev
+    - ChromeExtension_Metadata
+    - ChromeExtensions
+    - ChromeFileSystem
+    - ChromeSxS
+    - Chromium
+    - CiscoJabber
+    - ClipboardMaster
+    - CloudStorage_All
+    - CloudStorage_Metadata
+    - CloudStorage_OneDriveExplorer
+    - CocCoc
+    - CombinedLogs
+    - Combofix
+    - ConfluenceLogs
+    - CrowdStrikeFalcon
+    - Cybereason
+    - Cylance
+    - DC_
+    - DWAgent
+    - Debian
+    - DeveloperCloudCredentials
+    - DirectoryOpus
+    - DirectoryTraversal_AudioFiles
+    - DirectoryTraversal_ExcelDocuments
+    - DirectoryTraversal_PDFDocuments
+    - DirectoryTraversal_PictureFiles
+    - DirectoryTraversal_SQLiteDatabases
+    - DirectoryTraversal_VideoFiles
+    - DirectoryTraversal_WildCardExample
+    - DirectoryTraversal_WordDocuments
+    - Discord
+    - DoubleCommander
+    - Drivers
+    - Dropbox_Metadata
+    - Dropbox_UserFiles
+    - EFCommander
+    - ESET
+    - Edge
+    - EdgeBetaChromium
+    - EdgeChromium
+    - EdgeChromiumExtensions
+    - EdgeDevChromium
+    - EdgeFileSystem
+    - EdgeSxSChromium
+    - ElasticDefend
+    - Emsisoft
+    - EncapsulationLogging
+    - EventLogs
+    - EventLogs_RDP
+    - EventTraceLogs
+    - EventTranscriptDB
+    - Evernote
+    - Everything_VoidTools_
+    - EvidenceOfExecution
+    - Exchange
+    - ExchangeClientAccess
+    - ExchangeCve_2021_26855
+    - ExchangeSetupLog
+    - ExchangeTransport
+    - FSecure
+    - FTPClients
+    - FastStoneImageViewer
+    - Fences
+    - FileExplorerReplacements
+    - FileSystem
+    - FileZillaClient
+    - FileZillaServer
+    - Firefox
+    - FortiClientVPN
+    - FreeCommander
+    - FreeDownloadManager
+    - FreeFileSync
+    - Freenet
+    - FrostWire
+    - Gigatribe
+    - GoogleDrive_Metadata
+    - GoogleDriveBackupSync_UserFiles
+    - GoogleEarth
+    - GroupPolicy
+    - HeidiSQL
+    - HexChat
+    - HitmanPro
+    - HostsFile
+    - IDrive
+    - IISConfiguration
+    - IISLogFiles
+    - IRCClients
+    - ISLOnline
+    - ITarian
+    - IceChat
+    - IconCacheDB
+    - ImgBurn
+    - InternetExplorer
+    - IrfanView
+    - J
+    - JDownloader2
+    - JavaWebCache
+    - JumpLists
+    - Kali
+    - KapeTriage
+    - Kaseya
+    - Keepass
+    - KeepassXC
+    - LNKFilesAndJumpLists
+    - Level
+    - LinuxOnWindowsProfileFiles
+    - LiveUserFiles
+    - LnkTargets
+    - LogFile
+    - LogFiles
+    - LogMeIn
+    - MFT
+    - MFTMirr
+    - MOF
+    - MSSQLErrorLog
+    - MacriumReflect
+    - Malwarebytes
+    - ManageEngineLogs
+    - Mattermost
+    - McAfee
+    - McAfee_ePO
+    - MediaMonkey
+    - Megasync
+    - MemoryFiles
+    - MeshAgent
+    - MessagingClients
+    - MicrosoftAzureCopy
+    - MicrosoftOfficeBackstage
+    - MicrosoftOneNote
+    - MicrosoftSafetyScanner
+    - MicrosoftStickyNotes
+    - MicrosoftTeams
+    - MicrosoftToDo
+    - MidnightCommander
+    - MiniTimelineCollection
+    - MobaXTerm
+    - MongoDBLogs
+    - MouseWithoutBorders
+    - MstyDatabase
+    - MultiCommander
+    - NETCLRUsageLogs
+    - NGINXLogs
+    - NZBGet
+    - Nessus
+    - NetMonitorforEmployeesProfessional
+    - Netstat
+    - NetworkScanner
+    - NewsbinPro
+    - Newsleecher
+    - Nicotine_
+    - Notepad
+    - Notepad_
+    - Notion
+    - OfficeAutosave
+    - OfficeDiagnostics
+    - OfficeDocumentCache
+    - OneCommander
+    - OneDrive_Metadata
+    - OneDrive_UserFiles
+    - OpenSSHClient
+    - OpenSSHServer
+    - OpenVPNClient
+    - Opera
+    - OutlookPSTOST
+    - P2PClients
+    - PDQDeploy
+    - PackageManagers
+    - PaloAlto
+    - PeaZip
+    - PerfLogs
+    - PowerShell7Config
+    - PowerShellConsole
+    - PowerShellTranscripts
+    - Prefetch
+    - PrefetchBinaries
+    - PrismaAccessBrowser
+    - ProgramData
+    - ProgramExecution
+    - ProtonVPN
+    - PsList
+    - PuffinSecureBrowser
+    - PulseSecure
+    - PushNotification
+    - Q_Dir
+    - QFinderPro_QNAP_
+    - QQBrowser
+    - QlikSense
+    - QuickAssist
+    - RDCMan
+    - RDPCache
+    - RDPJumplist
+    - RDPLogs
+    - Radmin
+    - RcloneConf
+    - RecentFileCache
+    - RecentFolders
+    - RecycleBin
+    - RecycleBin_DataFiles
+    - RecycleBin_InfoFiles
+    - RegistryHives
+    - RegistryHivesMSIXApps
+    - RegistryHivesOther
+    - RegistryHivesSystem
+    - RegistryHivesUser
+    - Remcos
+    - RemoteAdmin
+    - RemoteDesktopManager
+    - RemoteManipulatorSystem
+    - RemoteUtilities_app
+    - RoamingProfile
+    - Robo_FTP
+    - RogueKiller
+    - RustDesk
+    - SABnbzd
+    - SCCMClientLogs
+    - SDB
+    - SDS
+    - SOFELK
+    - SQLiteDatabases
+    - SRUM
+    - SSHTunnelCommandArtifacts
+    - SUM
+    - SUPERAntiSpyware
+    - SUSELinuxEnterpriseServer
+    - ScheduledTasks
+    - ScreenConnect
+    - SecureAge
+    - SentinelOne
+    - ServerTriage
+    - Session
+    - ShareX
+    - Shareaza
+    - SiemensTIA
+    - Signal
+    - SignatureCatalog
+    - SimpleHelp
+    - Skype
+    - Slack
+    - Snagit
+    - SnipAndSketch
+    - SnippingTool
+    - SoftPerfectNetscan
+    - Sophos
+    - Soulseek
+    - SpeedCommander
+    - Splashtop
+    - StartupFolders
+    - StartupInfo
+    - Steam
+    - SublimeText
+    - SugarSync
+    - SumatraPDF
+    - Supermium
+    - SupremoRemoteDesktop
+    - Symantec_AV_Logs
+    - Syncthing
+    - Syscache
+    - T
+    - TablacusExplorer
+    - Tailscale
+    - TeamViewerLogs
+    - Telegram
+    - TeraCopy
+    - ThumbCache
+    - Thunderbird
+    - TorrentClients
+    - Torrents
+    - TotalAV
+    - TotalCommander
+    - TreeSize
+    - TrendMicro
+    - UCBrowser
+    - UEMS
+    - USBDetective
+    - USBDevicesLogs
+    - Ubuntu
+    - Ultraviewer
+    - Usenet
+    - UsenetClients
+    - UsersFolders
+    - VIPRE
+    - VLC_Media_Player
+    - VMware
+    - VMwareInventory
+    - VMwareMemory
+    - VNCLogs
+    - VPNClients
+    - Viber
+    - VirtualBox
+    - VirtualBoxConfig
+    - VirtualBoxLogs
+    - VirtualBoxMemory
+    - VirtualDisks
+    - VisualStudioCode
+    - Vivaldi
+    - WBEM
+    - WER
+    - WSL
+    - WaveBrowser
+    - WebBrowsers
+    - WebServers
+    - Webroot
+    - WhatsApp
+    - WhatsApp_Media
+    - WinDefendDetectionHist
+    - WinSCP
+    - WindowsApp
+    - WindowsCopilotRecall
+    - WindowsDefender
+    - WindowsFirewall
+    - WindowsHello
+    - WindowsIndexSearch
+    - WindowsNetwork
+    - WindowsNotificationsDB
+    - WindowsOSUpgradeArtifacts
+    - WindowsPowerDiagnostics
+    - WindowsServerDNSAndDHCP
+    - WindowsSubsystemforAndroid
+    - WindowsTelemetryDiagnosticsLegacy
+    - WindowsTimeline
+    - WindowsUpdate
+    - WindowsYourPhone
+    - XPRestorePoints
+    - XYplorer
+    - Xeox
+    - Yandex
+    - ZScaler
+    - ZohoAssist
+    - Zoom
+    - eMule
+    - iTunesBackup
+    - mIRC
+    - mRemoteNG
+    - openSUSE
+    - pCloudDatabase
+    - qBittorrent
+    - uTorrent
+
+  - name: Devices
+    type: json_array
+    default: '["C:"]'
+    description: Drive letters to search.
+
+  - name: DropVerySlowRules
+    type: bool
+    default: Y
+
+  - name: TrustedPathRegex
+    type: regex
+    default: ^C:\\\\
+    description: |
+      Do not hash or upload any adaptive files matching this regex.
+
+  - name: MaxFileSize
+    type: int
+    description: Max individual file size in bytes (0 = unlimited).
+
+  - name: VSS_MAX_AGE_DAYS
+    type: int
+    default: 0
+
+  - name: WORKERS
+    type: int
+    default: "5"
+
+required_permissions:
+  - FILESYSTEM_READ
+  - FILESYSTEM_WRITE
+
+resources:
+  timeout: 3600
+
+sources:
+  - name: AzureUpload
+
+    precondition: |
+      SELECT * FROM info() WHERE OS = "windows"
+
+    query: |
+      LET _ = SELECT * FROM Artifact.Windows.Triage.Targets()
+
+      // 1. Build the blob name
+      LET Hostname_org <= SELECT Hostname FROM info()
+      LET Hostname <= Hostname_org[0].Hostname
+      LET Timestamp <= format(format="%v", args=[timestamp(epoch=now())])
+
+      LET ZipName <= if(
+        condition=UploadPrefix,
+        then=format(
+          format="%v/%v-%v.zip",
+          args=[
+            regex_replace(source=UploadPrefix, re="/$", replace=""),
+            Hostname,
+            Timestamp
+          ]
+        ),
+        else=format(format="%v-%v.zip", args=[Hostname, Timestamp])
+      )
+
+      // 2. Create a temp path for the zip on disk ────────────────────────────
+      LET TempZip <= tempfile(extension=".zip", remove_last=TRUE)
+
+      // 3. Collect Windows.Triage.Targets into the zip ──────────────────────
+      //    collect() runs the artifact and stores all uploaded files into
+      //    a zip container at the path we provide via `output`.
+      //    The `password` arg is optional — empty string means no encryption.
+      LET ZipResult <= SELECT *
+      FROM collect(
+        artifacts="Windows.Triage.Targets",
+        args=dict(
+          `Windows.Triage.Targets`=dict(
+            HighLevelTargets=serialize(item=HighLevelTargets, format="json"),
+            Targets=serialize(item=Targets, format="json"),
+            Devices=Devices,
+            DropVerySlowRules=DropVerySlowRules,
+            TrustedPathRegex=TrustedPathRegex,
+            MaxFileSize=MaxFileSize,
+            VSS_MAX_AGE_DAYS=VSS_MAX_AGE_DAYS,
+            WORKERS=WORKERS
+          )
+        ),
+        output=TempZip,
+        password=ZipPassword
+      )
+
+      // 4. Upload the zip to Azure Blob Storage
+      SELECT
+        ZipName AS BlobPath,
+        TempZip AS LocalZip,
+        upload_azure(
+          file=TempZip,
+          accessor="file",
+          sas_url=SasURL,
+          name=ZipName
+        ) AS AzureUpload
+      FROM ZipResult

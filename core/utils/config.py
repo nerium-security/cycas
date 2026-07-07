@@ -59,6 +59,7 @@ class Config(BaseSettings):
     adx_ingestion_batching_max_size_mb: int
     keyvault_enabled: bool
     keyvault_url: str = ''
+    keyvault_portal_url: str = ''
     keyvault_passwordlocation: str = ''
     sftp_enabled: bool
     sftp_keyvaultsecretname: str = ''

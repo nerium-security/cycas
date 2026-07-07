@@ -271,6 +271,42 @@ def load_ignore_list(ignorelist_path):
         log.error(f'Could not load {ignorelist_path}. Error: {str(e)}')
         return []
 
+def resolve_hostname(zip_path, zipfilecontent, extract_path, password=None):
+    '''
+    Resolve the hostname from a triage ZIP archive.
+
+    Finds client_info.json in the already-listed zip contents, extracts it,
+    and reads os_info.fqdn. Returns an empty string if absent or unreadable.
+
+    Args:
+        zip_path (str): Path to the ZIP archive.
+        zipfilecontent (list): ZipInfo entries from list_files_in_zip().
+        extract_path (str): Directory to extract client_info.json into.
+        password (str | None): Password for encrypted archives.
+
+    Returns:
+        str: Hostname if found, otherwise an empty string.
+    '''
+
+    entry = next((f for f in zipfilecontent if f.filename == 'client_info.json'), None)
+    if not entry:
+        log.info('client_info.json not found in zip')
+        return ''
+    extracted = extract_single_file(zip_path, entry, extract_path, password)
+    if not extracted:
+        return ''
+    try:
+        with open(extracted) as f:
+            data = json.load(f)
+            hostname = data.get('hostname', '')
+            if hostname:
+                log.info(f'Resolved hostname from client_info.json: {hostname}')
+            return hostname
+    except Exception as e:
+        log.info(f'Could not read hostname from client_info.json: {e}')
+        return ''
+
+
 def list_files_in_zip(zip_path, password=None):
     '''
     List entries contained in a ZIP archive.
