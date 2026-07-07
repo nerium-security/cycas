@@ -6,6 +6,7 @@ Function Apps, assigning RBAC roles to managed identities, configuring app
 settings, and deploying code via the Azure Functions Core Tools CLI.
 '''
 
+import json
 import os
 import shutil
 import subprocess
@@ -381,6 +382,17 @@ class FunctionsManager:
         try:
             shutil.copytree(function_dir, tmp_dir, dirs_exist_ok=True, ignore=_STAGE_IGNORE)
             shutil.copytree(core_dir, Path(tmp_dir) / 'core', dirs_exist_ok=True, ignore=_STAGE_IGNORE)
+
+            # local.settings.json is gitignored/funcignored and never checked into the
+            # repo, but `func azure functionapp publish` needs it locally to detect the
+            # worker runtime — without it, publish fails with "Can't determine project
+            # language from files" / "Worker runtime cannot be 'None'".
+            local_settings = Path(tmp_dir) / 'local.settings.json'
+            if not local_settings.exists():
+                local_settings.write_text(json.dumps({
+                    'IsEncrypted': False,
+                    'Values': {'FUNCTIONS_WORKER_RUNTIME': 'python'},
+                }))
 
             for attempt in range(1, max_attempts + 1):
                 returncode, output = self._run_publish(app_name, tmp_dir)
