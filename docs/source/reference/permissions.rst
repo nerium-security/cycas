@@ -6,7 +6,7 @@ Cycas component. All components authenticate using a managed identity.
 Roles follow the principle of least privilege.
 
 .. note::
-   The :doc:`easy installation </gettingstarted/installationeasy>` assigns all
+   The :ref:`easy installation <easy-installation>` assigns all
    of these roles automatically. This page is intended for manual deployments
    and auditing existing setups.
 

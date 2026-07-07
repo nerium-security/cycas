@@ -120,7 +120,7 @@ export:
               Name=Name,
               Path=OSPath[-2],
               Accessor=_value,
-              Prefix= + if(condition=Name="SAM", then="", else="HKEY_LOCAL_MACHINE/") + Name
+              Prefix=if(condition=Name="SAM", then="", else="HKEY_LOCAL_MACHINE/") + Name
             ) as map
           FROM glob(globs='**/Windows/System32/config/{DEFAULT,SAM,SECURITY,SOFTWARE,SYSTEM}',
             accessor="zip",

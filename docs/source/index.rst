@@ -20,9 +20,7 @@ It concurrently processes the data (ZIP files collected to Blob storage or SFTP)
    :hidden:
    :caption: Getting started
 
-   /gettingstarted/installationeasy
-
-   /gettingstarted/installationmanual
+   /gettingstarted/installation
 
    /gettingstarted/usage
 

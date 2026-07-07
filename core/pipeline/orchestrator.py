@@ -287,10 +287,13 @@ def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfileconten
 
             uploadid = results['summary'][0].get('uploadid')
 
-            if Config.adx_cluster_enabled and outputfile_path:
+            output_produced = bool(outputfile_path) and os.path.exists(outputfile_path)
+
+            if Config.adx_cluster_enabled and output_produced:
                 managers.adx.add_cycas_metadata(outputfile_path, hostname, zipfile, uploadid)
 
-            result_upload.update(_upload_file_to_adx(managers, Config, outputfile_path))
+            if output_produced:
+                result_upload.update(_upload_file_to_adx(managers, Config, outputfile_path))
 
             delete_file(outputfile_path)
 

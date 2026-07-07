@@ -1,16 +1,23 @@
-Manual installation
-===================
+Installation
+============
 
-The manual installation gives you full control over Azure resource creation.
-You provision the resources yourself and configure Cycas by filling in the
-``.env`` file by hand. Use this if you already have existing Azure resources
-or prefer to manage infrastructure through your own tooling (Terraform, Bicep,
-Azure Portal, etc.).
+Cycas can be installed in two ways:
+
+- :ref:`Easy installation (recommended) <easy-installation>` - uses the
+  ``easy_install.py`` wizard to automatically provision all required Azure
+  infrastructure and configure your ``.env`` file.
+- :ref:`Manual installation <manual-installation>` - you provision the Azure
+  resources yourself and configure Cycas by filling in the ``.env`` file by
+  hand. Use this if you already have existing Azure resources or prefer to
+  manage infrastructure through your own tooling (Terraform, Bicep, Azure
+  Portal, etc.).
 
 .. contents:: Contents
    :local:
-   :depth: 1
+   :depth: 2
 
+
+.. _installation-prerequisites:
 
 Prerequisites
 -------------
@@ -30,8 +37,8 @@ Prerequisites
 
    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
-**Azure permissions** - Owner access on the target resource group or Contributor combined with the User Access Administrator role (or
-Owner on the subscription if you want to create a new resource group).
+**Azure permissions** - Owner access on the target resource group or contributor combined with the User Access Administrator role (or
+owner on the subscription if you want to create a new resource group).
 
 Clone the repository, create a virtual environment, and install Cycas:
 
@@ -50,8 +57,77 @@ Log in to Azure:
    az login
 
 
+.. _easy-installation:
+
+Easy installation (recommended)
+--------------------------------
+
+The easy installation uses the ``easy_install.py`` wizard to automatically provision
+all required Azure infrastructure and configure your ``.env`` file. This is the
+recommended approach for setting up Cycas.
+
+What gets created
+~~~~~~~~~~~~~~~~~~
+
+- Azure Data Explorer cluster and database
+- Storage account (blob container, queue, table)
+- Input source configuration (Blob, SAS, and/or SFTP)
+- Two Azure Function Apps (watcher and processor)
+- Application Insights for monitoring
+- (Optional) Key Vault for storing offline ZIP collection password
+
+Additional prerequisite
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Azure Functions Core Tools** - installed automatically by the wizard if not
+already present (requires ``npm``).
+
+Steps
+~~~~~
+
+1. Clone the repository, create a virtual environment, and install the Cycas
+   package, then log in to Azure - see :ref:`Prerequisites <installation-prerequisites>`
+   above.
+
+2. Run the install wizard:
+
+   .. code-block:: bash
+
+      python easy_install.py
+
+   The wizard guides you through seven steps and saves progress automatically.
+   If it is interrupted during provisioning, re-run it and choose to resume
+   the saved session.
+
+Resuming a failed install
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If the script is interrupted during provisioning, simply re-run it:
+
+.. code-block:: bash
+
+   python easy_install.py
+
+The wizard will detect the saved session and offer to resume from where it
+left off. If you want to start fresh, choose **N** when prompted.
+
+
+.. _manual-installation:
+
+Manual installation
+--------------------
+
+The manual installation gives you full control over Azure resource creation.
+You provision the resources yourself and configure Cycas by filling in the
+``.env`` file by hand. Use this if you already have existing Azure resources
+or prefer to manage infrastructure through your own tooling (Terraform, Bicep,
+Azure Portal, etc.).
+
+Complete the steps in :ref:`Prerequisites <installation-prerequisites>` above,
+then continue with the setup guides below.
+
 Azure Data Explorer (ADX) setup guide
---------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Our preference is to create a new resource group which allows for quick deletion of all resources as they are typically short-lived.
 
@@ -69,7 +145,7 @@ Our preference is to create a new resource group which allows for quick deletion
 
 
 Azure Storage Account setup guide
-----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Cycas uses a single Storage Account for three purposes: tracking processing status (Table), receiving input ZIP files (Blob), and writing per-run status snapshots (Blob).
 
@@ -77,9 +153,9 @@ Cycas uses a single Storage Account for three purposes: tracking processing stat
 
 #. Create the following blob containers inside the storage account:
 
-   - ``uploads`` — where triage ZIP files are placed for processing
-   - ``status`` — where Cycas writes per-run status JSON blobs
-   - ``config`` — where artifact definitions and configuration are stored
+   - ``uploads`` - where triage ZIP files are placed for processing
+   - ``status`` - where Cycas writes per-run status JSON blobs
+   - ``config`` - where artifact definitions and configuration are stored
 
 #. Create a Table named ``statusupdate`` (or your preferred name) for processing status tracking.
 
@@ -97,7 +173,7 @@ Cycas uses a single Storage Account for three purposes: tracking processing stat
 
 
 Azure Key Vault setup (optional)
----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 These steps are only required if triage packages collected with Velociraptor are encrypted with a ZIP password. Cycas reads the password from Key Vault at processing time.
 
@@ -116,7 +192,7 @@ These steps are only required if triage packages collected with Velociraptor are
 
 
 Azure Functions setup (optional)
----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This section is only required when running Cycas as Azure Functions (the recommended mode for automated, cloud-based processing). Skip this if you are running Cycas locally.
 
@@ -147,7 +223,7 @@ Deploy the function code using the Azure Functions Core Tools:
 
 
 Configure env variables
-------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 First copy the ``.env_example`` to ``.env``:
 
@@ -160,7 +236,7 @@ Open ``.env`` in a text editor and fill in the values for your environment.
 .. note::
 
    Boolean values must be set to ``true`` or ``false`` (lowercase).
-   Leave a variable empty (``VARIABLE=``) rather than removing it — all
+   Leave a variable empty (``VARIABLE=``) rather than removing it - all
    keys must be present for the configuration to load correctly.
 
 **ADX:**
@@ -197,9 +273,9 @@ Open ``.env`` in a text editor and fill in the values for your environment.
 
 
 Running Cycas
--------------
+~~~~~~~~~~~~~
 
-Once ``.env`` is configured and the minimum resources are configured (Blob and ADX), 
+Once ``.env`` is configured and the minimum resources are configured (Blob and ADX),
 you can run it locally via below command.
 
 The intented and preferred way is to use Azure Functions.
@@ -212,6 +288,6 @@ To start the web dashboard:
 
 .. code-block:: bash
 
-   python3 gunicorn --bind=0.0.0.0:8000 --timeout 600 webapp.app:app
+   python3 gunicorn --bind=0.0.0.0:4040 --timeout 600 webapp.app:app
 
-The dashboard is available at ``http://localhost:8000``.
+The dashboard is available at ``http://localhost:4040``.
