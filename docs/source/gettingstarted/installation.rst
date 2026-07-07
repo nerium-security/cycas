@@ -288,6 +288,6 @@ To start the web dashboard:
 
 .. code-block:: bash
 
-   python3 gunicorn --bind=0.0.0.0:8000 --timeout 600 webapp.app:app
+   python3 gunicorn --bind=0.0.0.0:4040 --timeout 600 webapp.app:app
 
-The dashboard is available at ``http://localhost:8000``.
+The dashboard is available at ``http://localhost:4040``.

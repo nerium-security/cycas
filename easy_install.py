@@ -1034,7 +1034,7 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
 
     step(f"Configuring startup command on '{webapp_app}'...")
     webapp.configure_startup(resource_group, webapp_app,
-                             'gunicorn --bind=0.0.0.0:8000 --timeout 600 webapp.app:app')
+                             'gunicorn --bind=0.0.0.0:4040 --timeout 600 webapp.app:app')
     success('Startup command configured.')
 
     step(f"Applying app settings to '{webapp_app}'...")
@@ -1442,12 +1442,12 @@ def main():
         if webapp_mode == 'local':
             info('To run the webapp locally (optional, but recommended):')
             info('  cd <repo root>')
-            info('  gunicorn --bind=0.0.0.0:8000 --timeout 600 webapp.app:app')
+            info('  gunicorn --bind=0.0.0.0:4040 --timeout 600 webapp.app:app')
             wsl_ip = _get_wsl_ip()
             if wsl_ip:
-                info(f'  Then open http://{wsl_ip}:8000 in your browser (WSL IP).')
+                info(f'  Then open http://{wsl_ip}:4040 in your browser (WSL IP).')
             else:
-                info('  Then open http://localhost:8000 in your browser.')
+                info('  Then open http://localhost:4040 in your browser.')
             print()
     else:
         success('Installation complete.')
