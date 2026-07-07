@@ -77,9 +77,9 @@ Cycas uses a single Storage Account for three purposes: tracking processing stat
 
 #. Create the following blob containers inside the storage account:
 
-   - ``uploads`` — where triage ZIP files are placed for processing
-   - ``status`` — where Cycas writes per-run status JSON blobs
-   - ``config`` — where artifact definitions and configuration are stored
+   - ``uploads`` - where triage ZIP files are placed for processing
+   - ``status`` - where Cycas writes per-run status JSON blobs
+   - ``config`` - where artifact definitions and configuration are stored
 
 #. Create a Table named ``statusupdate`` (or your preferred name) for processing status tracking.
 
@@ -160,7 +160,7 @@ Open ``.env`` in a text editor and fill in the values for your environment.
 .. note::
 
    Boolean values must be set to ``true`` or ``false`` (lowercase).
-   Leave a variable empty (``VARIABLE=``) rather than removing it — all
+   Leave a variable empty (``VARIABLE=``) rather than removing it - all
    keys must be present for the configuration to load correctly.
 
 **ADX:**

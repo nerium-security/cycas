@@ -43,8 +43,8 @@
     <div class="kv-card">
         <div class="kv-card-header">ZIP Password</div>
         <div class="kv-card-body">
-            <span class="kv-label">Secret</span><span class="kv-value" id="kv-secret">—</span>
-            <span class="kv-label">Vault</span><span id="kv-vault">—</span>
+            <span class="kv-label">Secret</span><span class="kv-value" id="kv-secret">-</span>
+            <span class="kv-label">Vault</span><span id="kv-vault">-</span>
         </div>
     </div>
 </div>
@@ -165,7 +165,7 @@ function updateBulkBar(cat) {
     const count   = document.getElementById(`bulk-count-${cat}`);
     if (indices.length > 0) {
         bar.style.display = 'flex';
-        count.textContent = `${indices.length} selected —`;
+        count.textContent = `${indices.length} selected -`;
     } else {
         bar.style.display = 'none';
     }
