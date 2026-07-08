@@ -18,7 +18,7 @@ It is created by incident responders and for incident responders. It contains th
 
 Cycas started as an internal tool at `Nerium Cyber Security <https://www.nerium.nl>`_ to allow our incident response investigators to focus on the investigation rather than the time-consuming work of collecting and processing forensic data. After using it across many engagements, we decided to make it publicly available so the broader DFIR community can benefit from it.
 
-A core principle behind Cycas is that evidence should be collected at scale and preserved before any analysis takes place. Endpoint artefacts are volatile. The Windows Security event log, for example, often covers less than a day. Analysing endpoints directly risks missing evidence that has already been overwritten. Cycas collects at scale first, preserving the full triage package before any analysis touches it.
+A core principle behind Cycas is that evidence should be collected at scale and preserved before any analysis takes place. Endpoint artifacts are volatile. The Windows Security event log, for example, often covers less than a day. Analysing endpoints directly risks missing evidence that has already been overwritten. Cycas collects at scale first, preserving the full triage package before any analysis touches it.
 
 All processing happens in the cloud against the collected evidence, making the investigation auditable, repeatable, and independent of the state of the endpoint.
 
@@ -37,7 +37,7 @@ All processing happens in the cloud against the collected evidence, making the i
  
 All Velociraptor artifacts that currently can be used by Cycas to post-process raw evidence are listed below. The dashboard made it easy to configure more artifacts.
 
-| Artefact | Description |
+| Artifact | Description |
 |---|---|
 | `Windows.NTFS.MFT` | Master File Table: full filesystem metadata |
 | `Windows.Forensics.Usn` | USN Journal ($UsnJrnl): filesystem change history |
@@ -59,7 +59,7 @@ All Velociraptor artifacts that currently can be used by Cycas to post-process r
  
 The following Velociraptor artifacts work as well, but it required (in some cases small) customisation to the artifact indicated by the 'custom'.
 
-| Artefact | Description |
+| Artifact | Description |
 |---|---|
 | `Custom.Windows.Forensics.Bam` | Background Activity Moderator: records of executed binaries |
 | `Custom.Windows.Forensics.SAM` | SAM database: local account and group information |

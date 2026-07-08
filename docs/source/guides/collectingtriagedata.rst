@@ -30,7 +30,7 @@ Importing Windows.Triage.Targets
 - A write-only SAS URL for the blob container that Cycas is watching.
 
 
-Importing the artefact for direct upload to Azure Blob Storage
+Importing the artifact for direct upload to Azure Blob Storage
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 1. In the Velociraptor GUI, go to **View Artifacts → Add an Artifact**.
@@ -40,7 +40,7 @@ Importing the artefact for direct upload to Azure Blob Storage
 Find the SAS URL
 ~~~~~~~~~~~~~~~~
 
-The SAS URL for the Cycas blob container is required as input fo the artefact
+The SAS URL for the Cycas blob container is required as input fo the artifact
  ``Custom.Windows.Triage.Targets.AzureUpload.yaml`` The URL can be found in the 
  kevyault that is provisioned using the ``easy_install.py`` script. 
 
