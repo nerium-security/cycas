@@ -36,12 +36,24 @@ from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 from core.manager.webapp import WebappManager
 from core.utils.postprocess import download_velociraptor
 
-logging.basicConfig(level=logging.WARNING, format='%(message)s')
-
 ROOT        = Path(__file__).parent
 ENV_FILE    = ROOT / '.env'
 ENV_EXAMPLE = ROOT / '.env_example'
 STATE_FILE  = ROOT / '.install_state.json'
+
+LOG_DIR  = ROOT / 'logs'
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / f'setup_{time.strftime("%Y%m%d_%H%M%S")}.log'
+
+_console_handler = logging.StreamHandler()
+_console_handler.setLevel(logging.WARNING)
+_console_handler.setFormatter(logging.Formatter('%(message)s'))
+
+_file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+_file_handler.setLevel(logging.INFO)
+_file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s'))
+
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
 
 TRIAGE_TARGETS_URL  = 'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip'
 COLLECTOR_SAS_VALID_DAYS = 90
@@ -59,12 +71,17 @@ SKUS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def section(title): print(f'\n{"="*60}\n  {title}\n{"="*60}\n')
-def step(msg):      print(f'  >> {msg}')
-def info(msg):      print(f'     {msg}')
-def success(msg):   print(f'  [OK] {msg}')
-def error(msg):     print(f'  [ERROR] {msg}', file=sys.stderr); sys.exit(1)
+def section(title): print(f'\n{"="*60}\n  {title}\n{"="*60}\n'); logging.info('=== %s ===', title)
+def step(msg):      print(f'  >> {msg}'); logging.info('>> %s', msg)
+def info(msg):      print(f'     {msg}'); logging.info(msg)
+def success(msg):   print(f'  [OK] {msg}'); logging.info('[OK] %s', msg)
+def error(msg):     print(f'  [ERROR] {msg}', file=sys.stderr); logging.error(msg); sys.exit(1)
 def rand6():        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+
+def ask(prompt_text=''):
+    value = input(prompt_text)
+    logging.info('PROMPT: %r -> %r', prompt_text, value)
+    return value
 
 
 def _get_wsl_ip():
@@ -88,7 +105,7 @@ def _get_wsl_ip():
 def prompt(label, default=None):
     suffix = f' [{default}]' if default is not None else ''
     while True:
-        value = input(f'{label}{suffix}: ').strip()
+        value = ask(f'{label}{suffix}: ').strip()
         if value:
             return value
         if default is not None:
@@ -103,7 +120,7 @@ def collect_run_mode():
     print('  2) Local            — manual, runs partially in the cloud (uses blob storage and Azure Data Explorer). Only for small engagements.')
     print()
     while True:
-        choice = input('Select deployment mode [1]: ').strip()
+        choice = ask('Select deployment mode [1]: ').strip()
         if not choice or choice == '1':
             return 'azurefunction'
         if choice == '2':
@@ -152,7 +169,7 @@ def select_location(azure, subscription_id, default='westeurope'):
         print(f'       Press Enter to use default [{default}]')
         print()
 
-        choice = input('Select region: ').strip().lower()
+        choice = ask('Select region: ').strip().lower()
         if not choice:
             return default
         if choice == 'm' and has_more:
@@ -235,7 +252,7 @@ def collect_resource_group(azure, subscription_id, step_label='2/7'):
     print()
 
     while True:
-        choice = input('Select resource group: ').strip().lower()
+        choice = ask('Select resource group: ').strip().lower()
         if choice == 'n':
             name     = prompt('New resource group name')
             location = select_location(azure, subscription_id)
@@ -280,7 +297,7 @@ def collect_admin_users(adx):
 
     while True:
         print()
-        query = input('  Add cluster admin by searching for user by name or email (or press Enter to finish): ').strip()
+        query = ask('  Add cluster admin by searching for user by name or email (or press Enter to finish): ').strip()
         if not query:
             break
 
@@ -299,7 +316,7 @@ def collect_admin_users(adx):
             print(f'  {i:>2}) {u["displayName"]:<35} {u["userPrincipalName"]}')
         print()
 
-        choice = input('  Select user [number, or Enter to search again]: ').strip()
+        choice = ask('  Select user [number, or Enter to search again]: ').strip()
         if not choice:
             continue
 
@@ -328,7 +345,7 @@ def collect_input_sources(defaults, account_name, container, step_label='5/7'):
     print()
 
     while True:
-        raw = input('Select input source(s) [1]: ').strip()
+        raw = ask('Select input source(s) [1]: ').strip()
         if not raw:
             raw = '1'
         choices = raw.split()
@@ -407,7 +424,7 @@ def collect_keyvault_config(resource_group, step_label='7/7'):
     info('not password-protected.')
     print()
 
-    create_kv = input('  Create a Key Vault for ZIP password storage? [Y/n]: ').strip().lower()
+    create_kv = ask('  Create a Key Vault for ZIP password storage? [Y/n]: ').strip().lower()
     if create_kv in ('n', 'no'):
         return None, None, None
 
@@ -427,7 +444,7 @@ def collect_webapp_config(resource_group, step_label='8/8'):
 
     info('A Web App provides a status dashboard for the Cycas pipeline.')
     print()
-    create_wa = input('  Set up the Web Application? [Y/n]: ').strip().lower()
+    create_wa = ask('  Set up the Web Application? [Y/n]: ').strip().lower()
     if create_wa in ('n', 'no'):
         return None, None, None
 
@@ -436,7 +453,7 @@ def collect_webapp_config(resource_group, step_label='8/8'):
     info('  1) Local  — Fastest and most secure option. Only you can access it on your device.')
     info('  2) Azure  — Adds 10+ minutes of deployment time. Multiple teammembers can access it.')
     print()
-    mode_choice = input('  Select [1]: ').strip()
+    mode_choice = ask('  Select [1]: ').strip()
     if mode_choice == '2':
         webapp_mode = 'azure'
     else:
@@ -460,14 +477,14 @@ def collect_webapp_config(resource_group, step_label='8/8'):
 
     allowed_ips = []
     if my_ip:
-        answer = input(f'  Add your current external IP ({my_ip})? [Y/n]: ').strip().lower()
+        answer = ask(f'  Add your current external IP ({my_ip})? [Y/n]: ').strip().lower()
         if answer not in ('n', 'no'):
             allowed_ips.append(my_ip)
             success(f"'{my_ip}' added.")
         print()
 
     while True:
-        ip = input('  Add IP / CIDR (or press Enter to finish): ').strip()
+        ip = ask('  Add IP / CIDR (or press Enter to finish): ').strip()
         if not ip:
             if not allowed_ips:
                 print('  At least one IP address is required.')
@@ -485,7 +502,7 @@ def collect_setup_mode():
     print('  2) Advanced - Allows you to configure more granual settings, like names for Azure resources.')
     print()
     while True:
-        choice = input('  Setup mode [1]: ').strip() or '1'
+        choice = ask('  Setup mode [1]: ').strip() or '1'
         if choice in ('1', '2'):
             return 'easy' if choice == '1' else 'advanced'
         print('  Enter 1 or 2.')
@@ -608,7 +625,7 @@ def confirm_plan(run_mode,
             info(f'Allowed IPs: {", ".join(webapp_allowed_ips)}')
 
     print()
-    confirm = input('Proceed with provisioning? [Y/n]: ').strip().lower()
+    confirm = ask('Proceed with provisioning? [Y/n]: ').strip().lower()
     return confirm in ('', 'y', 'yes')
 
 
@@ -1195,6 +1212,7 @@ def provision_collector(credential, subscription_id, resource_group,
 
 def main():
     section('Cycas Install')
+    info(f'Log file: {LOG_FILE}')
     print('  This wizard provisions all Azure infrastructure required to run Cycas')
     print('  and configures it by writing the connection strings to your .env file.')
     print()
@@ -1240,7 +1258,7 @@ def main():
             info(f'Functions    : {saved["watcher_app"]}, {saved["processor_app"]}')
         print()
         prompt_text = '  Re-run with this configuration? [Y/n]: ' if completed else '  Resume from saved session? [Y/n]: '
-        resume = input(prompt_text).strip().lower()
+        resume = ask(prompt_text).strip().lower()
         if resume not in ('n', 'no'):
             subscription_id = saved['subscription_id']
             resource_group  = saved['resource_group']
@@ -1477,4 +1495,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception:
+        logging.exception('Unhandled error during setup.')
+        raise
