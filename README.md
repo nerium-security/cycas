@@ -10,13 +10,13 @@ It is created by incident responders and for incident responders. It contains th
 
 - Post-process raw Velociraptor artifacts (MFT, EVTX etc) into CSV, JSON, or JSONL format
 - Ingest forensic artifacts at scale from Blob storage, SFTP, SAS token URLs, or a local folder
-- Ingests the data into Azure Data Explorer (ADX) for quick analysis with Kusto Query Language (KQL)
+- Ingest into Azure Data Explorer (ADX) for quick analysis with Kusto Query Language (KQL)
 - Encrypted ZIP support via Azure Key Vault or environment variables
-- Concurrent processing of multiple ZIP files (+500 ZIP files between ~500 MB and ~15 GB)
+- Concurrent processing of multiple ZIP files using Azure Functions (+500 ZIP files between ~500 MB and ~15 GB)
 
 ## Who built it and why
 
-Cycas started as an internal tool at `Nerium Cyber Security <https://www.nerium.nl>`_ to allow our incident response investigators to focus on the investigation rather than the time-consuming work of collecting and processing forensic data. After using it across many engagements, we decided to make it publicly available so the broader DFIR community can benefit from it.
+Cycas started as an internal tool at [Nerium Cyber Security]([https://pages.github.com/](https://www.nerium.nl)) to allow our incident response investigators to focus on the investigation rather than the time-consuming work of collecting and processing forensic data. After using it across many engagements, we decided to make it publicly available so the broader DFIR community can benefit from it.
 
 A core principle behind Cycas is that evidence should be collected at scale and preserved before any analysis takes place. Endpoint artifacts are volatile. The Windows Security event log, for example, often covers less than a day. Analysing endpoints directly risks missing evidence that has already been overwritten. Cycas collects at scale first, preserving the full triage package before any analysis touches it.
 
