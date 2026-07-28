@@ -443,7 +443,7 @@ cycas.egg-info/*
 README-GITUSAGE.md
 
 build/*
-
+velociraptor/velociraptor
 velociraptor/definitions/*.yaml
 !velociraptor/definitions/Custom.*.yaml
 master_summary.csv
