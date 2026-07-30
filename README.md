@@ -29,7 +29,7 @@ Cycas takes in two kinds of data, and both end up in the same ADX cluster, query
 - Tags every record with the hostname it came from, for cross-host hunting.
 - Pay-per-use Azure resources. ADX pricing means no expensive SIEM licence up front, and a whole engagement can live in a disposable resource group.
 
-## Dashboards
+## Dashboard
 
 To make it user-friendly, we've built a dashboard so you can track the status. 
 
