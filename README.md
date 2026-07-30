@@ -1,6 +1,6 @@
 # Cycas
 
-Cycas is a Digital Forensics & Incident Response (DFIR) pipeline that ingests data from [Velociraptor](https://github.com/Velocidex/velociraptor) into [Azure Data Explorer (ADX)](https://azure.microsoft.com/nl-nl/products/data-explorer). It's built by incident responders at Nerium, used internally on engagements for a couple of years, and now open source.
+Cycas is a Digital Forensics & Incident Response (DFIR) pipeline that ingests data from [Velociraptor](https://github.com/Velocidex/velociraptor) into [Azure Data Explorer (ADX)](https://azure.microsoft.com/nl-nl/products/data-explorer). Built by incident responders at Nerium on the principle *"Collect first, analyse later"*, it's been used internally on engagements for a couple of years and is now open source.
 
 ![Structured data in Azure Data Explorer](docs/source/_static/images/adx-results.png)
 
@@ -8,8 +8,8 @@ Cycas is a Digital Forensics & Incident Response (DFIR) pipeline that ingests da
 
 Cycas takes in two kinds of data originating from Velociraptor, and both end up in the same ADX cluster, queryable together:
 
-- **Raw forensic artifacts, preserved at scale.** Triage packages are uploaded directly to Blob Storage or SFTP - straight from the endpoint, not routed through the Velociraptor server. Cycas also post-processes the raw artifacts (MFT, USN journal, event logs, and the rest) into structured data before ingesting them into ADX. 
-- **Results of Velociraptor hunts.** Hunts you initiate from the Velociraptor server produce output that's already structured. Cycas ingests those results straight into ADX, so your live-response findings sit alongside the preserved artifacts.
+- **Raw forensic artifacts, preserved at scale.** Triage packages are uploaded directly to Blob Storage or SFTP - straight from the endpoint, not routed through the Velociraptor server. Cycas post-processes these artifacts with Velociraptor before ingestion.
+- **Results of Velociraptor hunts initiated from the server.** `Server.Utils.BackupAzure` ships hunt flow outputs to Blob Storage; Cycas picks them up automatically and ingests them the same way.
 
 ## Features
 
@@ -22,8 +22,6 @@ Cycas takes in two kinds of data originating from Velociraptor, and both end up 
 
 # Why Cycas
 
-*Collect first, analyse later.* At the start of an incident you don't yet know what you're looking for, and the evidence is aging out by the minute. Velociraptor is excellent at that collection, and it's the tool we reach for on nearly every engagement. But it was never meant to store and query months of filesystem activity, and event logs for hundreds of hosts, all at once. It isn't a SIEM.
-
 Cycas fills the two gaps:
 
 - *Preserving evidence at scale.* The most valuable raw forensic artifact from every endpoint is captured at the start of the engagement and post-processed into structured data, so the original evidence is always there to go back to.
@@ -32,7 +30,7 @@ Cycas fills the two gaps:
 
 ## Dashboard
 
-To make it user-friendly, we've built a dashboard so you can track the status. 
+Cycas includes an optional dashboard so you can track ingestion status at a glance.
 
 ![Ingestion Dashboard](docs/source/_static/images/webapp_status.png)
 
