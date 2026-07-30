@@ -14,7 +14,7 @@ Cycas takes in two kinds of data originating from Velociraptor, and both end up 
 ## Features
 
 - Ingests triage packages from Azure Blob Storage, SFTP, or a local folder.
-- Easily processes 500+ packages (each over 1 GB) concurrently using Azure Functions.
+- It's built for scale! It easily processes 500+ triage packages concurrently using Azure Functions.
 - Post-process raw Velociraptor artifacts (MFT, EVTX etc) before ingesting them into ADX.
 - Automatic ADX schema inference. No hand-maintained table definitions, schemas extend themselves as new fields appear.
 - Tags every record with the hostname it came from.
