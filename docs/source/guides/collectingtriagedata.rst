@@ -1,5 +1,5 @@
-Collecting triage packages with Velociraptor
-============================================
+Collecting triage packages at scale directly to Blob Storage
+============================================================
 
 Our preferred approach at Nerium is to deploy a Velociraptor client across all
 endpoints and initiate collections from the server using a custom artifact. This

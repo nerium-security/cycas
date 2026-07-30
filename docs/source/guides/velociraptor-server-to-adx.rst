@@ -1,5 +1,5 @@
-Ingesting Velociraptor hunting results into Azure Data Explorer
-===============================================================
+Ingesting Velociraptor hunt results into Azure Data Explorer
+============================================================
 
 The :doc:`triage collection guide </guides/collectingtriagedata>` covers uploading
 packages directly from endpoints to blob, but what about hunt results that are
