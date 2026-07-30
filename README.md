@@ -4,6 +4,10 @@ Cycas is a Digital Forensics & Incident Response (DFIR) pipeline for post-proces
 
 ![Ingestion Dashboard](docs/source/_static/images/webapp_status.png)
 
+## Getting started
+
+We've made it easy to get started. Find the instruction to run `easy_install.py` here: ![Getting Started](https://cycas.readthedocs.io/en/latest/gettingstarted/installation.html#prerequisites)
+
 ## Features
 
 It is created by incident responders and for incident responders. It contains the following features:
