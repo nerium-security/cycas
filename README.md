@@ -1,30 +1,43 @@
-# cycas
+# Cycas
 
-Cycas is a Digital Forensics & Incident Response (DFIR) pipeline for post-processing and ingesting forensic artifacts collected with [Velociraptor](https://github.com/Velocidex/velociraptor) into [Azure Data Explorer (ADX)](https://azure.microsoft.com/nl-nl/products/data-explorer).
+Cycas is a Digital Forensics & Incident Response (DFIR) pipeline that ingests data from [Velociraptor](https://github.com/Velocidex/velociraptor) into [Azure Data Explorer (ADX)](https://azure.microsoft.com/nl-nl/products/data-explorer). It's built by incident responders at Nerium, used internally on engagements for a couple of years, and now open source.
+
+![Structured data in Azure Data Explorer](docs/source/_static/images/adx-results.png)
+
+# Why Cycas
+
+*Collect first, analyse later.* At the start of an incident you don't yet know what you're looking for, and the evidence is aging out by the minute. Velociraptor is excellent at that collection, and it's the tool we reach for on nearly every engagement. But it was never meant to store and query months of filesystem activity, and event logs for hundreds of hosts, all at once. It isn't a SIEM.
+
+Cycas fills the two gaps:
+
+- *Preserving evidence at scale.* The most valuable raw forensic artifact from every endpoint is captured at the start of the engagement and post-processed into structured data, so the original evidence is always there to go back to.
+- *Analysing evidence at scale.* Everything lands in a single Azure Data Explorer (ADX) cluster, normalised into one schema and queryable across every host with Kusto Query Language (KQL) - instead of re-querying live endpoints one at a time.
+
+# What Cycas ingests
+
+Cycas takes in two kinds of data, and both end up in the same ADX cluster, queryable together:
+
+- **Raw forensic artifacts, preserved at scale.** Triage packages are uploaded directly to Blob Storage or SFTP - straight from the endpoint, not routed through the Velociraptor server — and Cycas post-processes the raw artifacts (MFT, USN journal, event logs, and the rest) into structured data before ingesting them into ADX. 
+- **Results of Velociraptor hunts.** Hunts you initiate from the Velociraptor server produce output that's already structured; Cycas ingests those results straight into ADX, so your live-response findings sit alongside the preserved artifacts.
+
+## Features
+
+- Ingests triage packages from Azure Blob Storage, SFTP, or a local folder.
+- Easily processes 500+ packages (each over 1 GB) concurrently on Azure Functions.
+- Post-process raw Velociraptor artifacts (MFT, EVTX etc) before ingesting them into ADX.
+- Automatic ADX schema inference. No hand-maintained table definitions; schemas extend themselves as new fields appear.
+- Tags every record with the hostname it came from, for cross-host hunting.
+- Pay-per-use Azure resources. ADX pricing means no expensive SIEM licence up front, and a whole engagement can live in a disposable resource group.
+
+## Dashboards
+
+To make it user-friendly, we've built a dashboard so you can track the status. 
 
 ![Ingestion Dashboard](docs/source/_static/images/webapp_status.png)
 
 ## Getting started
 
 We've made it easy to get started. Find the instruction in our documentation to run `easy_install.py`: [Getting Started](https://cycas.readthedocs.io/en/latest/gettingstarted/installation.html#prerequisites)
-
-## Features
-
-It is created by incident responders and for incident responders. It contains the following features:
-
-- Post-process raw Velociraptor artifacts (MFT, EVTX etc) into CSV, JSON, or JSONL format
-- Ingest forensic artifacts at scale from Blob storage, SFTP, SAS token URLs, or a local folder
-- Ingest into Azure Data Explorer (ADX) for quick analysis with Kusto Query Language (KQL)
-- Encrypted ZIP support via Azure Key Vault or environment variables
-- Concurrent processing of multiple ZIP files using Azure Functions (+500 ZIP files between ~500 MB and ~15 GB)
-
-## Who built it and why
-
-Cycas started as an internal tool at [Nerium Cyber Security]([https://pages.github.com/](https://www.nerium.nl)) to allow our incident response investigators to focus on the investigation rather than the time-consuming work of collecting and processing forensic data. After using it across many engagements, we decided to make it publicly available so the broader DFIR community can benefit from it.
-
-A core principle behind Cycas is that evidence should be collected at scale and preserved before any analysis takes place. Endpoint artifacts are volatile. The Windows Security event log, for example, often covers less than a day. Analysing endpoints directly risks missing evidence that has already been overwritten. Cycas collects at scale first, preserving the full triage package before any analysis touches it.
-
-All processing happens in the cloud against the collected evidence, making the investigation auditable, repeatable, and independent of the state of the endpoint.
 
 
 ## Supported Input Sources
