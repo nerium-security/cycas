@@ -1078,13 +1078,20 @@ def download_triage_targets(dest_dir):
 
 def write_collector_spec(spec_path, sas_url, password):
     '''Write a velociraptor `collector` spec that runs Windows.Triage.Targets with
-    the _KapeTriage and _Live high-level targets and uploads the encrypted
-    result via SAS URL.'''
+    the _KapeTriage high-level target, plus a handful of standalone artifacts,
+    and uploads the encrypted result via SAS URL.'''
     spec_path.write_text(f'''OS: Windows
 
 Artifacts:
   Windows.Triage.Targets:
-    HighLevelTargets: '["_KapeTriage","_Live"]'
+    HighLevelTargets: '["_KapeTriage"]'
+  Windows.System.Services:
+    Calculate_hashes: Y
+    CertificateInfo: Y
+    DISABLE_DANGEROUS_API_CALLS: Y
+  Windows.Network.NetstatEnriched:
+    DISABLE_DANGEROUS_API_CALLS: Y
+  Windows.System.DNSCache:
 
 Target: Azure
 TargetArgs:
@@ -1113,8 +1120,9 @@ def provision_collector(credential, subscription_id, resource_group,
                         keyvault_name, keyvault_password_location, zip_password,
                         defaults):
     '''Build a stand-alone Velociraptor collector that runs Windows.Triage.Targets
-    with the _KapeTriage and _Live high-level targets and uploads the encrypted
-    result straight to the just-provisioned input container via a write-only SAS URL.'''
+    with the _KapeTriage high-level target, plus a handful of standalone artifacts,
+    and uploads the encrypted result straight to the just-provisioned input
+    container via a write-only SAS URL.'''
 
     section('Provisioning — Offline Collector')
 
