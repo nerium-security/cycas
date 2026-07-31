@@ -77,9 +77,12 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config, _log_ha
     # ----------------------------------------------------------------------
     # Download zip file
     # ----------------------------------------------------------------------
+    downloaded_zip = None
+
     if should_download(source_name):
 
         zipfile = _download_zip(managers, Config, source_name, zipfile, sessionid, start, results)
+        downloaded_zip = zipfile
 
         if zipfile and results.get('summary'):
             results['summary'][0]['zipfile_size'] = os.path.getsize(zipfile)
@@ -161,6 +164,14 @@ def run_zip_processor(managers, source_name, zipfile, sessionid, Config, _log_ha
     upload_id = results['summary'][0].get('uploadid', '')
     if upload_id:
         managers.blob.upload_json(Config.blob_container_status, f'{upload_id}.json', results)
+
+    if downloaded_zip:
+        delete_file(downloaded_zip)
+
+    if extracted_zip and extracted_zip != downloaded_zip:
+        delete_file(extracted_zip)
+
+    shutil.rmtree(extract_path, ignore_errors=True)
 
 def postprocess_velociraptor_and_upload(managers, Config, zipfile, zipfilecontent, results, start):
     '''
