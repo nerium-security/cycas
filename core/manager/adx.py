@@ -780,6 +780,20 @@ class AdxManager:
                     raise
                 log.warning(f"Transient error on attempt {attempt}/3, retrying in 30 s: {e}")
                 import time; time.sleep(30)
+
+        # A transient error during the LRO (e.g. a polling hiccup) can settle
+        # with the cluster left mid-provisioning instead of 'Running'. Wait
+        # out any non-terminal state, then explicitly start it if it landed
+        # as 'Stopped' rather than trusting the raw LRO result.
+        result = mgmt.clusters.get(resource_group, cluster_name)
+        while result.state in _NON_TERMINAL:
+            time.sleep(30)
+            result = mgmt.clusters.get(resource_group, cluster_name)
+        if result.state == 'Stopped':
+            log.warning(f"Cluster '{cluster_name}' was created but is in state 'Stopped', starting it...")
+            mgmt.clusters.begin_start(resource_group, cluster_name).result()
+            result = mgmt.clusters.get(resource_group, cluster_name)
+
         log.info(f"Cluster ready: {result.uri}")
         return result
 
