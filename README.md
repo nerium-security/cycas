@@ -1,6 +1,6 @@
 # Cycas
 
-Cycas is a Digital Forensics & Incident Response (DFIR) pipeline that ingests data from [Velociraptor](https://github.com/Velocidex/velociraptor) into [Azure Data Explorer (ADX)](https://azure.microsoft.com/nl-nl/products/data-explorer). Built by incident responders at Nerium on the principle *"Collect first, analyse later"*, it's been used internally on engagements for a couple of years and is now open source.
+Cycas is a Digital Forensics & Incident Response (DFIR) pipeline that ingests data from [Velociraptor](https://github.com/Velocidex/velociraptor) into [Azure Data Explorer (ADX)](https://azure.microsoft.com/nl-nl/products/data-explorer). It's built by incident responders at Nerium on the principle *"Collect first, analyse later"*.
 
 ![Structured data in Azure Data Explorer](docs/source/_static/images/adx-results.png)
 
@@ -14,7 +14,7 @@ Cycas takes in two kinds of data originating from Velociraptor, and both end up 
 ## Features
 
 - Ingests triage packages from Azure Blob Storage, SFTP, or a local folder.
-- It's built for scale! It easily processes 500+ triage packages concurrently using Azure Functions.
+- *It's built for scale!* It easily processes 500+ triage packages concurrently using Azure Functions.
 - Post-process raw Velociraptor artifacts (MFT, EVTX etc) before ingesting them into ADX.
 - Automatic ADX schema inference. No hand-maintained table definitions, schemas extend themselves as new fields appear.
 - Tags every record with the hostname it came from.
