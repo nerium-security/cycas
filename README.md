@@ -20,14 +20,6 @@ Cycas takes in two kinds of data originating from Velociraptor, and both end up 
 - Tags every record with the hostname it came from.
 - Pay-per-use Azure resources. ADX pricing means no expensive SIEM licence up front, and a whole engagement can live in a disposable resource group.
 
-# Why Cycas
-
-Cycas fills the two gaps:
-
-- *Preserving evidence at scale.* The most valuable raw forensic artifact from every endpoint is captured at the start of the engagement and post-processed into structured data, so the original evidence is always there to go back to.
-- *Analysing evidence at scale.* Everything lands in a single Azure Data Explorer (ADX) cluster, normalised into one schema and queryable across every host with Kusto Query Language (KQL) - instead of re-querying live endpoints one at a time.
-
-
 ## Dashboard
 
 Cycas includes an optional dashboard so you can track ingestion status at a glance.
