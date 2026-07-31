@@ -1086,12 +1086,12 @@ Artifacts:
   Windows.Triage.Targets:
     HighLevelTargets: '["_KapeTriage"]'
   Windows.System.Services:
-    Calculate_hashes: Y
-    CertificateInfo: Y
-    DISABLE_DANGEROUS_API_CALLS: Y
+    Calculate_hashes: "Y"
+    CertificateInfo: "Y"
+    DISABLE_DANGEROUS_API_CALLS: "Y"
   Windows.Network.NetstatEnriched:
-    DISABLE_DANGEROUS_API_CALLS: Y
-  Windows.System.DNSCache:
+    DISABLE_DANGEROUS_API_CALLS: "Y"
+  Windows.System.DNSCache: {{}}
 
 Target: Azure
 TargetArgs:
