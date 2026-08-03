@@ -768,7 +768,10 @@ class AdxManager:
             pass
 
         capacity = 1 if sku_tier == 'Basic' else 2
-        cluster = Cluster(location=location, sku=AzureSku(name=sku_name, capacity=capacity, tier=sku_tier))
+        # Pinning to a zone (matching what the Azure portal does by default)
+        # avoids a capacity allocation failure ('PartiallySucceeded' / Internal
+        # Server Error) seen when Azure picks placement itself for this SKU.
+        cluster = Cluster(location=location, sku=AzureSku(name=sku_name, capacity=capacity, tier=sku_tier), zones=['1'])
         log.info(f"Provisioning ADX cluster '{cluster_name}' (this may take several minutes)...")
         for attempt in range(1, 4):
             try:
