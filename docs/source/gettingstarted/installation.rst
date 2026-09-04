@@ -22,20 +22,23 @@ Cycas can be installed in two ways:
 Prerequisites
 -------------
 
-**Python 3.13**
-
 .. code-block:: bash
 
+   # Python 3.13
    sudo add-apt-repository ppa:deadsnakes/ppa
    sudo apt update
    sudo apt install python3.13
    sudo apt install python3.13-venv
 
-**Azure CLI** - used for authentication:
-
-.. code-block:: bash
-
+   # Azure CLI - used for authentication
+   sudo apt install curl
    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+   # Azure Functions Core Tools - used to deploy the watcher/processor functions
+   curl -sLS https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+   echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/repos/microsoft-ubuntu-$(lsb_release -cs)-prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/microsoft-prod.list
+   sudo apt update
+   sudo apt install azure-functions-core-tools-4
 
 **Azure permissions** - Owner access on the target resource group or contributor combined with the User Access Administrator role (or
 owner on the subscription if you want to create a new resource group).
@@ -44,6 +47,7 @@ Clone the repository, create a virtual environment, and install Cycas:
 
 .. code-block:: bash
 
+   sudo apt install git
    git clone https://github.com/nerium-security/cycas
    cd cycas
    python3.13 -m venv .venv
@@ -75,12 +79,6 @@ What gets created
 - Two Azure Function Apps (watcher and processor)
 - Application Insights for monitoring
 - (Optional) Key Vault for storing offline ZIP collection password
-
-Additional prerequisite
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Azure Functions Core Tools** - installed automatically by the wizard if not
-already present (requires ``npm``).
 
 Steps
 ~~~~~

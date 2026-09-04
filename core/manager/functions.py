@@ -360,7 +360,8 @@ class FunctionsManager:
         Stages function files and the shared core/ package in a temp directory,
         then runs: func azure functionapp publish <app_name>
 
-        Installs azure-functions-core-tools via npm if func is not found.
+        Requires azure-functions-core-tools (the `func` CLI) to already be
+        installed — see the installation prerequisites.
 
         Newly created/updated Flex Consumption deployment-storage app settings
         can take a while to become visible to the publish pipeline, which
@@ -368,15 +369,10 @@ class FunctionsManager:
         with a delay rather than treated as a hard failure.
         '''
         if not shutil.which('func'):
-            log.info('func not found — installing azure-functions-core-tools via npm...')
-            result = subprocess.run(
-                ['npm', 'install', '-g', 'azure-functions-core-tools@4', '--unsafe-perm', 'true'],
-                capture_output=True, text=True,
+            raise RuntimeError(
+                'azure-functions-core-tools (func) not found on PATH — '
+                'see the installation prerequisites to install it.'
             )
-            if result.returncode != 0 or not shutil.which('func'):
-                raise RuntimeError(
-                    f'Failed to install azure-functions-core-tools:\n{result.stderr}'
-                )
 
         tmp_dir = tempfile.mkdtemp()
         try:
