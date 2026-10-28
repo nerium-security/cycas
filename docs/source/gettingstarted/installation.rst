@@ -60,6 +60,19 @@ Log in to Azure:
 
    az login
 
+.. note::
+
+   If no browser opens (WSL, SSH, headless) and device code login is blocked
+   by Conditional Access (e.g. passkey or trusted device policies), print the
+   sign-in URL instead:
+
+   .. code-block:: bash
+
+      BROWSER=echo az login
+
+   Open the URL in a browser on the same machine (e.g. Edge on the Windows
+   host for WSL). It redirects to ``localhost``, so other devices won't work.
+
 
 .. _easy-installation:
 
