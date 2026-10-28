@@ -25,6 +25,10 @@ log = log.getLogger(__name__)
 
 _ARM_API = '2024-04-01'
 
+# Transient ARM responses worth retrying (throttling and gateway/server errors)
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+_MAX_RETRIES    = 5
+
 # Built-in RBAC role IDs (constant across all Azure tenants)
 ROLE_BLOB_DATA_CONTRIBUTOR   = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 ROLE_QUEUE_DATA_CONTRIBUTOR  = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
@@ -60,7 +64,7 @@ class FunctionsManager:
             'Authorization': f'Bearer {self._token()}',
             'Content-Type': 'application/json',
         }
-        resp = requests.request(method, url, headers=headers, timeout=120, **kwargs)
+        resp = self._request_with_retry(method, url, headers=headers, timeout=120, **kwargs)
         if not resp.ok:
             try:
                 err = resp.json().get('error', resp.json())
@@ -79,8 +83,8 @@ class FunctionsManager:
             if poll_url:
                 while True:
                     time.sleep(15)
-                    poll = requests.get(
-                        poll_url,
+                    poll = self._request_with_retry(
+                        'GET', poll_url,
                         headers={'Authorization': f'Bearer {self._token()}'},
                         timeout=30,
                     )
@@ -94,8 +98,8 @@ class FunctionsManager:
 
             # Re-fetch the actual resource for PUT operations
             if method.upper() == 'PUT':
-                final = requests.get(
-                    url,
+                final = self._request_with_retry(
+                    'GET', url,
                     headers={'Authorization': f'Bearer {self._token()}'},
                     timeout=30,
                 )
@@ -103,13 +107,38 @@ class FunctionsManager:
 
         return resp.json() if resp.content else {}
 
+    def _request_with_retry(self, method, url, **kwargs):
+        '''
+        Issue an HTTP request, retrying on throttling, transient 5xx gateway
+        errors and timeouts. ARM PUT/PATCH/GET are idempotent, so retrying
+        is safe even when the original request reached the resource provider.
+        '''
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                resp = requests.request(method, url, **kwargs)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if attempt == _MAX_RETRIES:
+                    raise
+                log.warning(f'{method} {url.split("?")[0]} failed ({e}), retrying...')
+            else:
+                if resp.status_code not in _RETRY_STATUSES or attempt == _MAX_RETRIES:
+                    return resp
+                log.warning(f'{method} {url.split("?")[0]} returned {resp.status_code}, retrying...')
+                retry_after = resp.headers.get('Retry-After')
+                if retry_after and retry_after.isdigit():
+                    time.sleep(int(retry_after))
+                    continue
+            time.sleep(min(10 * 2 ** attempt, 120))
+
     def _rg_path(self, resource_group):
         return f'/subscriptions/{self.subscription_id}/resourceGroups/{resource_group}'
 
     def _arm_get(self, path, api_version=None):
         '''GET an ARM resource, returning None if it does not exist (404).'''
         url = f'https://management.azure.com{path}?api-version={api_version or _ARM_API}'
-        resp = requests.get(url, headers={'Authorization': f'Bearer {self._token()}'}, timeout=30)
+        resp = self._request_with_retry(
+            'GET', url, headers={'Authorization': f'Bearer {self._token()}'}, timeout=30,
+        )
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
