@@ -11,6 +11,7 @@ Requirements:
     - Contributor access on the target resource group
 '''
 
+import base64
 import io
 import json
 import logging
@@ -34,6 +35,7 @@ from core.manager.queue import QueueManager
 from core.manager.functions import FunctionsManager
 from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 from core.manager.webapp import WebappManager
+from core.manager.vm import VmManager, ScriptFailed, parse_image_urn
 from core.utils.postprocess import download_velociraptor
 from core.utils.taskrunner import current_task, emit, run_tasks
 
@@ -72,6 +74,26 @@ COLLECTOR_SAS_VALID_DAYS = 90
 BINARIES_CONTAINER  = 'binaries'
 KEYVAULT_PASSWORD_LOCATION = 'velociraptor-collection-password'
 KEYVAULT_SAS_LOCATION      = 'collector-sas-url'
+
+# Velociraptor server VM
+VELO_SERVER_DIR          = ROOT / 'velociraptor' / 'server'
+VELO_SERVER_FILES        = ('bootstrap.py', 'patch_config.json', 'spec.yaml', 'hunts.vql', 'Server.Utils.BackupAzure.yaml')
+VELO_SERVER_OVERRIDABLE  = ('patch_config.json', 'spec.yaml', 'hunts.vql')   # from velociraptor/server/custom/
+VELO_BLOB_PREFIX         = 'velociraptor-server'                              # in BINARIES_CONTAINER
+VELO_VM_ADMIN            = 'cycas'
+VELO_REMOTE_LOG          = '/opt/cycas-velociraptor/bootstrap.log'
+KEYVAULT_VELO_PASSWORD   = 'velociraptor-server-admin-password'
+KEYVAULT_VELO_SSH_KEY    = 'velociraptor-server-ssh-private-key'
+KEYVAULT_VELO_SSH_PUBKEY = 'velociraptor-server-ssh-public-key'
+VELO_SETTINGS_DEFAULTS   = {
+    'velociraptor_server_vm_size':           'Standard_B2ms',
+    'velociraptor_server_image':             'Canonical:ubuntu-26_04-lts:server:latest',
+    'velociraptor_server_os_disk_gb':        '1024',
+    'velociraptor_server_expected_clients':  '100',
+    'velociraptor_server_admin_user':        'admin',
+    'velociraptor_server_package_prefix':    'Velociraptor',
+    'velociraptor_server_api_name':          'cycas_api',
+}
 
 SKUS = {
     '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'Small engagements / Testing  (2 vCores,  16 GB RAM/node) ~$2.40/day when idle'),
@@ -202,6 +224,14 @@ def select_location(azure, subscription_id, default='westeurope'):
         except ValueError:
             pass
         print('  Enter a number, M for more, or press Enter for default.')
+
+
+def app_settings_from_env():
+    '''The .env values to apply as Function App / Web App settings. The
+    Velociraptor server settings are only used by this installer and can
+    hold SAS URLs, so they stay out.'''
+    return {k.upper(): v for k, v in read_env_defaults(ENV_FILE).items()
+            if v and not k.startswith('velociraptor_server_')}
 
 
 def ensure_env_file():
@@ -495,6 +525,11 @@ def collect_webapp_config(resource_group, step_label='8/8'):
     print('  All other traffic will be denied.')
     print()
 
+    return webapp_mode, app_name, collect_allowed_ips()
+
+
+def collect_allowed_ips():
+    '''Ask for IPs / CIDR ranges, offering the current external IP first.'''
     try:
         my_ip = urlopen('https://api.ipify.org', timeout=5).read().decode()
     except Exception:
@@ -518,7 +553,100 @@ def collect_webapp_config(resource_group, step_label='8/8'):
         allowed_ips.append(ip)
         success(f"'{ip}' added.")
 
-    return webapp_mode, app_name, allowed_ips
+    return allowed_ips
+
+
+def velociraptor_server_settings():
+    '''VELOCIRAPTOR_SERVER_* settings: .env, then .env_example, then built-in defaults.'''
+    example = read_env_defaults(ENV_EXAMPLE)
+    env     = read_env_defaults(ENV_FILE)
+    merged  = dict(VELO_SETTINGS_DEFAULTS)
+    for source in (example, env):
+        merged.update({k: v for k, v in source.items() if k.startswith('velociraptor') and v})
+    return merged
+
+
+def expected_clients_setting():
+    '''VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS as a positive integer.'''
+    value = velociraptor_server_settings()['velociraptor_server_expected_clients']
+    if not value.isdigit() or int(value) < 1:
+        raise ValueError(f"VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS must be a positive number, got '{value}'.")
+    return int(value)
+
+
+def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, step_label='9/9'):
+    '''
+    Ask whether to deploy a Velociraptor server and how.
+
+    Returns None when declined, otherwise a dict with the VM settings that are
+    stored in the install state. The server settings that only affect the
+    software (expected clients, package prefix, MSI templates, ...) are read
+    from .env when provisioning, so a re-run applies changes to them.
+    '''
+    section(f'Step {step_label} — Velociraptor Server (optional)')
+
+    info('Deploys a Velociraptor server on an Ubuntu VM with a static IP. It builds client')
+    info('installers and an offline collector, creates default hunts (paused), and sends')
+    info('finished collections to the input container, so they are ingested into ADX.')
+    info(f'Settings: VELOCIRAPTOR_SERVER_* in .env. Customised files: {VELO_SERVER_DIR / "custom"}')
+    print()
+    answer = ask('  Deploy a Velociraptor server? [y/N]: ').strip().lower()
+    if answer not in ('y', 'yes'):
+        return None
+
+    settings = velociraptor_server_settings()
+
+    def random_label():
+        # The DNS name is public, so it is random rather than derived from the
+        # resource group (often a customer or case name).
+        alphabet = string.ascii_lowercase + string.digits
+        return secrets.choice(string.ascii_lowercase) + ''.join(secrets.choice(alphabet) for _ in range(15))
+
+    if setup_mode == 'easy':
+        name = random_label()
+        while not vms.dns_label_available(location, name):
+            name = random_label()
+        vm_size = settings['velociraptor_server_vm_size']
+    else:
+        print()
+        while True:
+            name = prompt('Server name (DNS label: 3-63 lowercase letters, digits and hyphens)', default=random_label())
+            if not re.fullmatch(r'[a-z][a-z0-9-]{1,61}[a-z0-9]', name):
+                print('  Invalid name: start with a letter, end with a letter or digit, only a-z, 0-9 and hyphens.')
+                continue
+            if not vms.dns_label_available(location, name):
+                print(f'  {name}.{location}.cloudapp.azure.com is already taken, choose another name.')
+                continue
+            break
+        vm_size = prompt('VM size', default=settings['velociraptor_server_vm_size'])
+
+    # Fail now on malformed settings rather than halfway through provisioning.
+    parse_image_urn(settings['velociraptor_server_image'])
+    expected_clients_setting()
+    image = settings['velociraptor_server_image']
+
+    print()
+    print('  Enter IP addresses or CIDR ranges allowed to use the Velociraptor GUI and SSH.')
+    print('  Clients can always connect; all other GUI and SSH traffic is denied.')
+    print()
+    allowed_ips = collect_allowed_ips()
+
+    return {
+        'name':             name,
+        'resource_prefix':  f'{resource_group[:40]}-velo',
+        'fqdn':             f'{name}.{location}.cloudapp.azure.com',
+        'vm_size':          vm_size,
+        'image':            image,
+        'os_disk_gb':       int(settings['velociraptor_server_os_disk_gb']),
+        'admin_user':       settings['velociraptor_server_admin_user'],
+        'allowed_ips':      allowed_ips,
+    }
+
+
+def velo_resource_prefix(velo):
+    '''Return the prefix of the Velociraptor server's Azure resource names.
+    Sessions saved before resource_prefix existed used the DNS label.'''
+    return velo.get('resource_prefix', velo['name'])
 
 
 def collect_setup_mode():
@@ -599,7 +727,8 @@ def confirm_plan(run_mode,
                  watcher_app=None, watcher_sa=None,
                  processor_app=None, processor_sa=None,
                  keyvault_name=None, keyvault_password_location=None,
-                 webapp_mode=None, webapp_app=None, webapp_allowed_ips=None):
+                 webapp_mode=None, webapp_app=None, webapp_allowed_ips=None,
+                 velo_server=None):
 
     section('Summary — Review before provisioning')
 
@@ -648,6 +777,23 @@ def confirm_plan(run_mode,
             info(f'Mode       : Azure App Service')
             info(f'App name   : {webapp_app}')
             info(f'Allowed IPs: {", ".join(webapp_allowed_ips)}')
+
+    if velo_server:
+        settings = velociraptor_server_settings()
+        version  = re.search(r'velociraptor-v([\d.]+)-', settings.get('velociraptor_url', ''))
+        print('\n  Velociraptor server')
+        info(f'URL          : https://{velo_server["fqdn"]}/  (static IP)')
+        info(f'VM           : {velo_resource_prefix(velo_server)}-vm  ({velo_server["vm_size"]}, {velo_server["image"]}, '
+             f'{velo_server["os_disk_gb"]} GB)')
+        info(f'Version      : {version.group(1) if version else settings.get("velociraptor_url", "?")}')
+        info(f'Endpoints    : {expected_clients_setting()} expected (VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS)')
+        info(f'GUI and SSH  : {", ".join(velo_server["allowed_ips"])}')
+        for arch, key in (('x64', 'velociraptor_server_msi_amd64_url'), ('x86', 'velociraptor_server_msi_x86_url')):
+            info(f'MSI {arch}      : {"custom (" + key.upper() + ")" if settings.get(key) else "default (Velociraptor release)"}')
+        labels = {'patch_config.json': 'Config patch', 'spec.yaml': 'Collector', 'hunts.vql': 'Hunts'}
+        for name, _, source in resolve_server_files():
+            if name in labels:
+                info(f'{labels[name]:<13}: {source} ({name}){", created paused" if name == "hunts.vql" else ""}')
 
     print()
     confirm = ask('Proceed with provisioning? [Y/n]: ').strip().lower()
@@ -1001,8 +1147,7 @@ def configure_functions(credential, subscription_id, resource_group,
     funcs.ensure_core_tools()
 
     # App settings: read the final .env and convert to Azure app settings
-    env_raw      = read_env_defaults(ENV_FILE)
-    env_settings = {k.upper(): v for k, v in env_raw.items() if v}
+    env_settings = app_settings_from_env()
 
     queue_service_uri = f'https://{data_account}.queue.core.windows.net'
 
@@ -1117,8 +1262,7 @@ def deploy_webapp(credential, subscription_id, resource_group, webapp_app):
     webapp = WebappManager(credential, subscription_id)
 
     step(f"Applying app settings to '{webapp_app}'...")
-    env_raw      = read_env_defaults(ENV_FILE)
-    env_settings = {k.upper(): v for k, v in env_raw.items() if v}
+    env_settings = app_settings_from_env()
     webapp.set_app_settings(resource_group, webapp_app, env_settings)
     success('App settings applied.')
 
@@ -1127,6 +1271,178 @@ def deploy_webapp(credential, subscription_id, resource_group, webapp_app):
     success(f"Webapp deployed.")
 
     success(f"Web App accessible at: https://{webapp_app}.azurewebsites.net")
+
+
+# ---------------------------------------------------------------------------
+# Velociraptor server
+# ---------------------------------------------------------------------------
+
+def generate_ssh_key_pair():
+    '''Return a new Ed25519 key pair as (OpenSSH private key, authorized_keys line).'''
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key     = Ed25519PrivateKey.generate()
+    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                                serialization.NoEncryption()).decode()
+    public  = key.public_key().public_bytes(serialization.Encoding.OpenSSH,
+                                            serialization.PublicFormat.OpenSSH).decode()
+    return private, f'{public} cycas-velociraptor'
+
+
+def resolve_server_files():
+    '''The files bootstrap.py needs, as (name, path, 'custom' | 'default'),
+    taking velociraptor/server/custom/ overrides into account.'''
+    files = []
+    for name in VELO_SERVER_FILES:
+        custom = VELO_SERVER_DIR / 'custom' / name
+        if name in VELO_SERVER_OVERRIDABLE and custom.is_file():
+            files.append((name, custom, 'custom'))
+        else:
+            files.append((name, VELO_SERVER_DIR / name, 'default'))
+    return files
+
+
+def provision_velociraptor_vm(credential, subscription_id, resource_group, location, keyvault_name, velo):
+    '''
+    Create the Velociraptor server VM and its network. The SSH key pair is
+    kept in Key Vault; only the public key is put on the VM.
+
+    Returns:
+        dict: 'ip_address' and 'fqdn' of the static public IP.
+    '''
+    section('Provisioning — Velociraptor server VM')
+
+    kv = KeyvaultManager(f'https://{keyvault_name}.vault.azure.net')
+    kv.authenticate(credential, verify_enabled=False)
+
+    step('Ensuring SSH key pair in Key Vault...')
+    public_key = kv.read_creds(KEYVAULT_VELO_SSH_PUBKEY)
+    if public_key:
+        info(f"Reusing SSH key from Key Vault secret '{KEYVAULT_VELO_SSH_PUBKEY}'.")
+    else:
+        private_key, public_key = generate_ssh_key_pair()
+        kv.set_secret(KEYVAULT_VELO_SSH_KEY, private_key)
+        kv.set_secret(KEYVAULT_VELO_SSH_PUBKEY, public_key)
+        info(f"Generated an SSH key, private key stored in Key Vault secret '{KEYVAULT_VELO_SSH_KEY}'.")
+    success('SSH key ready.')
+
+    vms  = VmManager(credential, subscription_id)
+    name = velo_resource_prefix(velo)
+
+    step(f"Ensuring static public IP '{name}-ip' ({velo['fqdn']})...")
+    ip = vms.provision_public_ip(resource_group, f'{name}-ip', location, velo['name'])
+    success(f"Public IP ready: {ip['ip_address']}")
+
+    step(f"Ensuring network security group '{name}-nsg'...")
+    nsg_id = vms.provision_nsg(resource_group, f'{name}-nsg', location, velo['allowed_ips'])
+    success('Network security group ready.')
+
+    step(f"Ensuring virtual network '{name}-vnet'...")
+    subnet_id = vms.provision_network(resource_group, f'{name}-vnet', location)
+    nic_id    = vms.provision_nic(resource_group, f'{name}-nic', location, subnet_id, ip['id'], nsg_id)
+    success('Network ready.')
+
+    step(f"Ensuring VM '{name}-vm' ({velo['vm_size']})...")
+    vms.provision_vm(resource_group, f'{name}-vm', location, nic_id, velo['vm_size'],
+                     VELO_VM_ADMIN, public_key, velo['os_disk_gb'], velo['image'],
+                     os_disk_name=f'{name}-osdisk')
+    success(f"VM '{name}-vm' ready.")
+
+    return ip
+
+
+def setup_velociraptor_server(credential, subscription_id, resource_group, location,
+                              account_name, input_container, keyvault_name, password_location,
+                              velo, ip):
+    '''
+    Install and configure Velociraptor on the VM by running bootstrap.py
+    through the Custom Script Extension. Must run after the collector task,
+    which ensures the ZIP password exists in Key Vault.
+
+    Returns the .env values for the server.
+    '''
+    section('Provisioning — Velociraptor server')
+    settings = velociraptor_server_settings()
+
+    kv = KeyvaultManager(f'https://{keyvault_name}.vault.azure.net')
+    kv.authenticate(credential, verify_enabled=False)
+
+    step('Ensuring GUI admin password in Key Vault...')
+    admin_password = kv.read_creds(KEYVAULT_VELO_PASSWORD)
+    if not admin_password:
+        admin_password = secrets.token_urlsafe(18)
+        kv.set_secret(KEYVAULT_VELO_PASSWORD, admin_password)
+    success(f"Admin password in Key Vault secret '{KEYVAULT_VELO_PASSWORD}'.")
+    zip_password = kv.read_creds(password_location) or ''
+
+    blob = BlobManager(credential, f'https://{account_name}.blob.core.windows.net')
+    blob.authenticate()
+    blob.switch_to_account_key(subscription_id, resource_group, account_name)
+
+    step(f"Uploading server files to '{BINARIES_CONTAINER}/{VELO_BLOB_PREFIX}/bootstrap/'...")
+    file_uris = []
+    for name, path, source in resolve_server_files():
+        blob_name = f'{VELO_BLOB_PREFIX}/bootstrap/{name}'
+        # Not BlobManager.upload_file: it only logs failures, and a missing
+        # file would surface much later as a download error on the VM.
+        with open(path, 'rb') as f:
+            blob.get_client(BINARIES_CONTAINER, blob_name).upload_blob(f, overwrite=True)
+        url, _ = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
+                                            BINARIES_CONTAINER, blob_name, expiry_days=1)
+        file_uris.append(url)
+        if source == 'custom':
+            info(f'{name}: custom override')
+    success(f'{len(file_uris)} file(s) uploaded.')
+
+    step('Generating SAS URLs for package upload and collection backup...')
+    upload_sas, _ = blob.generate_container_sas_url(subscription_id, resource_group, account_name,
+                                                    BINARIES_CONTAINER, expiry_days=1)
+    backup_sas, backup_expiry = blob.generate_container_sas_url(subscription_id, resource_group, account_name,
+                                                                input_container, expiry_days=COLLECTOR_SAS_VALID_DAYS)
+    success(f'SAS URLs ready (collection backup expires {backup_expiry:%Y-%m-%d}).')
+
+    params = {
+        'dns':                 velo['fqdn'],
+        'admin_user':          velo['admin_user'],
+        'admin_password':      admin_password,
+        'gui_allowed_cidrs':   velo['allowed_ips'],
+        'expected_clients':    expected_clients_setting(),
+        'velociraptor_url':    settings.get('velociraptor_url', ''),
+        'package_prefix':      settings['velociraptor_server_package_prefix'],
+        'api_name':            settings['velociraptor_server_api_name'],
+        'writeback_windows':   settings.get('velociraptor_server_writeback_windows', ''),
+        'msi_amd64_url':       settings.get('velociraptor_server_msi_amd64_url', ''),
+        'msi_x86_url':         settings.get('velociraptor_server_msi_x86_url', ''),
+        'upload_sas_url':      upload_sas,
+        'upload_prefix':       VELO_BLOB_PREFIX,
+        'backup_sas_url':      backup_sas,
+        'backup_zip_password': zip_password,
+    }
+    # Base64 keeps the JSON free of shell quoting; the command is only stored
+    # in the extension's encrypted protectedSettings.
+    encoded = base64.b64encode(json.dumps(params).encode()).decode()
+    command = f'CYCAS_BOOTSTRAP_PARAMS={encoded} python3 bootstrap.py'
+
+    step('Running bootstrap.py on the VM (install, client packages, collector, hunts)...')
+    vms = VmManager(credential, subscription_id)
+    try:
+        output = vms.run_script(resource_group, f'{velo_resource_prefix(velo)}-vm', location, file_uris, command)
+    except ScriptFailed as e:
+        for line in e.stdout.strip().splitlines()[-15:]:
+            info(line)
+        raise RuntimeError(f'{e} (full log on the VM: {VELO_REMOTE_LOG})') from None
+
+    result_line = next((l for l in reversed(output.splitlines()) if 'CYCAS_BOOTSTRAP_RESULT ' in l), None)
+    result      = json.loads(result_line.split('CYCAS_BOOTSTRAP_RESULT ', 1)[1]) if result_line else {}
+    gui_url     = result.get('gui_url', f'https://{velo["fqdn"]}/')
+    success(f'Velociraptor {result.get("version", "")} server ready: {gui_url}')
+    for name in result.get('uploaded', []):
+        info(f'{BINARIES_CONTAINER}/{name}')
+
+    return {
+        'VELOCIRAPTOR_SERVER_URL': gui_url,
+    }
 
 
 def download_triage_targets(dest_dir):
@@ -1293,7 +1609,7 @@ def main():
     else:
         run_mode = 'azurefunction'
 
-    total = '8' if run_mode == 'azurefunction' else '5'
+    total = '9' if run_mode == 'azurefunction' else '5'
 
     print()
     print('  What will be created:')
@@ -1303,6 +1619,7 @@ def main():
     if run_mode == 'azurefunction':
         print('    - Two Azure Function Apps (watcher + processor)')
         print('    - (Optional) Key Vault for ZIP password storage')
+        print('    - (Optional) Velociraptor server VM with a static IP, client installers and hunts')
     print('    - Offline Velociraptor collector (Windows.Triage.Targets -> input container)')
     print()
     print('  Progress is saved automatically. If the script is interrupted,')
@@ -1326,6 +1643,8 @@ def main():
         info(f'Storage      : {saved["account_name"]}')
         if run_mode == 'azurefunction':
             info(f'Functions    : {saved["watcher_app"]}, {saved["processor_app"]}')
+            if saved.get('velo_server'):
+                info(f'Velociraptor : https://{saved["velo_server"]["fqdn"]}/')
         print()
         prompt_text = '  Re-run with this configuration? [Y/n]: ' if completed else '  Resume from saved session? [Y/n]: '
         resume = ask(prompt_text).strip().lower()
@@ -1358,10 +1677,12 @@ def main():
                 webapp_app                 = saved['webapp_app']
                 webapp_allowed_ips         = saved['webapp_allowed_ips']
                 zip_password               = None  # not stored in state; provision_collector reads it from Key Vault
+                velo_server                = saved.get('velo_server')
             else:
                 watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
                 keyvault_name = keyvault_password_location = zip_password = None
                 webapp_mode = webapp_app = webapp_allowed_ips = None
+                velo_server = None
         else:
             clear_state()
             saved = None
@@ -1375,7 +1696,7 @@ def main():
         if setup_mode == 'advanced':
             section('Deployment Mode')
             run_mode = collect_run_mode()
-            total = '8' if run_mode == 'azurefunction' else '5'
+            total = '9' if run_mode == 'azurefunction' else '5'
 
         resource_group, location, new_rg = collect_resource_group(azure, subscription_id, f'2/{total}')
 
@@ -1417,9 +1738,20 @@ def main():
             else:
                 keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
                 webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
+
+            velo_server = collect_velociraptor_server_config(VmManager(credential, subscription_id),
+                                                             resource_group, location, setup_mode, f'9/{total}')
+            if velo_server and not keyvault_name:
+                # The server's admin password and SSH key are kept in Key Vault.
+                rg_slug       = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
+                kv_suffix     = f'-{rand6()}-keyvault'
+                keyvault_name = rg_slug[:24 - len(kv_suffix)] + kv_suffix
+                keyvault_password_location = KEYVAULT_PASSWORD_LOCATION
+                info(f"The Velociraptor server needs a Key Vault, '{keyvault_name}' will be created.")
         else:
             keyvault_name = keyvault_password_location = zip_password = None
             webapp_mode = webapp_app = webapp_allowed_ips = None
+            velo_server = None
 
         state = {
             'run_mode':                  run_mode,
@@ -1452,6 +1784,7 @@ def main():
                 'webapp_mode':               webapp_mode,
                 'webapp_app':                webapp_app,
                 'webapp_allowed_ips':        webapp_allowed_ips,
+                'velo_server':               velo_server,
             })
         save_state(state)
 
@@ -1463,7 +1796,8 @@ def main():
                         input_sources,
                         watcher_app, watcher_sa, processor_app, processor_sa,
                         keyvault_name, keyvault_password_location,
-                        webapp_mode, webapp_app, webapp_allowed_ips):
+                        webapp_mode, webapp_app, webapp_allowed_ips,
+                        velo_server):
         print('Aborted.')
         sys.exit(0)
 
@@ -1531,12 +1865,23 @@ def main():
             tasks['webapp-roles'] = (lambda r: assign_webapp_roles(credential, subscription_id, resource_group,
                                                                    account_name, status_container, config_container,
                                                                    r['webapp']), ['webapp', 'storage'])
+        if velo_server and use_keyvault:
+            # The VM only needs its SSH key; the software setup also needs the
+            # storage account and the ZIP password the collector task ensures.
+            tasks['velo-vm'] = (lambda r: provision_velociraptor_vm(credential, subscription_id, resource_group,
+                                                                    location, keyvault_name, velo_server),
+                                ['keyvault'])
+            tasks['velo-server'] = (lambda r: setup_velociraptor_server(credential, subscription_id, resource_group,
+                                                                        location, account_name, container,
+                                                                        keyvault_name, keyvault_password_location,
+                                                                        velo_server, r['velo-vm']),
+                                    ['velo-vm', 'storage', 'collector'])
 
     results = run_tasks(tasks, 'Provisioning', LOG_FILE, _file_log)
 
     step('Writing .env...')
     env_values = {}
-    for name in ('storage', 'keyvault', 'adx'):
+    for name in ('storage', 'keyvault', 'adx', 'velo-server'):
         env_values.update(results.get(name) or {})
     for source_settings in input_sources.values():
         env_values.update(source_settings)
@@ -1596,6 +1941,17 @@ def main():
         info(f'Web application:')
         info(f'  URL     — https://{webapp_app}.azurewebsites.net')
         info(f'  Access  — restricted to: {", ".join(webapp_allowed_ips)}')
+    if velo_server:
+        packages = f'https://{account_name}.blob.core.windows.net/{BINARIES_CONTAINER}/{VELO_BLOB_PREFIX}/'
+        print()
+        info('Velociraptor server:')
+        info(f'  GUI      — https://{velo_server["fqdn"]}/  (user: {velo_server["admin_user"]})')
+        info(f"  Password — Key Vault '{keyvault_name}', secret '{KEYVAULT_VELO_PASSWORD}'")
+        info(f'  Access   — GUI and SSH restricted to: {", ".join(velo_server["allowed_ips"])}')
+        info(f'  Packages — {packages}ClientInstallationPackages/ and OfflineCollectorPackages/')
+        info('  SSH      — az keyvault secret show --vault-name '
+             f'{keyvault_name} --name {KEYVAULT_VELO_SSH_KEY} --query value -o tsv > velo_key && chmod 600 velo_key')
+        info(f'             ssh -i velo_key {VELO_VM_ADMIN}@{velo_server["fqdn"]}')
 
     collector = next((ROOT / 'build' / 'collector' / 'datastore').glob('Collector_*'), None)
     if collector:

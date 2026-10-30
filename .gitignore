@@ -447,3 +447,6 @@ velociraptor/velociraptor
 velociraptor/definitions/*.yaml
 !velociraptor/definitions/Custom.*.yaml
 master_summary.csv
+#velociraptor server
+!velociraptor/server/patch_config.json
+velociraptor/server/custom/
