@@ -340,7 +340,7 @@ class FunctionsManager:
     # Deployment
     # ------------------------------------------------------------------
 
-    def _run_publish(self, app_name, tmp_dir):
+    def _run_publish(self, app_name, tmp_dir, echo=print):
         '''Run `func azure functionapp publish`, streaming output while also capturing it.'''
         proc = subprocess.Popen(
             ['func', 'azure', 'functionapp', 'publish', app_name],
@@ -348,12 +348,26 @@ class FunctionsManager:
         )
         lines = []
         for line in proc.stdout:
-            print(line, end='')
+            echo(line.rstrip('\n'))
             lines.append(line)
         proc.wait()
         return proc.returncode, ''.join(lines)
 
-    def deploy(self, app_name, function_dir: Path, core_dir: Path, max_attempts=6, retry_delay=30):
+    def ensure_core_tools(self):
+        '''Install azure-functions-core-tools via npm if func is not found.'''
+        if shutil.which('func'):
+            return
+        log.info('func not found — installing azure-functions-core-tools via npm...')
+        result = subprocess.run(
+            ['npm', 'install', '-g', 'azure-functions-core-tools@4', '--unsafe-perm', 'true'],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0 or not shutil.which('func'):
+            raise RuntimeError(
+                f'Failed to install azure-functions-core-tools:\n{result.stderr}'
+            )
+
+    def deploy(self, app_name, function_dir: Path, core_dir: Path, max_attempts=6, retry_delay=30, echo=print):
         '''
         Deploy a Function App using the Azure Functions Core Tools CLI.
 
@@ -361,22 +375,14 @@ class FunctionsManager:
         then runs: func azure functionapp publish <app_name>
 
         Installs azure-functions-core-tools via npm if func is not found.
+        Publish output is streamed line by line through echo.
 
         Newly created/updated Flex Consumption deployment-storage app settings
         can take a while to become visible to the publish pipeline, which
         fails with MissingDeploymentConfigException in the meantime — retried
         with a delay rather than treated as a hard failure.
         '''
-        if not shutil.which('func'):
-            log.info('func not found — installing azure-functions-core-tools via npm...')
-            result = subprocess.run(
-                ['npm', 'install', '-g', 'azure-functions-core-tools@4', '--unsafe-perm', 'true'],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0 or not shutil.which('func'):
-                raise RuntimeError(
-                    f'Failed to install azure-functions-core-tools:\n{result.stderr}'
-                )
+        self.ensure_core_tools()
 
         tmp_dir = tempfile.mkdtemp()
         try:
@@ -395,7 +401,7 @@ class FunctionsManager:
                 }))
 
             for attempt in range(1, max_attempts + 1):
-                returncode, output = self._run_publish(app_name, tmp_dir)
+                returncode, output = self._run_publish(app_name, tmp_dir, echo)
                 if returncode == 0:
                     break
                 if 'MissingDeploymentConfigException' in output and attempt < max_attempts:

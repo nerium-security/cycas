@@ -35,6 +35,7 @@ from core.manager.functions import FunctionsManager
 from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 from core.manager.webapp import WebappManager
 from core.utils.postprocess import download_velociraptor
+from core.utils.taskrunner import current_task, emit, run_tasks
 
 ROOT        = Path(__file__).parent
 ENV_FILE    = ROOT / '.env'
@@ -45,15 +46,26 @@ LOG_DIR  = ROOT / 'logs'
 LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / f'setup_{time.strftime("%Y%m%d_%H%M%S")}.log'
 
-_console_handler = logging.StreamHandler()
+class _ConsoleHandler(logging.Handler):
+    '''Show warnings on the console. Records logged from a provisioning task
+    go to the task status display rather than straight to the terminal.'''
+    def emit(self, record):
+        emit(self.format(record), file=sys.stderr, warning=True)
+
+_console_handler = _ConsoleHandler()
 _console_handler.setLevel(logging.WARNING)
 _console_handler.setFormatter(logging.Formatter('%(message)s'))
 
 _file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
 _file_handler.setLevel(logging.INFO)
-_file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s'))
+_file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)-8s [%(threadName)s] %(name)s: %(message)s'))
 
 logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
+
+# For details already summarised on the console, such as task tracebacks.
+_file_log = logging.getLogger('easy_install.file')
+_file_log.addHandler(_file_handler)
+_file_log.propagate = False
 
 TRIAGE_TARGETS_URL  = 'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip'
 COLLECTOR_SAS_VALID_DAYS = 90
@@ -71,11 +83,19 @@ SKUS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def section(title): print(f'\n{"="*60}\n  {title}\n{"="*60}\n'); logging.info('=== %s ===', title)
-def step(msg):      print(f'  >> {msg}'); logging.info('>> %s', msg)
-def info(msg):      print(f'     {msg}'); logging.info(msg)
-def success(msg):   print(f'  [OK] {msg}'); logging.info('[OK] %s', msg)
-def error(msg):     print(f'  [ERROR] {msg}', file=sys.stderr); logging.error(msg); sys.exit(1)
+# Inside a provisioning task these lines go to the task status display
+# (core.utils.taskrunner), outside one they are printed directly.
+def section(title):
+    if current_task():
+        emit(f'--- {title} ---', status=False)
+    else:
+        print(f'\n{"="*60}\n  {title}\n{"="*60}\n')
+    logging.info('=== %s ===', title)
+
+def step(msg):      emit(f'  >> {msg}'); logging.info('>> %s', msg)
+def info(msg):      emit(f'     {msg}'); logging.info(msg)
+def success(msg):   emit(f'  [OK] {msg}'); logging.info('[OK] %s', msg)
+def error(msg):     emit(f'  [ERROR] {msg}', file=sys.stderr); logging.error(msg); sys.exit(1)
 def rand6():        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
 def ask(prompt_text=''):
@@ -184,11 +204,16 @@ def select_location(azure, subscription_id, default='westeurope'):
         print('  Enter a number, M for more, or press Enter for default.')
 
 
-def write_env_values(values):
+def ensure_env_file():
     if not ENV_FILE.exists():
         ENV_FILE.write_text(ENV_EXAMPLE.read_text() if ENV_EXAMPLE.exists() else '')
         info('Created .env from .env_example' if ENV_EXAMPLE.exists() else 'Created empty .env')
 
+
+def write_env_values(values):
+    '''Update .env in place. Not thread-safe: provisioning tasks return their
+    values instead, and the main thread writes them once a phase is done.'''
+    ensure_env_file()
     content = ENV_FILE.read_text()
 
     for key, value in values.items():
@@ -666,33 +691,27 @@ def provision_keyvault(credential, subscription_id, resource_group, location,
         f'/resourceGroups/{resource_group}'
         f'/providers/Microsoft.KeyVault/vaults/{vault_name}'
     )
-    write_env_values({
+    return {
         'KEYVAULT_ENABLED':          'true',
         'KEYVAULT_URL':              vault_uri,
         'KEYVAULT_PORTAL_URL':       portal_url,
         'KEYVAULT_PASSWORDLOCATION': password_location,
-    })
-    success('.env updated with Key Vault settings.')
+    }
 
 
 # ---------------------------------------------------------------------------
 # Phase 3: Provision
 # ---------------------------------------------------------------------------
 
-def provision_storage(azure, credential, subscription_id,
-                      resource_group, location, new_rg,
+def provision_storage(credential, subscription_id,
+                      resource_group, location,
                       account_name, table_name, queue_name, container, status_container,
                       config_container,
                       defaults):
 
     section('Provisioning — Storage')
 
-    if new_rg:
-        step(f"Creating resource group '{resource_group}'...")
-        azure.create_resource_group(subscription_id, resource_group, location)
-        success(f"Resource group '{resource_group}' created.")
-
-    blob_uri       = f'https://{account_name}.blob.core.windows.net'
+    blob_uri      = f'https://{account_name}.blob.core.windows.net'
     table_endpoint = f'https://{account_name}.table.core.windows.net'
     queue_url      = f'https://{account_name}.queue.core.windows.net'
 
@@ -780,9 +799,7 @@ def provision_storage(azure, credential, subscription_id,
     else:
         info('Definitions folder not found, skipping YAML upload.')
 
-    step('Writing .env...')
-
-    write_env_values({
+    return {
         'BLOB_LOGTABLE_ENABLED':   'true',
         'BLOB_LOGTABLE_URI':       table_endpoint,
         'BLOB_LOGTABLE_NAME':      table_name,
@@ -791,9 +808,7 @@ def provision_storage(azure, credential, subscription_id,
         'BLOB_QUEUE_NAME':         queue_name,
         'BLOB_CONTAINER_STATUS':   status_container,
         'BLOB_CONTAINER_CONFIG':   config_container,
-    })
-
-    success('.env updated.')
+    }
 
 
 def provision_adx(credential, subscription_id,
@@ -838,9 +853,7 @@ def provision_adx(credential, subscription_id,
     )
     success('Ingestion batching policy set.')
 
-    step('Writing .env...')
-
-    write_env_values({
+    return {
         'ADX_CLUSTER_ENABLED':                'true',
         'ADX_CLUSTER_URI':                    cluster.uri,
         'ADX_CLUSTER_INGESTION_URI':          cluster.data_ingestion_uri,
@@ -849,9 +862,7 @@ def provision_adx(credential, subscription_id,
         'ADX_INGESTION_BATCHING_TIMESPAN':    defaults.get('adx_ingestion_batching_timespan', '00:00:30'),
         'ADX_INGESTION_BATCHING_MAX_ITEMS':   defaults.get('adx_ingestion_batching_max_items', '2500'),
         'ADX_INGESTION_BATCHING_MAX_SIZE_MB': defaults.get('adx_ingestion_batching_max_size_mb', '4096'),
-    })
-
-    success('.env updated.')
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -860,11 +871,12 @@ def provision_adx(credential, subscription_id,
 
 def provision_functions(credential, subscription_id,
                         resource_group, location,
-                        data_account,
-                        cluster_name,
                         watcher_app, watcher_sa,
                         processor_app, processor_sa,
-                        keyvault_name, insights_name):
+                        insights_name):
+    '''Create the Function App infrastructure. Needs only the resource group,
+    so it runs alongside the storage and ADX provisioning. Returns the values
+    the role, settings, and deploy stages need.'''
 
     section('Provisioning — Azure Functions')
 
@@ -928,18 +940,43 @@ def provision_functions(credential, subscription_id,
     )
     success(f"'{processor_app}' ready.")
 
-    watcher_principal   = watcher_result.get('identity', {}).get('principalId')
-    processor_principal = processor_result.get('identity', {}).get('principalId')
+    return {
+        'ai_conn_str':         ai_conn_str,
+        'watcher_conn':        watcher_conn,
+        'processor_conn':      processor_conn,
+        'watcher_principal':   watcher_result.get('identity', {}).get('principalId'),
+        'processor_principal': processor_result.get('identity', {}).get('principalId'),
+    }
 
-    # RBAC: grant both apps access to the data storage account
+
+def assign_functions_roles(credential, subscription_id, resource_group,
+                           data_account, keyvault_name, apps):
+    '''Grant both function apps access to the data storage account and Key Vault.'''
+
+    section('Provisioning — Azure Functions roles')
+
+    funcs = FunctionsManager(credential, subscription_id)
+
     step("Ensuring data storage roles for watcher managed identity...")
-    funcs.assign_data_storage_roles(resource_group, data_account, watcher_principal)
+    funcs.assign_data_storage_roles(resource_group, data_account, apps['watcher_principal'])
     success('Watcher storage roles ready.')
 
     step("Ensuring data storage roles for processor managed identity...")
-    funcs.assign_data_storage_roles(resource_group, data_account, processor_principal)
+    funcs.assign_data_storage_roles(resource_group, data_account, apps['processor_principal'])
     success('Processor storage roles ready.')
 
+    if keyvault_name:
+        step(f"Ensuring Key Vault Secrets User for watcher on '{keyvault_name}'...")
+        funcs.assign_keyvault_roles(resource_group, keyvault_name, apps['watcher_principal'])
+        success('Watcher Key Vault role ready.')
+
+        step(f"Ensuring Key Vault Secrets User for processor on '{keyvault_name}'...")
+        funcs.assign_keyvault_roles(resource_group, keyvault_name, apps['processor_principal'])
+        success('Processor Key Vault role ready.')
+
+
+def assign_processor_adx_role(credential, subscription_id, resource_group, cluster_name, apps):
+    processor_principal = apps['processor_principal']
     step(f"Ensuring AllDatabasesAdmin for processor managed identity on '{cluster_name}'...")
     adx_tmp = AdxManager(credential, '', '', '')
     adx_tmp.assign_cluster_admin(
@@ -949,14 +986,19 @@ def provision_functions(credential, subscription_id,
     )
     success('Processor ADX role ready.')
 
-    if keyvault_name:
-        step(f"Ensuring Key Vault Secrets User for watcher on '{keyvault_name}'...")
-        funcs.assign_keyvault_roles(resource_group, keyvault_name, watcher_principal)
-        success('Watcher Key Vault role ready.')
 
-        step(f"Ensuring Key Vault Secrets User for processor on '{keyvault_name}'...")
-        funcs.assign_keyvault_roles(resource_group, keyvault_name, processor_principal)
-        success('Processor Key Vault role ready.')
+def configure_functions(credential, subscription_id, resource_group,
+                        data_account, watcher_app, processor_app, apps):
+    '''Apply app settings from the final .env, so this must run after every
+    task that contributes .env values has finished.'''
+
+    section('Configuring — Azure Functions')
+
+    funcs = FunctionsManager(credential, subscription_id)
+
+    # Install the Core Tools once up front; the two deploys that follow run in
+    # parallel and would otherwise race on the npm install.
+    funcs.ensure_core_tools()
 
     # App settings: read the final .env and convert to Azure app settings
     env_raw      = read_env_defaults(ENV_FILE)
@@ -965,18 +1007,18 @@ def provision_functions(credential, subscription_id,
     queue_service_uri = f'https://{data_account}.queue.core.windows.net'
 
     watcher_settings = {
-        'AzureWebJobsStorage':                    watcher_conn,
-        'CYCAS_DEPLOY_STORAGE':                   watcher_conn,
-        'APPLICATIONINSIGHTS_CONNECTION_STRING':   ai_conn_str,
+        'AzureWebJobsStorage':                    apps['watcher_conn'],
+        'CYCAS_DEPLOY_STORAGE':                   apps['watcher_conn'],
+        'APPLICATIONINSIGHTS_CONNECTION_STRING':   apps['ai_conn_str'],
         **env_settings,
     }
     # Processor also needs the managed-identity connection for its queue trigger
     processor_settings = {
-        'AzureWebJobsStorage':                    processor_conn,
-        'CYCAS_DEPLOY_STORAGE':                   processor_conn,
+        'AzureWebJobsStorage':                    apps['processor_conn'],
+        'CYCAS_DEPLOY_STORAGE':                   apps['processor_conn'],
         'CYCAS_DATASTORAGE__queueServiceUri':      queue_service_uri,
         'CYCAS_DATASTORAGE__credential':           'managedidentity',
-        'APPLICATIONINSIGHTS_CONNECTION_STRING':   ai_conn_str,
+        'APPLICATIONINSIGHTS_CONNECTION_STRING':   apps['ai_conn_str'],
         **env_settings,
     }
 
@@ -997,31 +1039,26 @@ def provision_functions(credential, subscription_id,
     time.sleep(30)
     success('Function apps restarted.')
 
-    # Deploy code (ZIP includes function files + core/ package)
-    root     = Path(__file__).parent
-    core_dir = root / 'core'
-    step(f"Deploying watcher to '{watcher_app}'...")
-    info(f'Command: func azure functionapp publish {watcher_app}')
-    funcs.deploy(watcher_app, root / 'azurefunctions' / 'watcher', core_dir)
-    success('Watcher deployed.')
 
-    step(f"Deploying processor to '{processor_app}'...")
-    info(f'Command: func azure functionapp publish {processor_app}')
-    funcs.deploy(processor_app, root / 'azurefunctions' / 'processor', core_dir)
-    success('Processor deployed.')
+def deploy_function(credential, subscription_id, app_name, function_name):
+    '''Deploy one function app (ZIP includes function files + core/ package).'''
+    step(f"Deploying {function_name} to '{app_name}'...")
+    info(f'Command: func azure functionapp publish {app_name}')
+    funcs = FunctionsManager(credential, subscription_id)
+    funcs.deploy(app_name, ROOT / 'azurefunctions' / function_name, ROOT / 'core', echo=emit)
+    success(f'{function_name.capitalize()} deployed.')
 
 # ---------------------------------------------------------------------------
 # Phase 5: Web App
 # ---------------------------------------------------------------------------
 
-def provision_webapp_all(credential, subscription_id, resource_group, location,
-                         account_name, status_container, config_container, webapp_app, allowed_ips):
+def provision_webapp(credential, subscription_id, resource_group, location,
+                     webapp_app, allowed_ips):
+    '''Create the Web App infrastructure. Returns its managed identity principal ID.'''
 
     section('Provisioning — Web Application')
 
-    webapp   = WebappManager(credential, subscription_id)
-    root     = Path(__file__).parent
-    core_dir = root / 'core'
+    webapp = WebappManager(credential, subscription_id)
 
     plan_name = f'{webapp_app}-plan'
     step(f"Ensuring App Service Plan '{plan_name}' exists...")
@@ -1037,6 +1074,21 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
     webapp.configure_ip_restrictions(resource_group, webapp_app, allowed_ips)
     success('IP restrictions applied.')
 
+    step(f"Configuring startup command on '{webapp_app}'...")
+    webapp.configure_startup(resource_group, webapp_app,
+                             'gunicorn --bind=0.0.0.0:4040 --timeout 600 webapp.app:app')
+    success('Startup command configured.')
+
+    return principal_id
+
+
+def assign_webapp_roles(credential, subscription_id, resource_group,
+                        account_name, status_container, config_container, principal_id):
+
+    section('Provisioning — Web Application roles')
+
+    webapp = WebappManager(credential, subscription_id)
+
     step('Assigning Table Data Contributor to web app managed identity...')
     webapp.assign_storage_roles(resource_group, account_name, principal_id)
     success('Table Data Contributor assigned.')
@@ -1049,10 +1101,20 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
     webapp.assign_blob_container_contributor(resource_group, account_name, config_container, principal_id)
     success(f"Blob Data Contributor on '{config_container}' container assigned.")
 
-    step(f"Configuring startup command on '{webapp_app}'...")
-    webapp.configure_startup(resource_group, webapp_app,
-                             'gunicorn --bind=0.0.0.0:4040 --timeout 600 webapp.app:app')
-    success('Startup command configured.')
+
+def assign_local_webapp_roles(credential, subscription_id, resource_group, account_name, current_user_id):
+    step('Assigning storage roles to current user for local webapp...')
+    funcs = FunctionsManager(credential, subscription_id)
+    funcs.assign_data_storage_roles(resource_group, account_name, current_user_id, principal_type='User')
+    success('Storage roles assigned to current user.')
+
+
+def deploy_webapp(credential, subscription_id, resource_group, webapp_app):
+    '''Apply app settings from the final .env and deploy the webapp code.'''
+
+    section('Deploying — Web Application')
+
+    webapp = WebappManager(credential, subscription_id)
 
     step(f"Applying app settings to '{webapp_app}'...")
     env_raw      = read_env_defaults(ENV_FILE)
@@ -1061,7 +1123,7 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
     success('App settings applied.')
 
     step(f"Deploying webapp code to '{webapp_app}'...")
-    webapp.deploy(resource_group, webapp_app, root / 'webapp', core_dir)
+    webapp.deploy(resource_group, webapp_app, ROOT / 'webapp', ROOT / 'core')
     success(f"Webapp deployed.")
 
     success(f"Web App accessible at: https://{webapp_app}.azurewebsites.net")
@@ -1405,56 +1467,96 @@ def main():
         print('Aborted.')
         sys.exit(0)
 
-    provision_storage(azure, credential, subscription_id,
-                      resource_group, location, new_rg,
-                      account_name, table_name, queue_name, container, status_container,
-                      config_container,
-                      defaults)
+    # .env must exist before the parallel phase: tasks read Velociraptor
+    # settings from it, and only the main thread writes to it.
+    ensure_env_file()
 
-    step('Writing input source settings to .env...')
-    for source_settings in input_sources.values():
-        write_env_values(source_settings)
-    success('Input source settings written.')
+    if new_rg:
+        step(f"Creating resource group '{resource_group}'...")
+        azure.create_resource_group(subscription_id, resource_group, location)
+        success(f"Resource group '{resource_group}' created.")
 
-    if run_mode == 'azurefunction' and keyvault_name:
-        adx_tmp = AdxManager(credential, '', '', '')
-        principal_id, _ = adx_tmp.get_current_user_id()
-        provision_keyvault(credential, subscription_id, resource_group, location,
-                           keyvault_name, keyvault_password_location, zip_password,
-                           principal_id)
+    current_user_id, _ = AdxManager(credential, '', '', '').get_current_user_id()
+    use_functions = run_mode == 'azurefunction'
+    use_keyvault  = use_functions and keyvault_name
+    kv_deps       = ['keyvault'] if use_keyvault else []
 
-    provision_collector(credential, subscription_id, resource_group,
-                        account_name, container,
-                        keyvault_name, keyvault_password_location, zip_password,
-                        read_env_defaults(ENV_FILE))
+    # Phase 1: everything that only needs the resource group runs in parallel.
+    # The ADX cluster (10+ minutes when new) is the critical path; the rest
+    # finishes while it is being created.
+    section('Provisioning')
+    info('Independent resources are provisioned in parallel.')
+    info('A new ADX cluster takes 10+ minutes, the other tasks finish while it is being created.')
+    info(f'Full output of every task: {LOG_FILE}')
+    print()
 
-    provision_adx(credential, subscription_id,
-                  resource_group, location,
-                  cluster_name, database_name, sku_name, sku_tier,
-                  admin_users,
-                  defaults)
-
-    if run_mode == 'azurefunction':
-        provision_functions(credential, subscription_id,
-                            resource_group, location,
-                            account_name,
-                            cluster_name,
-                            watcher_app, watcher_sa,
-                            processor_app, processor_sa,
-                            keyvault_name, insights_name)
-
+    tasks = {
+        'storage': (lambda r: provision_storage(credential, subscription_id,
+                                                resource_group, location,
+                                                account_name, table_name, queue_name, container, status_container,
+                                                config_container,
+                                                defaults), []),
+        'adx':     (lambda r: provision_adx(credential, subscription_id,
+                                            resource_group, location,
+                                            cluster_name, database_name, sku_name, sku_tier,
+                                            admin_users,
+                                            defaults), []),
+    }
+    if use_keyvault:
+        tasks['keyvault'] = (lambda r: provision_keyvault(credential, subscription_id, resource_group, location,
+                                                          keyvault_name, keyvault_password_location, zip_password,
+                                                          current_user_id), [])
+    tasks['collector'] = (lambda r: provision_collector(credential, subscription_id, resource_group,
+                                                        account_name, container,
+                                                        keyvault_name, keyvault_password_location, zip_password,
+                                                        read_env_defaults(ENV_FILE)), ['storage'] + kv_deps)
+    if use_functions:
+        tasks['functions'] = (lambda r: provision_functions(credential, subscription_id,
+                                                            resource_group, location,
+                                                            watcher_app, watcher_sa,
+                                                            processor_app, processor_sa,
+                                                            insights_name), [])
+        tasks['functions-roles'] = (lambda r: assign_functions_roles(credential, subscription_id, resource_group,
+                                                                     account_name, keyvault_name, r['functions']),
+                                    ['functions', 'storage'] + kv_deps)
+        tasks['processor-adx'] = (lambda r: assign_processor_adx_role(credential, subscription_id, resource_group,
+                                                                      cluster_name, r['functions']),
+                                  ['functions', 'adx'])
         if webapp_mode == 'local':
-            step('Assigning storage roles to current user for local webapp...')
-            from core.manager.functions import FunctionsManager
-            funcs_tmp = FunctionsManager(credential, subscription_id)
-            adx_tmp2  = AdxManager(credential, '', '', '')
-            current_user_id, _ = adx_tmp2.get_current_user_id()
-            funcs_tmp.assign_data_storage_roles(resource_group, account_name, current_user_id, principal_type='User')
-            success('Storage roles assigned to current user.')
+            tasks['webapp-roles'] = (lambda r: assign_local_webapp_roles(credential, subscription_id, resource_group,
+                                                                         account_name, current_user_id), ['storage'])
         elif webapp_mode == 'azure' and webapp_app:
-            provision_webapp_all(credential, subscription_id,
-                                 resource_group, location,
-                                 account_name, status_container, config_container, webapp_app, webapp_allowed_ips)
+            tasks['webapp'] = (lambda r: provision_webapp(credential, subscription_id, resource_group, location,
+                                                          webapp_app, webapp_allowed_ips), [])
+            tasks['webapp-roles'] = (lambda r: assign_webapp_roles(credential, subscription_id, resource_group,
+                                                                   account_name, status_container, config_container,
+                                                                   r['webapp']), ['webapp', 'storage'])
+
+    results = run_tasks(tasks, 'Provisioning', LOG_FILE, _file_log)
+
+    step('Writing .env...')
+    env_values = {}
+    for name in ('storage', 'keyvault', 'adx'):
+        env_values.update(results.get(name) or {})
+    for source_settings in input_sources.values():
+        env_values.update(source_settings)
+    write_env_values(env_values)
+    success('.env updated.')
+
+    # Phase 2: app settings are built from the final .env, so they wait for
+    # phase 1. The two function deploys and the webapp deploy run in parallel.
+    if use_functions:
+        section('Deploying')
+        apps  = results['functions']
+        tasks = {
+            'functions': (lambda r: configure_functions(credential, subscription_id, resource_group,
+                                                        account_name, watcher_app, processor_app, apps), []),
+            'watcher':   (lambda r: deploy_function(credential, subscription_id, watcher_app, 'watcher'), ['functions']),
+            'processor': (lambda r: deploy_function(credential, subscription_id, processor_app, 'processor'), ['functions']),
+        }
+        if webapp_mode == 'azure' and webapp_app:
+            tasks['webapp'] = (lambda r: deploy_webapp(credential, subscription_id, resource_group, webapp_app), [])
+        run_tasks(tasks, 'Deploying', LOG_FILE, _file_log)
 
     state = load_state()
     if state:
