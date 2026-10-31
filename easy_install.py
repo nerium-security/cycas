@@ -574,7 +574,7 @@ def expected_clients_setting():
     return int(value)
 
 
-def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, step_label='9/9'):
+def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, suffix, step_label='9/9'):
     '''
     Ask whether to deploy a Velociraptor server and how.
 
@@ -582,6 +582,10 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
     stored in the install state. The server settings that only affect the
     software (expected clients, package prefix, MSI templates, ...) are read
     from .env when provisioning, so a re-run applies changes to them.
+
+    The Azure resources are named like the other resources:
+    <resource group>-velo-<suffix>-vm, -ip, ... Only the DNS name is random,
+    because it is the one name that is public.
     '''
     section(f'Step {step_label} — Velociraptor Server (optional)')
 
@@ -633,7 +637,8 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
 
     return {
         'name':             name,
-        'resource_prefix':  f'{resource_group[:40]}-velo',
+        # VM names allow fewer characters than resource group names (no '.', '(', ')' or '_').
+        'resource_prefix':  re.sub(r'[^A-Za-z0-9-]', '-', resource_group[:40]).strip('-') + f'-velo-{suffix}',
         'fqdn':             f'{name}.{location}.cloudapp.azure.com',
         'vm_size':          vm_size,
         'image':            image,
@@ -697,7 +702,8 @@ def auto_generate_names(resource_group, defaults):
     keyvault_name = f'{rg_slug[:14]}-kv-{suffix}'
 
     return (account_name, table_name, queue_name, container, status_container,
-            cluster_name, database_name, watcher_app, watcher_sa, processor_app, processor_sa, insights_name, keyvault_name)
+            cluster_name, database_name, watcher_app, watcher_sa, processor_app, processor_sa, insights_name, keyvault_name,
+            suffix)
 
 
 def collect_storage_config(defaults, resource_group, step_label='4/7'):
@@ -1706,7 +1712,7 @@ def main():
             (account_name, table_name, queue_name, container, status_container,
              cluster_name, database_name,
              watcher_app, watcher_sa, processor_app, processor_sa, insights_name,
-             keyvault_name) = auto_generate_names(resource_group, defaults)
+             keyvault_name, name_suffix) = auto_generate_names(resource_group, defaults)
             config_container = defaults.get('blob_container_config', 'config')
             sku_name, sku_tier, _ = SKUS['1']
             admin_users = []
@@ -1739,8 +1745,12 @@ def main():
                 keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
                 webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
 
+            # Easy mode shares the suffix of the other resource names; advanced
+            # mode names every resource separately, so the server gets its own.
             velo_server = collect_velociraptor_server_config(VmManager(credential, subscription_id),
-                                                             resource_group, location, setup_mode, f'9/{total}')
+                                                             resource_group, location, setup_mode,
+                                                             name_suffix if setup_mode == 'easy' else rand6(),
+                                                             f'9/{total}')
             if velo_server and not keyvault_name:
                 # The server's admin password and SSH key are kept in Key Vault.
                 rg_slug       = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
