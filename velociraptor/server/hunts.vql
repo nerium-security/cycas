@@ -6,8 +6,28 @@
 --
 -- To use your own hunts instead, set VELOCIRAPTOR_SERVER_HUNTS_URL in .env
 -- to the URL of a file like this one (e.g. a SAS URL to a central blob).
+--
+-- bootstrap.py sets TriageSasURL (write-only SAS URL to the Cycas input
+-- container) and TriageZipPassword (the ZIP password Cycas uses, from Key
+-- Vault), so a hunt can upload collections straight to Cycas.
+--
+-- Hunts are listed newest first in the GUI, so they are created in reverse.
 
 LET Expires <= now() + 604800  -- 7 days
+
+-- Mass triage collection: each endpoint collects _KapeTriage, zips it and
+-- uploads it straight to the Cycas input container, bypassing the server
+-- (see the "Collecting triage packages at scale" guide). Review the targets
+-- before starting it.
+SELECT hunt(
+    description="HUN006 - Triage collection to Cycas (direct upload)",
+    artifacts="Custom.Windows.Triage.Targets.AzureUpload",
+    spec=dict(`Custom.Windows.Triage.Targets.AzureUpload`=dict(
+        SasURL=TriageSasURL,
+        ZipPassword=TriageZipPassword,
+        HighLevelTargets='["_KapeTriage"]')),
+    pause=TRUE, expires=Expires)
+FROM scope()
 
 SELECT hunt(
     description="HUN005 - Collect targeted Windows Security event log",

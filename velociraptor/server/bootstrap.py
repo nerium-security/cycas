@@ -10,9 +10,10 @@ Parameters are JSON, passed base64-encoded in CYCAS_BOOTSTRAP_PARAMS or read
 from a file with --params. Required: dns, admin_user, admin_password,
 gui_allowed_cidrs, velociraptor_url. See DEFAULTS for the optional ones.
 
-The files it uses (hunts.vql and Server.Utils.BackupAzure.yaml)
+The files it uses (hunts.vql, Server.Utils.BackupAzure.yaml and
+Custom.Windows.Triage.Targets.AzureUpload.yaml)
 are read from files_dir, by default the directory this script is in. On the VM the extension downloads them all
-there; in the repo the artifact lives in velociraptor/artifacts/.
+there; in the repo the artifacts live in velociraptor/definitions/.
 
 Every step can be re-run: the server keys, the API client and the hunts are
 created once and kept, the rest is rebuilt. To run part of it by hand:
@@ -74,6 +75,7 @@ DEFAULTS = {
 REQUIRED = ('dns', 'admin_user', 'admin_password', 'gui_allowed_cidrs', 'velociraptor_url')
 
 BACKUP_ARTIFACT = 'Server.Utils.BackupAzure'
+TRIAGE_UPLOAD_ARTIFACT = 'Custom.Windows.Triage.Targets.AzureUpload'
 
 
 class StepFailed(Exception):
@@ -474,10 +476,14 @@ class Bootstrap:
         self.result['admin_user'] = self.p['admin_user']
 
     def step_artifacts(self):
-        backup = self.artifacts / f'{BACKUP_ARTIFACT}.yaml'
-        shutil.copy(self.files / f'{BACKUP_ARTIFACT}.yaml', backup)
-        backup.chmod(0o644)
-        for path in (self.triage_targets(), backup):
+        # Windows.Triage.Targets first: the triage upload artifact builds on it.
+        paths = [self.triage_targets()]
+        for name in (BACKUP_ARTIFACT, TRIAGE_UPLOAD_ARTIFACT):
+            path = self.artifacts / f'{name}.yaml'
+            shutil.copy(self.files / f'{name}.yaml', path)
+            path.chmod(0o644)
+            paths.append(path)
+        for path in paths:
             rows = self.vql('SELECT artifact_set(definition=read_file(filename=Path, length=10000000)).name AS Name '
                             'FROM scope()', env={'Path': path})
             if not rows or not rows[0].get('Name'):
@@ -511,7 +517,11 @@ class Bootstrap:
         if marker.exists() and marker.read_text() == digest:
             self.log('Hunts already created from this hunts file.')
             return
-        rows = self.vql(hunts)
+        # The hunts file can use these to send collections straight to the
+        # Cycas input container, like Server.Utils.BackupAzure does.
+        rows = self.vql(hunts, env={'TriageSasURL':      self.p['backup_sas_url'],
+                                    'TriageZipPassword': self.p['backup_zip_password']},
+                        secret=('TriageSasURL', 'TriageZipPassword'))
         marker.write_text(digest)
         self.log(f'{len(rows)} hunt(s) created.')
 
@@ -529,6 +539,26 @@ class Bootstrap:
             uploaded.append(name)
         self.result['uploaded'] = uploaded
 
+    def step_config_backup(self):
+        '''
+        Stage the server and client config for easy_install.py, which moves
+        them to Key Vault and deletes the blobs. The VM has no identity to
+        write to Key Vault itself, and the extension output is too short to
+        carry them back.
+        '''
+        sas = self.p['upload_sas_url']
+        if not sas:
+            self.log('No upload_sas_url, configs are not backed up.')
+            return
+        base, _, token = sas.partition('?')
+        staged = []
+        for path in (self.config, self.client_config):
+            name = f'{self.p["upload_prefix"]}/config-backup/{path.name}'
+            self.log(f'Staging {name}')
+            self.upload(path, f'{base}/{urllib.parse.quote(name)}?{token}')
+            staged.append(name)
+        self.result['config_backup'] = staged
+
     STEPS = [
         ('download',          step_download),
         ('server-config',     step_server_config),
@@ -544,6 +574,7 @@ class Bootstrap:
         ('server-monitoring', step_server_monitoring),
         ('hunts',             step_hunts),
         ('upload',            step_upload),
+        ('config-backup',     step_config_backup),
     ]
 
 

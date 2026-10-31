@@ -78,13 +78,17 @@ KEYVAULT_SAS_LOCATION      = 'collector-sas-url'
 # Velociraptor server VM
 VELO_SERVER_DIR          = ROOT / 'velociraptor' / 'server'
 VELO_SERVER_FILES        = [VELO_SERVER_DIR / name for name in ('bootstrap.py', 'hunts.vql')]
-VELO_SERVER_FILES       += [ROOT / 'velociraptor' / 'artifacts' / 'Server.Utils.BackupAzure.yaml']
+VELO_SERVER_FILES       += [ROOT / 'velociraptor' / 'definitions' / 'Server.Utils.BackupAzure.yaml',
+                            ROOT / 'velociraptor' / 'definitions' / 'Custom.Windows.Triage.Targets.AzureUpload.yaml']
 VELO_BLOB_PREFIX         = 'velociraptor-server'                              # in BINARIES_CONTAINER
 VELO_VM_ADMIN            = 'cycas'
 VELO_REMOTE_LOG          = '/opt/cycas-velociraptor/bootstrap.log'
 KEYVAULT_VELO_PASSWORD   = 'velociraptor-server-admin-password'
 KEYVAULT_VELO_SSH_KEY    = 'velociraptor-server-ssh-private-key'
 KEYVAULT_VELO_SSH_PUBKEY = 'velociraptor-server-ssh-public-key'
+KEYVAULT_VELO_CONFIGS    = {'server.config.yaml': 'velociraptor-server-config-yaml',
+                            'client.config.yaml': 'velociraptor-client-config-yaml'}
+KEYVAULT_MAX_SECRET_SIZE = 25 * 1024
 VELO_SETTINGS_DEFAULTS   = {
     'velociraptor_server_vm_size':           'Standard_B2ms',
     'velociraptor_server_image':             'Canonical:ubuntu-26_04-lts:server:latest',
@@ -1451,6 +1455,21 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
     success(f'Velociraptor {result.get("version", "")} server ready: {gui_url}')
     for name in result.get('uploaded', []):
         info(f'{BINARIES_CONTAINER}/{name}')
+
+    step('Backing up server and client config to Key Vault...')
+    for name in result.get('config_backup', []):
+        secret_name = KEYVAULT_VELO_CONFIGS[name.rsplit('/', 1)[1]]
+        text        = blob.read_text(BINARIES_CONTAINER, name)
+        if text is None:
+            raise RuntimeError(f"Staged config '{BINARIES_CONTAINER}/{name}' not found.")
+        if len(text.encode()) > KEYVAULT_MAX_SECRET_SIZE:
+            # Left in the blob, so it is not lost.
+            info(f"'{name}' exceeds the Key Vault secret size limit, kept in '{BINARIES_CONTAINER}/{name}'.")
+            continue
+        kv.set_secret(secret_name, text)
+        blob.delete(BINARIES_CONTAINER, name)
+        info(f"'{name.rsplit('/', 1)[1]}' in Key Vault secret '{secret_name}'.")
+    success('Config backup done.')
 
     return {
         'VELOCIRAPTOR_SERVER_URL': gui_url,
