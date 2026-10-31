@@ -13,8 +13,10 @@ Most functions log errors rather than raising exceptions, and several
 functions create directories or write output files as side effects.
 '''
 
+import gzip
 import logging as log
 import os
+import shutil
 import requests
 import subprocess
 import stat
@@ -138,8 +140,9 @@ def download_velociraptor(binary, url):
     Download the Velociraptor binary if it does not already exist or is out of date.
 
     Fetches the binary from the provided URL and writes it to `binary`.
-    If the destination file already exists and matches the version encoded in
-    `url`, no download is performed.
+    Release binaries ending in .gz (Velociraptor 0.77 and later) are
+    decompressed. If the destination file already exists and matches the
+    version encoded in `url`, no download is performed.
 
     Args:
         binary (str): Destination path for the Velociraptor binary.
@@ -166,6 +169,11 @@ def download_velociraptor(binary, url):
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
+
+        if url.endswith('.gz'):
+            with gzip.open(tmp, 'rb') as src, open(tmp + '.unpacked', 'wb') as dst:
+                shutil.copyfileobj(src, dst)
+            os.replace(tmp + '.unpacked', tmp)
 
         set_executepermissions(tmp)
         os.replace(tmp, binary)

@@ -4,27 +4,16 @@
 -- enrolled. bootstrap.py runs this file again only when its content
 -- changes, so editing it on a re-run adds new hunts next to the old ones.
 --
--- Replace this file by placing a hunts.vql in velociraptor/server/custom/.
+-- To use your own hunts instead, set VELOCIRAPTOR_SERVER_HUNTS_URL in .env
+-- to the URL of a file like this one (e.g. a SAS URL to a central blob).
 
-LET Expires <= now() + 18000  -- 5 hours
-
-SELECT hunt(
-    description="HUN001 - DNS cache",
-    artifacts="Windows.System.DNSCache",
-    pause=TRUE, expires=Expires)
-FROM scope()
+LET Expires <= now() + 604800  -- 7 days
 
 SELECT hunt(
-    description="HUN002 - Windows Services",
-    artifacts="Windows.System.Services",
-    spec=dict(`Windows.System.Services`=dict(Calculate_hashes='Y', CertificateInfo='Y')),
-    pause=TRUE, expires=Expires)
-FROM scope()
-
-SELECT hunt(
-    description="HUN003 - NetstatEnriched",
-    artifacts="Windows.Network.NetstatEnriched",
-    spec=dict(`Windows.Network.NetstatEnriched`=dict(ProcessNameRegex=".", DISABLE_DANGEROUS_API_CALLS='Y')),
+    description="HUN005 - Collect targeted Windows Security event log",
+    artifacts="Windows.EventLogs.Evtx",
+    spec=dict(`Windows.EventLogs.Evtx`=dict(
+        EvtxGlob="%SystemRoot%\\System32\\winevt\\Logs\\Security.evtx")),
     pause=TRUE, expires=Expires)
 FROM scope()
 
@@ -36,10 +25,21 @@ SELECT hunt(
 FROM scope()
 
 SELECT hunt(
-    description="HUN005 - Collect targeted Windows Security Log events",
-    artifacts="Windows.EventLogs.Evtx",
-    spec=dict(`Windows.EventLogs.Evtx`=dict(
-        EvtxGlob="%SystemRoot%\\System32\\winevt\\Logs\\Security.evtx",
-        IDRegex="^(4688|4624|4625|4648)$")),
+    description="HUN003 - NetstatEnriched",
+    artifacts="Windows.Network.NetstatEnriched",
+    spec=dict(`Windows.Network.NetstatEnriched`=dict(ProcessNameRegex=".", DISABLE_DANGEROUS_API_CALLS='Y')),
+    pause=TRUE, expires=Expires)
+FROM scope()
+
+SELECT hunt(
+    description="HUN002 - Windows Services",
+    artifacts="Windows.System.Services",
+    spec=dict(`Windows.System.Services`=dict(Calculate_hashes='Y', CertificateInfo='Y')),
+    pause=TRUE, expires=Expires)
+FROM scope()
+
+SELECT hunt(
+    description="HUN001 - DNS cache",
+    artifacts="Windows.System.DNSCache",
     pause=TRUE, expires=Expires)
 FROM scope()

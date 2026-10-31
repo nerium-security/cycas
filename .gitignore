@@ -445,8 +445,6 @@ README-GITUSAGE.md
 build/*
 velociraptor/velociraptor
 velociraptor/definitions/*.yaml
+velociraptor/definitions/.velociraptor-version
 !velociraptor/definitions/Custom.*.yaml
 master_summary.csv
-#velociraptor server
-!velociraptor/server/patch_config.json
-velociraptor/server/custom/

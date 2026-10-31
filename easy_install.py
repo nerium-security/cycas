@@ -36,7 +36,7 @@ from core.manager.functions import FunctionsManager
 from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 from core.manager.webapp import WebappManager
 from core.manager.vm import VmManager, ScriptFailed, parse_image_urn
-from core.utils.postprocess import download_velociraptor
+from core.utils.postprocess import download_velociraptor, get_velociraptor_version
 from core.utils.taskrunner import current_task, emit, run_tasks
 
 ROOT        = Path(__file__).parent
@@ -77,8 +77,8 @@ KEYVAULT_SAS_LOCATION      = 'collector-sas-url'
 
 # Velociraptor server VM
 VELO_SERVER_DIR          = ROOT / 'velociraptor' / 'server'
-VELO_SERVER_FILES        = ('bootstrap.py', 'patch_config.json', 'spec.yaml', 'hunts.vql', 'Server.Utils.BackupAzure.yaml')
-VELO_SERVER_OVERRIDABLE  = ('patch_config.json', 'spec.yaml', 'hunts.vql')   # from velociraptor/server/custom/
+VELO_SERVER_FILES        = [VELO_SERVER_DIR / name for name in ('bootstrap.py', 'hunts.vql')]
+VELO_SERVER_FILES       += [ROOT / 'velociraptor' / 'artifacts' / 'Server.Utils.BackupAzure.yaml']
 VELO_BLOB_PREFIX         = 'velociraptor-server'                              # in BINARIES_CONTAINER
 VELO_VM_ADMIN            = 'cycas'
 VELO_REMOTE_LOG          = '/opt/cycas-velociraptor/bootstrap.log'
@@ -574,7 +574,7 @@ def expected_clients_setting():
     return int(value)
 
 
-def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, suffix, step_label='9/9'):
+def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, step_label='9/9'):
     '''
     Ask whether to deploy a Velociraptor server and how.
 
@@ -583,19 +583,30 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
     software (expected clients, package prefix, MSI templates, ...) are read
     from .env when provisioning, so a re-run applies changes to them.
 
-    The Azure resources are named like the other resources:
-    <resource group>-velo-<suffix>-vm, -ip, ... Only the DNS name is random,
-    because it is the one name that is public.
+    The Azure resources are named <resource group>-velo-vm, -ip, ... without
+    a suffix: their names only need to be unique within the resource group.
+    The DNS name is random, because it is public and globally unique.
     '''
     section(f'Step {step_label} — Velociraptor Server (optional)')
 
     info('Deploys a Velociraptor server on an Ubuntu VM with a static IP. It builds client')
-    info('installers and an offline collector, creates default hunts (paused), and sends')
-    info('finished collections to the input container, so they are ingested into ADX.')
-    info(f'Settings: VELOCIRAPTOR_SERVER_* in .env. Customised files: {VELO_SERVER_DIR / "custom"}')
+    info('installers, creates default hunts (paused), and sends finished collections to')
+    info('the input container, so they are ingested into ADX.')
+    info(f'Settings: VELOCIRAPTOR_SERVER_* in .env. Default hunts: {VELO_SERVER_DIR / "hunts.vql"}')
     print()
-    answer = ask('  Deploy a Velociraptor server? [y/N]: ').strip().lower()
-    if answer not in ('y', 'yes'):
+    answer = ask('  Deploy a Velociraptor server? [Y/n]: ').strip().lower()
+    if answer in ('n', 'no'):
+        return None
+
+    # VM names allow fewer characters than resource group names (no '.', '(', ')' or '_').
+    resource_prefix = re.sub(r'[^A-Za-z0-9-]', '-', resource_group[:40]).strip('-') + '-velo'
+    if vms.public_ip_exists(resource_group, f'{resource_prefix}-ip'):
+        # Reusing it would give the existing server a new DNS name and cut off
+        # every client installed against the old one.
+        print()
+        info(f"'{resource_prefix}-ip' already exists: this resource group already has a Velociraptor server.")
+        info('Resume the saved session of that install, or use another resource group.')
+        info('Continuing without a Velociraptor server.')
         return None
 
     settings = velociraptor_server_settings()
@@ -637,8 +648,7 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
 
     return {
         'name':             name,
-        # VM names allow fewer characters than resource group names (no '.', '(', ')' or '_').
-        'resource_prefix':  re.sub(r'[^A-Za-z0-9-]', '-', resource_group[:40]).strip('-') + f'-velo-{suffix}',
+        'resource_prefix':  resource_prefix,
         'fqdn':             f'{name}.{location}.cloudapp.azure.com',
         'vm_size':          vm_size,
         'image':            image,
@@ -685,35 +695,36 @@ def auto_generate_names(resource_group, defaults):
     suffix        = rand6()
     rg_slug       = re.sub(r'[^a-z0-9]', '', resource_group.lower())
 
-    account_name     = (rg_slug + 'data')[:18] + suffix
+    # Storage account names max out at 24 characters: shorten the resource
+    # group part, so the role and the suffix always stay in the name.
+    account_name     = rg_slug[:13] + 'input' + suffix
     table_name       = defaults.get('blob_logtable_name',    'statusupdate')
     queue_name       = defaults.get('blob_queue_name',       'triagepackages')
-    container        = defaults.get('blob_container_input',  'uploads')
+    container        = defaults.get('blob_container_input',  'triage-input')
     status_container = defaults.get('blob_container_status', 'status')
 
     cluster_name  = (rg_slug[:13] + 'adx' + suffix)
     database_name = defaults.get('adx_database_name', 'dfir')
 
     watcher_app   = f'{resource_group[:43]}-watcher-{suffix}'
-    watcher_sa    = (rg_slug + 'watcher')[:18] + suffix
+    watcher_sa    = rg_slug[:11] + 'watcher' + suffix
     processor_app = f'{resource_group[:41]}-processor-{suffix}'
-    processor_sa  = (rg_slug + 'processor')[:18] + suffix
+    processor_sa  = rg_slug[:9] + 'processor' + suffix
     insights_name = f'{rg_slug[:50]}-insights'
     keyvault_name = f'{rg_slug[:14]}-kv-{suffix}'
 
     return (account_name, table_name, queue_name, container, status_container,
-            cluster_name, database_name, watcher_app, watcher_sa, processor_app, processor_sa, insights_name, keyvault_name,
-            suffix)
+            cluster_name, database_name, watcher_app, watcher_sa, processor_app, processor_sa, insights_name, keyvault_name)
 
 
 def collect_storage_config(defaults, resource_group, step_label='4/7'):
     section(f'Step {step_label} — Storage Account')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
-    account_name     = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'data')[:18] + rand6())
+    account_name     = prompt('Input storage account name (3-24 lowercase alphanumeric)', default=rg_slug[:13] + 'input' + rand6())
     table_name       = prompt('Status table name',              default=defaults.get('blob_logtable_name',    'statusupdate'))
     queue_name       = prompt('Queue name',                     default=defaults.get('blob_queue_name',       'triagepackages'))
-    container        = prompt('Blob container for uploads',     default=defaults.get('blob_container_input',  'uploads'))
+    container        = prompt('Blob container for triage ZIPs to process', default=defaults.get('blob_container_input', 'triage-input'))
     status_container = prompt('Blob container for status JSON', default=defaults.get('blob_container_status', 'status'))
     config_container = prompt('Blob container for config',      default=defaults.get('blob_container_config', 'config'))
 
@@ -796,10 +807,8 @@ def confirm_plan(run_mode,
         info(f'GUI and SSH  : {", ".join(velo_server["allowed_ips"])}')
         for arch, key in (('x64', 'velociraptor_server_msi_amd64_url'), ('x86', 'velociraptor_server_msi_x86_url')):
             info(f'MSI {arch}      : {"custom (" + key.upper() + ")" if settings.get(key) else "default (Velociraptor release)"}')
-        labels = {'patch_config.json': 'Config patch', 'spec.yaml': 'Collector', 'hunts.vql': 'Hunts'}
-        for name, _, source in resolve_server_files():
-            if name in labels:
-                info(f'{labels[name]:<13}: {source} ({name}){", created paused" if name == "hunts.vql" else ""}')
+        hunts = 'custom (VELOCIRAPTOR_SERVER_HUNTS_URL)' if settings.get('velociraptor_server_hunts_url') else 'default (hunts.vql)'
+        info(f'Hunts        : {hunts}, created paused')
 
     print()
     confirm = ask('Proceed with provisioning? [Y/n]: ').strip().lower()
@@ -924,10 +933,19 @@ def provision_storage(credential, subscription_id,
                 for entry in entries
             ]
             defs_dest.mkdir(parents=True, exist_ok=True)
+            # Exported definitions are reused, but must match the binary that
+            # processes the collections: after a Velociraptor upgrade, export the
+            # built-in ones again. The Custom.* definitions are maintained in the
+            # repo and never overwritten.
+            version_file = defs_dest / '.velociraptor-version'
+            version      = get_velociraptor_version(binary) or ''
+            reexport     = version_file.is_file() and version_file.read_text().strip() != version
+            if reexport:
+                info(f'Velociraptor changed from {version_file.read_text().strip()} to {version}, exporting definitions again.')
             exported = 0
             for name in all_names:
                 dest = defs_dest / f'{name}.yaml'
-                if dest.exists():
+                if name.startswith('Custom.') or (dest.exists() and not reexport):
                     continue
                 result = subprocess.run(
                     [binary, 'artifacts', 'show', name],
@@ -938,6 +956,7 @@ def provision_storage(credential, subscription_id,
                     exported += 1
                 else:
                     info(f'Could not export {name}: {result.stderr.strip()}')
+            version_file.write_text(version + '\n')
             success(f'{exported} artifact definition(s) exported to {defs_dest}.')
     else:
         info('velociraptor_artifacts.json not found, skipping definition export.')
@@ -1296,19 +1315,6 @@ def generate_ssh_key_pair():
     return private, f'{public} cycas-velociraptor'
 
 
-def resolve_server_files():
-    '''The files bootstrap.py needs, as (name, path, 'custom' | 'default'),
-    taking velociraptor/server/custom/ overrides into account.'''
-    files = []
-    for name in VELO_SERVER_FILES:
-        custom = VELO_SERVER_DIR / 'custom' / name
-        if name in VELO_SERVER_OVERRIDABLE and custom.is_file():
-            files.append((name, custom, 'custom'))
-        else:
-            files.append((name, VELO_SERVER_DIR / name, 'default'))
-    return files
-
-
 def provision_velociraptor_vm(credential, subscription_id, resource_group, location, keyvault_name, velo):
     '''
     Create the Velociraptor server VM and its network. The SSH key pair is
@@ -1388,8 +1394,9 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
 
     step(f"Uploading server files to '{BINARIES_CONTAINER}/{VELO_BLOB_PREFIX}/bootstrap/'...")
     file_uris = []
-    for name, path, source in resolve_server_files():
-        blob_name = f'{VELO_BLOB_PREFIX}/bootstrap/{name}'
+    # The extension downloads every file into one directory, where bootstrap.py reads them by name.
+    for path in VELO_SERVER_FILES:
+        blob_name = f'{VELO_BLOB_PREFIX}/bootstrap/{path.name}'
         # Not BlobManager.upload_file: it only logs failures, and a missing
         # file would surface much later as a download error on the VM.
         with open(path, 'rb') as f:
@@ -1397,8 +1404,6 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         url, _ = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
                                             BINARIES_CONTAINER, blob_name, expiry_days=1)
         file_uris.append(url)
-        if source == 'custom':
-            info(f'{name}: custom override')
     success(f'{len(file_uris)} file(s) uploaded.')
 
     step('Generating SAS URLs for package upload and collection backup...')
@@ -1420,6 +1425,7 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         'writeback_windows':   settings.get('velociraptor_server_writeback_windows', ''),
         'msi_amd64_url':       settings.get('velociraptor_server_msi_amd64_url', ''),
         'msi_x86_url':         settings.get('velociraptor_server_msi_x86_url', ''),
+        'hunts_url':           settings.get('velociraptor_server_hunts_url', ''),
         'upload_sas_url':      upload_sas,
         'upload_prefix':       VELO_BLOB_PREFIX,
         'backup_sas_url':      backup_sas,
@@ -1430,7 +1436,7 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
     encoded = base64.b64encode(json.dumps(params).encode()).decode()
     command = f'CYCAS_BOOTSTRAP_PARAMS={encoded} python3 bootstrap.py'
 
-    step('Running bootstrap.py on the VM (install, client packages, collector, hunts)...')
+    step('Running bootstrap.py on the VM (install, client packages, hunts)...')
     vms = VmManager(credential, subscription_id)
     try:
         output = vms.run_script(resource_group, f'{velo_resource_prefix(velo)}-vm', location, file_uris, command)
@@ -1712,7 +1718,7 @@ def main():
             (account_name, table_name, queue_name, container, status_container,
              cluster_name, database_name,
              watcher_app, watcher_sa, processor_app, processor_sa, insights_name,
-             keyvault_name, name_suffix) = auto_generate_names(resource_group, defaults)
+             keyvault_name) = auto_generate_names(resource_group, defaults)
             config_container = defaults.get('blob_container_config', 'config')
             sku_name, sku_tier, _ = SKUS['1']
             admin_users = []
@@ -1745,12 +1751,8 @@ def main():
                 keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
                 webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
 
-            # Easy mode shares the suffix of the other resource names; advanced
-            # mode names every resource separately, so the server gets its own.
             velo_server = collect_velociraptor_server_config(VmManager(credential, subscription_id),
-                                                             resource_group, location, setup_mode,
-                                                             name_suffix if setup_mode == 'easy' else rand6(),
-                                                             f'9/{total}')
+                                                             resource_group, location, setup_mode, f'9/{total}')
             if velo_server and not keyvault_name:
                 # The server's admin password and SSH key are kept in Key Vault.
                 rg_slug       = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
@@ -1958,7 +1960,7 @@ def main():
         info(f'  GUI      — https://{velo_server["fqdn"]}/  (user: {velo_server["admin_user"]})')
         info(f"  Password — Key Vault '{keyvault_name}', secret '{KEYVAULT_VELO_PASSWORD}'")
         info(f'  Access   — GUI and SSH restricted to: {", ".join(velo_server["allowed_ips"])}')
-        info(f'  Packages — {packages}ClientInstallationPackages/ and OfflineCollectorPackages/')
+        info(f'  Packages — {packages}ClientInstallationPackages/')
         info('  SSH      — az keyvault secret show --vault-name '
              f'{keyvault_name} --name {KEYVAULT_VELO_SSH_KEY} --query value -o tsv > velo_key && chmod 600 velo_key')
         info(f'             ssh -i velo_key {VELO_VM_ADMIN}@{velo_server["fqdn"]}')

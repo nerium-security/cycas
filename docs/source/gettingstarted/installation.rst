@@ -153,7 +153,7 @@ Cycas uses a single Storage Account for three purposes: tracking processing stat
 
 #. Create the following blob containers inside the storage account:
 
-   - ``uploads`` - where triage ZIP files are placed for processing
+   - ``triage-input`` - where triage ZIP files are placed for processing
    - ``status`` - where Cycas writes per-run status JSON blobs
    - ``config`` - where artifact definitions and configuration are stored
 
@@ -253,7 +253,7 @@ Open ``.env`` in a text editor and fill in the values for your environment.
 .. code-block:: ini
 
    BLOB_STORAGEACCOUNT_SAS_ENABLED=true
-   BLOB_STORAGEACCOUNT_SAS=https://<resourcename>.blob.core.windows.net/uploads?sp=racwl&st=...&sig=<OBFUSCATED>
+   BLOB_STORAGEACCOUNT_SAS=https://<resourcename>.blob.core.windows.net/triage-input?sp=racwl&st=...&sig=<OBFUSCATED>
 
 **Status tracking** (mandatory):
 

@@ -135,6 +135,11 @@ class VmManager:
         )
         return bool(result and result.get('available'))
 
+    def public_ip_exists(self, resource_group, name):
+        '''Whether the public IP exists (False also when the resource group does not).'''
+        path = f'{self._rg_path(resource_group)}/providers/Microsoft.Network/publicIPAddresses/{name}'
+        return self._arm_get(path, _NETWORK_API) is not None
+
     def provision_public_ip(self, resource_group, name, location, dns_label):
         '''
         Create a static Standard SKU public IP with a DNS name.

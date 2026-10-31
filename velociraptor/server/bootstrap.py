@@ -10,9 +10,9 @@ Parameters are JSON, passed base64-encoded in CYCAS_BOOTSTRAP_PARAMS or read
 from a file with --params. Required: dns, admin_user, admin_password,
 gui_allowed_cidrs, velociraptor_url. See DEFAULTS for the optional ones.
 
-The files it uses (patch_config.json, spec.yaml, hunts.vql and
-Server.Utils.BackupAzure.yaml) are read from files_dir, by default the
-directory this script is in.
+The files it uses (hunts.vql and Server.Utils.BackupAzure.yaml)
+are read from files_dir, by default the directory this script is in. On the VM the extension downloads them all
+there; in the repo the artifact lives in velociraptor/artifacts/.
 
 Every step can be re-run: the server keys, the API client and the hunts are
 created once and kept, the rest is rebuilt. To run part of it by hand:
@@ -27,6 +27,7 @@ output of every command, is in <work_dir>/bootstrap.log.
 import argparse
 import base64
 import grp
+import gzip
 import hashlib
 import json
 import os
@@ -53,6 +54,7 @@ DEFAULTS = {
     'api_name':            'cycas_api',
     'msi_amd64_url':       '',   # empty: the MSI from the Velociraptor release
     'msi_x86_url':         '',
+    'hunts_url':           '',   # empty: hunts.vql from files_dir
     'writeback_windows':   '',   # empty: keep the Velociraptor default
     'triage_targets_url':  'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip',
     'upload_sas_url':      '',   # container SAS with write access; empty: no upload
@@ -63,6 +65,7 @@ DEFAULTS = {
     'files_dir':           str(Path(__file__).resolve().parent),
     'service_user':        'velociraptor',
     'installed_config':    '/etc/velociraptor/server.config.yaml',
+    'datastore':           '/opt/velociraptor',
     'api_config':          '/opt/velociraptor/api.config.yaml',
     'api_address':         '127.0.0.1:8001',
     'tls_check_address':   '127.0.0.1:443',   # connected to with the DNS name as SNI
@@ -101,10 +104,12 @@ class Bootstrap:
         self.work  = Path(params['work_dir'])
         self.files = Path(params['files_dir'])
 
-        match = re.search(r'velociraptor-v([\d.]+)-linux-amd64$', params['velociraptor_url'])
+        # Releases from 0.77 ship the Linux binaries gzipped.
+        match = re.search(r'velociraptor-v([\d.]+)-linux-amd64(\.gz)?$', params['velociraptor_url'])
         if not match:
-            raise StepFailed('velociraptor_url must point to a velociraptor-v<version>-linux-amd64 release binary.')
+            raise StepFailed('velociraptor_url must point to a velociraptor-v<version>-linux-amd64[.gz] release binary.')
         self.version = match.group(1)
+        self.musl_url = params['velociraptor_url'].replace('-linux-amd64', '-linux-amd64-musl')
 
         self.bin           = self.work / 'bin' / f'velociraptor-v{self.version}'
         self.bin_musl      = self.work / 'bin' / f'velociraptor-v{self.version}-musl'
@@ -112,7 +117,6 @@ class Bootstrap:
         self.client_config = self.work / 'config' / 'client.config.yaml'
         self.artifacts     = self.work / 'artifacts'
         self.packages      = self.work / 'packages'
-        self.collectors    = self.work / 'collectors'
         self.state         = self.work / 'state'
         self.log_file      = self.work / 'bootstrap.log'
         self.result        = {'gui_url': f'https://{params["dns"]}/', 'version': self.version}
@@ -121,7 +125,7 @@ class Bootstrap:
         # the binaries and the artifact files in here.
         self.work.mkdir(parents=True, exist_ok=True)
         self.work.chmod(0o755)
-        for d in (self.bin.parent, self.config.parent, self.artifacts, self.packages, self.collectors, self.state):
+        for d in (self.bin.parent, self.config.parent, self.artifacts, self.packages, self.state):
             d.mkdir(exist_ok=True)
         self.config.parent.chmod(0o700)
 
@@ -176,13 +180,27 @@ class Bootstrap:
             try:
                 with urllib.request.urlopen(url, timeout=120) as resp, open(tmp, 'wb') as f:
                     shutil.copyfileobj(resp, f)
-                tmp.replace(dest)
+                if urllib.parse.urlsplit(url).path.endswith('.gz'):
+                    with gzip.open(tmp, 'rb') as src, open(dest, 'wb') as dst:
+                        shutil.copyfileobj(src, dst)
+                    tmp.unlink()
+                else:
+                    tmp.replace(dest)
                 return
             except (urllib.error.URLError, OSError) as e:
                 if attempt == attempts:
                     raise StepFailed(f'Download of {redact_url(url)} failed: {e}')
                 self.log(f'  attempt {attempt} failed ({e}), retrying...')
                 time.sleep(5 * attempt)
+
+    def url_exists(self, url):
+        try:
+            urllib.request.urlopen(urllib.request.Request(url, method='HEAD'), timeout=30).close()
+            return True
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return False
+            raise
 
     def upload(self, path, url, attempts=5):
         for attempt in range(1, attempts + 1):
@@ -241,7 +259,7 @@ class Bootstrap:
     # ------------------------------------------------------------------
 
     def step_download(self):
-        for dest, url in ((self.bin, self.p['velociraptor_url']), (self.bin_musl, self.p['velociraptor_url'] + '-musl')):
+        for dest, url in ((self.bin, self.p['velociraptor_url']), (self.bin_musl, self.musl_url)):
             if dest.exists():
                 self.log(f'{dest.name} already present.')
                 continue
@@ -252,27 +270,36 @@ class Bootstrap:
     # Everything else is only set when the config is first generated.
     UPDATABLE_PATHS = ('/GUI/allowed_cidr', '/Frontend/resources/expected_clients')
 
+    def server_patch(self):
+        '''
+        The JSON patch applied to a generated Velociraptor server config.
+
+        The GUI and the frontend share port 443, so the GUI also gets the Let's
+        Encrypt certificate that autocert requests for the DNS name. The GUI is
+        then reachable from the internet, which makes GUI.allowed_cidr the
+        access control for it. Everything is stored under the datastore
+        directory on the OS disk, including the certificate cache, so the
+        certificate survives restarts instead of being requested again.
+        '''
+        dns       = self.p['dns']
+        datastore = self.p['datastore']
+        cidrs     = [c if '/' in c else f'{c}/32' for c in self.p['gui_allowed_cidrs']]
+        return [
+            {'op': 'add',     'path': '/GUI/allowed_cidr',                    'value': cidrs},
+            {'op': 'replace', 'path': '/Frontend/resources/expected_clients', 'value': int(self.p['expected_clients'])},
+            {'op': 'replace', 'path': '/Frontend/hostname',                   'value': dns},
+            {'op': 'replace', 'path': '/Client/server_urls',                  'value': [f'https://{dns}/']},
+            {'op': 'add',     'path': '/GUI/public_url',                      'value': f'https://{dns}/app/index.html'},
+            {'op': 'replace', 'path': '/GUI/bind_port',                       'value': 443},
+            {'op': 'replace', 'path': '/Frontend/bind_port',                  'value': 443},
+            {'op': 'add',     'path': '/autocert_cert_cache',                 'value': datastore},
+            {'op': 'replace', 'path': '/Datastore/location',                  'value': datastore},
+            {'op': 'replace', 'path': '/Datastore/filestore_directory',       'value': datastore},
+            {'op': 'add',     'path': '/Logging/output_directory',            'value': f'{datastore}/logs'},
+        ]
+
     def step_server_config(self):
-        cidrs = [c if '/' in c else f'{c}/32' for c in self.p['gui_allowed_cidrs']]
-
-        def fill(value):
-            if isinstance(value, str):
-                return value.replace('REPLACE_DNS', self.p['dns'])
-            if isinstance(value, list):
-                return [fill(v) for v in value]
-            if isinstance(value, dict):
-                return {k: fill(v) for k, v in value.items()}
-            return value
-
-        patch = json.loads((self.files / 'patch_config.json').read_text())
-        for op in patch:
-            if op.get('path') == '/GUI/allowed_cidr':
-                op['value'] = cidrs
-            elif op.get('path') == '/Frontend/resources/expected_clients':
-                op['value'] = int(self.p['expected_clients'])
-            elif 'value' in op:
-                op['value'] = fill(op['value'])
-
+        patch      = self.server_patch()
         patch_file = self.config.parent / 'patch.json'
         if self.config.exists():
             # Regenerating creates a new CA, which disconnects every client, so
@@ -299,6 +326,18 @@ class Bootstrap:
                 raise StepFailed(f'Expected one server package, found {len(debs)}.')
             self.run(['dpkg', '-i', debs[0]])
 
+        # deb_create stores the config as it is while running a query, which
+        # includes the reduced service list a query starts. With that list the
+        # frontend mounts the GUI twice on the shared port and panics
+        # ('pattern "/" conflicts with pattern "/"'), so drop it: without it
+        # the frontend starts all services as usual. Writing to the existing
+        # file keeps the owner and mode the package set.
+        installed = Path(self.p['installed_config'])
+        text, count = re.subn(r'^services:\n(?:[ \t]+.*\n)*', '', installed.read_text(), flags=re.MULTILINE)
+        if count:
+            installed.write_text(text)
+            self.log(f'Removed the query service list from {installed}.')
+
     def step_client_config(self):
         config = self.run([self.bin, '--config', self.config, 'config', 'client']).stdout
         writeback = self.p['writeback_windows']
@@ -321,10 +360,16 @@ class Bootstrap:
             ('x86', 'msi_x86_url',   f'velociraptor-v{self.version}-windows-386.msi'),
         ):
             custom = self.p[key]
+            url    = custom or self.release_url(release_name)
+            # Releases from 0.77 no longer include a 32-bit MSI; without a
+            # custom template there is then nothing to build the x86 installer from.
+            if not custom and not self.url_exists(url):
+                self.log(f'MSI template {arch}: none in the {self.version} release, skipping the {arch} installer.')
+                continue
             self.log(f'MSI template {arch}: {"custom" if custom else "default (Velociraptor release)"}')
             with tempfile.TemporaryDirectory() as tmp:
                 template = Path(tmp) / 'template.msi'
-                self.download(custom or self.release_url(release_name), template)
+                self.download(url, template)
                 self.run([self.bin, 'config', 'repack', '--msi', template, self.client_config,
                           self.packages / f'{prefix}_client_windows_install_{arch}.msi'])
 
@@ -337,35 +382,12 @@ class Bootstrap:
                         raise StepFailed(f'Expected one {ext} package, found {len(built)}.')
                     shutil.move(built[0], self.packages / f'{prefix}_{flavour}client_{kind}_linux_x64.{ext}')
 
-    def step_collector(self):
-        datastore   = self.work / 'collector-build'
-        definitions = self.work / 'collector-definitions'
-        for d in (datastore, definitions):
-            shutil.rmtree(d, ignore_errors=True)
-            d.mkdir()
-        shutil.copy(self.triage_targets(), definitions)
-
-        # With --config the collector ignores <datastore>/artifact_definitions,
-        # so load the extra definitions explicitly.
-        self.run([self.bin, '--config', self.config, '--definitions', definitions,
-                  'collector', '--datastore', datastore, self.files / 'spec.yaml'])
-
-        built = list(datastore.glob('Collector_*'))
-        if not built:
-            raise StepFailed('The collector build produced no output.')
-        for old in self.collectors.iterdir():
-            old.unlink()
-        for path in built:
-            shutil.move(path, self.collectors / path.name)
-        for d in (datastore, definitions):
-            shutil.rmtree(d, ignore_errors=True)
-
     def step_permissions(self):
         '''
         Give the service user the datastore, log and certificate directories.
-        Commands this script runs as root with the server config (the
-        collector build in particular) create them owned by root, and the
-        server package does not fix that, so the server could not write there.
+        Commands this script runs as root with the server config can create
+        them owned by root, and the server package only fixes the top two
+        levels of the datastore, so the server could not write there.
         Only entries with the wrong owner are changed, so a re-run over a large
         datastore stays quick.
         '''
@@ -404,7 +426,19 @@ class Bootstrap:
 
     def step_start(self):
         self.run(['systemctl', 'restart', 'velociraptor_server'])
-        self.wait_for_port(self.p['api_address'])
+        try:
+            self.wait_for_port(self.p['api_address'])
+        except StepFailed as e:
+            # The cause is in the service output, which the extension result
+            # would not show otherwise: log the tail and name the last error.
+            status  = self.run(['systemctl', 'status', 'velociraptor_server', '--no-pager', '-l'], check=False)
+            journal = self.run(['journalctl', '-u', 'velociraptor_server', '-n', '40', '--no-pager'], check=False)
+            lines   = (status.stdout.strip().splitlines()[:4] + ['...']
+                       + journal.stdout.strip().splitlines()[-25:])
+            for line in lines:
+                self.log('  | ' + line)
+            errors = [l for l in journal.stdout.splitlines() if re.search(r'error|fatal|panic', l, re.IGNORECASE)]
+            raise StepFailed(f'{e} Last service error: {errors[-1].strip() if errors else "none logged"}') from None
 
     def step_certificate(self):
         '''
@@ -464,11 +498,18 @@ class Bootstrap:
         self.result['backup_azure'] = True
 
     def step_hunts(self):
-        hunts  = (self.files / 'hunts.vql').read_text()
+        custom = self.p['hunts_url']
+        if custom:
+            path = self.work / 'hunts-custom.vql'
+            self.download(custom, path)
+        else:
+            path = self.files / 'hunts.vql'
+        self.log(f'Hunts: {"custom (hunts_url)" if custom else "default (hunts.vql)"}')
+        hunts  = path.read_text()
         digest = hashlib.sha256(hunts.encode()).hexdigest()
         marker = self.state / 'hunts.sha256'
         if marker.exists() and marker.read_text() == digest:
-            self.log('Hunts already created from this hunts.vql.')
+            self.log('Hunts already created from this hunts file.')
             return
         rows = self.vql(hunts)
         marker.write_text(digest)
@@ -481,13 +522,11 @@ class Bootstrap:
             return
         base, _, token = sas.partition('?')
         uploaded = []
-        for folder, subdir in ((self.packages, 'ClientInstallationPackages'),
-                               (self.collectors, 'OfflineCollectorPackages')):
-            for path in sorted(folder.iterdir()):
-                name = f'{self.p["upload_prefix"]}/{subdir}/{path.name}'
-                self.log(f'Uploading {name}')
-                self.upload(path, f'{base}/{urllib.parse.quote(name)}?{token}')
-                uploaded.append(name)
+        for path in sorted(self.packages.iterdir()):
+            name = f'{self.p["upload_prefix"]}/ClientInstallationPackages/{path.name}'
+            self.log(f'Uploading {name}')
+            self.upload(path, f'{base}/{urllib.parse.quote(name)}?{token}')
+            uploaded.append(name)
         self.result['uploaded'] = uploaded
 
     STEPS = [
@@ -496,7 +535,6 @@ class Bootstrap:
         ('install',           step_install),
         ('client-config',     step_client_config),
         ('client-packages',   step_client_packages),
-        ('collector',         step_collector),
         ('permissions',       step_permissions),
         ('api-client',        step_api_client),
         ('start',             step_start),
