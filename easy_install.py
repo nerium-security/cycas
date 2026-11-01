@@ -72,6 +72,7 @@ _file_log.propagate = False
 
 TRIAGE_TARGETS_URL  = 'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip'
 COLLECTOR_SAS_VALID_DAYS = 90
+DOWNLOAD_SAS_VALID_DAYS  = 30   # read-only links to the collector and client packages
 BINARIES_CONTAINER  = 'binaries'
 KEYVAULT_PASSWORD_LOCATION = 'velociraptor-collection-password'
 KEYVAULT_SAS_LOCATION      = 'collector-sas-url'
@@ -1611,7 +1612,10 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
     gui_url     = result.get('gui_url', f'https://{velo["fqdn"]}/')
     success(f'Velociraptor {result.get("version", "")} server ready: {gui_url}')
     for name in result.get('uploaded', []):
-        info(f'{BINARIES_CONTAINER}/{name}')
+        url, expiry = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
+                                                 BINARIES_CONTAINER, name, expiry_days=DOWNLOAD_SAS_VALID_DAYS)
+        info(f'{name.rsplit("/", 1)[1]} (link expires {expiry:%Y-%m-%d}):')
+        info(f'  {url}')
 
     step('Backing up server and client config to Key Vault...')
     for name in result.get('config_backup', []):
@@ -1778,6 +1782,10 @@ def provision_collector(credential, subscription_id, resource_group,
     blob.switch_to_account_key(subscription_id, resource_group, account_name)
     blob.upload_file(BINARIES_CONTAINER, collector.name, collector)
     success(f'Collector available at: {blob_uri}/{BINARIES_CONTAINER}/{collector.name}')
+    url, expiry = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
+                                             BINARIES_CONTAINER, collector.name, expiry_days=DOWNLOAD_SAS_VALID_DAYS)
+    info(f'Download link (expires {expiry:%Y-%m-%d}):')
+    info(f'  {url}')
 
 
 # ---------------------------------------------------------------------------
@@ -2162,6 +2170,10 @@ def main():
         info('  SSH      — az keyvault secret show --vault-name '
              f'{keyvault_name} --name {KEYVAULT_VELO_SSH_KEY} --query value -o tsv > velo_key && chmod 600 velo_key')
         info(f'             ssh -i velo_key {VELO_VM_ADMIN}@{velo_server["fqdn"]}')
+        info(f"  Configs  — Key Vault '{keyvault_name}', secrets "
+             f"'{KEYVAULT_VELO_CONFIGS['server.config.yaml']}', '{KEYVAULT_VELO_CONFIGS['client.config.yaml']}'")
+        info('             az keyvault secret show --vault-name '
+             f"{keyvault_name} --name {KEYVAULT_VELO_CONFIGS['client.config.yaml']} --query value -o tsv > client.config.yaml")
 
     collector = next((ROOT / 'build' / 'collector' / 'datastore').glob('Collector_*'), None)
     if collector:
