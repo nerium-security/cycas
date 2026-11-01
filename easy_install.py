@@ -1325,14 +1325,14 @@ def provision_webapp_vm(credential, subscription_id, resource_group, location, k
 
 
 def assign_webapp_roles(credential, subscription_id, resource_group,
-                        account_name, status_container, config_container, keyvault_name, principal_id):
+                        account_name, table_name, status_container, config_container, keyvault_name, principal_id):
 
     section('Provisioning — Web Application roles')
 
     webapp = WebappManager(credential, subscription_id)
 
-    step('Assigning Table Data Contributor to web app managed identity...')
-    webapp.assign_storage_roles(resource_group, account_name, principal_id)
+    step(f"Assigning Table Data Contributor on table '{table_name}' to web app managed identity...")
+    webapp.assign_storage_roles(resource_group, account_name, principal_id, table_name)
     success('Table Data Contributor assigned.')
 
     step(f"Assigning Blob Data Reader on '{status_container}' container to web app managed identity...")
@@ -1346,6 +1346,17 @@ def assign_webapp_roles(credential, subscription_id, resource_group,
     step(f"Assigning Key Vault Secrets User on '{keyvault_name}' to web app managed identity (login password)...")
     FunctionsManager(credential, subscription_id).assign_keyvault_roles(resource_group, keyvault_name, principal_id)
     success('Key Vault Secrets User assigned.')
+
+
+def assign_webapp_adx_viewer(credential, subscription_id, resource_group, cluster_name, database_name, principal_id):
+    '''Let the web app VM's identity query the database: the web app checks there
+    when ingested data has become queryable. Viewer, so it cannot change data.'''
+    step(f"Ensuring Viewer on ADX database '{database_name}' for the web app VM identity...")
+    AdxManager(credential, '', '', '').assign_database_viewer(
+        resource_group, cluster_name, database_name, principal_id, 'App',
+        f'cycas-webapp-{principal_id[:8]}', subscription_id=subscription_id,
+    )
+    success('Web app ADX role ready.')
 
 
 def ensure_webapp_password(credential, keyvault_name):
@@ -2048,12 +2059,15 @@ def main():
                                                                 keyvault_name, webapp_app, webapp_allowed_ips),
                                   ['keyvault'])
             tasks['webapp-roles'] = (lambda r: assign_webapp_roles(credential, subscription_id, resource_group,
-                                                                   account_name, status_container, config_container,
+                                                                   account_name, table_name, status_container, config_container,
                                                                    keyvault_name, r['webapp-vm']),
                                      ['webapp-vm', 'storage', 'keyvault'])
             tasks['webapp-setup'] = (lambda r: setup_webapp_vm(credential, subscription_id, resource_group, location,
                                                                account_name, webapp_app),
                                      ['webapp-vm', 'storage'])
+            tasks['webapp-adx'] = (lambda r: assign_webapp_adx_viewer(credential, subscription_id, resource_group,
+                                                                      cluster_name, database_name, r['webapp-vm']),
+                                   ['webapp-vm', 'adx'])
         if webapp_mode and use_keyvault:
             tasks['webapp-password'] = (lambda r: ensure_webapp_password(credential, keyvault_name), ['keyvault'])
         if velo_server and use_keyvault:

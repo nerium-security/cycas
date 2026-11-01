@@ -40,13 +40,16 @@ class TablestorageManager:
         self.computername = self.get_computername()
         self.partitionkey = 'pipeline-uploads'
 
-    def authenticate(self, verify_enabled):
+    def authenticate(self, verify_enabled, create_table=True):
         '''
         Authenticate to Azure Table Storage and create the log table if it
         does not already exists.
 
         Initializes the TableServiceClient and ensures the configured table
-        exists before performing any read or write operations.
+        exists before performing any read or write operations. With
+        create_table=False the table must already exist: creating a table can
+        need rights on the whole storage account, which a principal with a role
+        on just this table does not have.
 
         '''
 
@@ -58,7 +61,10 @@ class TablestorageManager:
         except Exception as e:
             log.error(f'Could not authenticate. Error: {e}')
 
-        self.create_table_if_not_exists()
+        if create_table:
+            self.create_table_if_not_exists()
+        else:
+            self.table_client = self.table_service.get_table_client(self.table_name)
         if verify_enabled:
             self.has_write_access()
         else:
