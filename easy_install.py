@@ -20,6 +20,7 @@ import re
 import secrets
 import subprocess
 import sys
+import tempfile
 import time
 import random
 import string
@@ -84,6 +85,21 @@ VELO_BLOB_PREFIX         = 'velociraptor-server'                              # 
 VELO_VM_ADMIN            = 'cycas'
 VELO_REMOTE_LOG          = '/opt/cycas-velociraptor/bootstrap.log'
 KEYVAULT_VELO_PASSWORD   = 'velociraptor-server-admin-password'
+KEYVAULT_WEBAPP_PASSWORD = 'cycas-webapp-password'   # must match WEBAPP_PASSWORD_SECRET in webapp/app.py
+WEBAPP_USERNAME          = 'cycas'
+KEYVAULT_WEBAPP_SSH_KEY    = 'cycas-webapp-ssh-private-key'
+KEYVAULT_WEBAPP_SSH_PUBKEY = 'cycas-webapp-ssh-public-key'
+WEBAPP_BLOB_PREFIX       = 'webapp'                                          # in BINARIES_CONTAINER
+# Not the 10.42.0.0/24 of the Velociraptor server's VNet, so the two can be peered later.
+WEBAPP_VNET_PREFIX       = '10.43.0.0/24'
+WEBAPP_STAGE_IGNORE      = ('__pycache__', '.venv', '.git', '.vscode', 'test', '*.pyc', '.env')
+WEBAPP_VM_DEFAULTS       = {
+    'webapp_vm_size':        'Standard_B1s',
+    # 24.04, not the 26.04 of the Velociraptor server: the pinned dependencies
+    # (pandas, pydantic_core, ...) have no wheels for its newer Python yet.
+    'webapp_vm_image':       'Canonical:ubuntu-24_04-lts:server:latest',
+    'webapp_vm_os_disk_gb':  '30',
+}
 KEYVAULT_VELO_SSH_KEY    = 'velociraptor-server-ssh-private-key'
 KEYVAULT_VELO_SSH_PUBKEY = 'velociraptor-server-ssh-public-key'
 KEYVAULT_VELO_CONFIGS    = {'server.config.yaml': 'velociraptor-server-config-yaml',
@@ -93,7 +109,7 @@ VELO_SETTINGS_DEFAULTS   = {
     'velociraptor_server_vm_size':           'Standard_B2ms',
     'velociraptor_server_image':             'Canonical:ubuntu-26_04-lts:server:latest',
     'velociraptor_server_os_disk_gb':        '1024',
-    'velociraptor_server_expected_clients':  '100',
+    'velociraptor_server_expected_clients':  '1000',
     'velociraptor_server_admin_user':        'admin',
     'velociraptor_server_package_prefix':    'Velociraptor',
     'velociraptor_server_api_name':          'cycas_api',
@@ -235,7 +251,7 @@ def app_settings_from_env():
     Velociraptor server settings are only used by this installer and can
     hold SAS URLs, so they stay out.'''
     return {k.upper(): v for k, v in read_env_defaults(ENV_FILE).items()
-            if v and not k.startswith('velociraptor_server_')}
+            if v and not k.startswith(('velociraptor_server_', 'webapp_vm_'))}
 
 
 def ensure_env_file():
@@ -498,38 +514,85 @@ def collect_keyvault_config(resource_group, step_label='7/7'):
     return keyvault_name, password_location, zip_password
 
 
-def collect_webapp_config(resource_group, step_label='8/8'):
+def random_dns_label():
+    '''A random DNS label: a public name that reveals nothing about the case.'''
+    alphabet = string.ascii_lowercase + string.digits
+    return secrets.choice(string.ascii_lowercase) + ''.join(secrets.choice(alphabet) for _ in range(15))
+
+
+def unique_dns_label(vms, location):
+    name = random_dns_label()
+    while not vms.dns_label_available(location, name):
+        name = random_dns_label()
+    return name
+
+
+def vm_resource_prefix(resource_group, role):
+    '''<resource group>-<role>; VM names allow fewer characters than resource
+    group names (no '.', '(', ')' or '_').'''
+    return re.sub(r'[^A-Za-z0-9-]', '-', resource_group[:40]).strip('-') + f'-{role}'
+
+
+def webapp_vm_settings():
+    '''WEBAPP_VM_* settings: .env, then .env_example, then built-in defaults.'''
+    merged = dict(WEBAPP_VM_DEFAULTS)
+    for source in (read_env_defaults(ENV_EXAMPLE), read_env_defaults(ENV_FILE)):
+        merged.update({k: v for k, v in source.items() if k.startswith('webapp_vm_') and v})
+    return merged
+
+
+def collect_webapp_config(vms, resource_group, location, setup_mode, step_label='8/8'):
+    '''
+    Ask how to run the web app (the status dashboard).
+
+    Returns (mode, vm, allowed_ips): mode is 'vm', 'local' or None, vm the VM
+    settings stored in the install state for 'vm'. Easy mode always uses a VM.
+    '''
     section(f'Step {step_label} — Web Application')
 
-    info('A Web App provides a status dashboard for the Cycas pipeline.')
+    info('The web app is the status dashboard of the Cycas pipeline. It runs on a small VM')
+    info('(HTTPS with Let\'s Encrypt, login, limited to your IPs), or locally on your machine.')
     print()
-    create_wa = ask('  Set up the Web Application? [Y/n]: ').strip().lower()
-    if create_wa in ('n', 'no'):
-        return None, None, None
+    if setup_mode == 'advanced':
+        if ask('  Set up the web app? [Y/n]: ').strip().lower() in ('n', 'no'):
+            return None, None, None
+        print()
+        info('  1) VM     — reachable for your team from the allowed IPs  [recommended]')
+        info('  2) Local  — only on this machine, started by hand with gunicorn')
+        print()
+        if ask('  Select [1]: ').strip() == '2':
+            return 'local', None, None
 
-    print()
-    info('Run the webapp locally (1) or deploy it to Azure App Service (2)?')
-    info('  1) Local  — Fastest and most secure option. Only you can access it on your device.')
-    info('  2) Azure  — Adds 10+ minutes of deployment time. Multiple teammembers can access it.')
-    print()
-    mode_choice = ask('  Select [1]: ').strip()
-    if mode_choice == '2':
-        webapp_mode = 'azure'
-    else:
-        webapp_mode = 'local'
-
-    if webapp_mode == 'local':
+    settings = webapp_vm_settings()
+    prefix   = vm_resource_prefix(resource_group, 'webapp')
+    if vms.public_ip_exists(resource_group, f'{prefix}-ip'):
+        print()
+        info(f"'{prefix}-ip' already exists: this resource group already has a web app VM.")
+        info('Resume the saved session of that install, or use another resource group.')
+        info('Continuing with the web app running locally.')
         return 'local', None, None
 
-    rg_slug  = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
-    app_name = prompt('Web app name', default=f'{rg_slug[:43]}-webapp-{rand6()}')
+    name    = unique_dns_label(vms, location)
+    vm_size = settings['webapp_vm_size']
+    if setup_mode == 'advanced':
+        vm_size = prompt('VM size', default=vm_size)
+    parse_image_urn(settings['webapp_vm_image'])   # fail now on a malformed WEBAPP_VM_IMAGE
 
     print()
-    print('  Enter IP addresses or CIDR ranges allowed to access the webapp.')
+    print('  Enter IP addresses or CIDR ranges allowed to use the web app (and SSH to its VM).')
     print('  All other traffic will be denied.')
     print()
+    allowed_ips = collect_allowed_ips()
 
-    return webapp_mode, app_name, collect_allowed_ips()
+    vm = {
+        'name':            name,
+        'resource_prefix': prefix,
+        'fqdn':            f'{name}.{location}.cloudapp.azure.com',
+        'vm_size':         vm_size,
+        'image':           settings['webapp_vm_image'],
+        'os_disk_gb':      int(settings['webapp_vm_os_disk_gb']),
+    }
+    return 'vm', vm, allowed_ips
 
 
 def collect_allowed_ips():
@@ -578,7 +641,8 @@ def expected_clients_setting():
     return int(value)
 
 
-def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, step_label='9/9'):
+def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, step_label='9/9',
+                                       allowed_ips=None):
     '''
     Ask whether to deploy a Velociraptor server and how.
 
@@ -603,7 +667,7 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
         return None
 
     # VM names allow fewer characters than resource group names (no '.', '(', ')' or '_').
-    resource_prefix = re.sub(r'[^A-Za-z0-9-]', '-', resource_group[:40]).strip('-') + '-velo'
+    resource_prefix = vm_resource_prefix(resource_group, 'velo')
     if vms.public_ip_exists(resource_group, f'{resource_prefix}-ip'):
         # Reusing it would give the existing server a new DNS name and cut off
         # every client installed against the old one.
@@ -615,21 +679,13 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
 
     settings = velociraptor_server_settings()
 
-    def random_label():
-        # The DNS name is public, so it is random rather than derived from the
-        # resource group (often a customer or case name).
-        alphabet = string.ascii_lowercase + string.digits
-        return secrets.choice(string.ascii_lowercase) + ''.join(secrets.choice(alphabet) for _ in range(15))
-
     if setup_mode == 'easy':
-        name = random_label()
-        while not vms.dns_label_available(location, name):
-            name = random_label()
+        name    = unique_dns_label(vms, location)
         vm_size = settings['velociraptor_server_vm_size']
     else:
         print()
         while True:
-            name = prompt('Server name (DNS label: 3-63 lowercase letters, digits and hyphens)', default=random_label())
+            name = prompt('Server name (DNS label: 3-63 lowercase letters, digits and hyphens)', default=random_dns_label())
             if not re.fullmatch(r'[a-z][a-z0-9-]{1,61}[a-z0-9]', name):
                 print('  Invalid name: start with a letter, end with a letter or digit, only a-z, 0-9 and hyphens.')
                 continue
@@ -644,11 +700,14 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
     expected_clients_setting()
     image = settings['velociraptor_server_image']
 
-    print()
-    print('  Enter IP addresses or CIDR ranges allowed to use the Velociraptor GUI and SSH.')
-    print('  Clients can always connect; all other GUI and SSH traffic is denied.')
-    print()
-    allowed_ips = collect_allowed_ips()
+    if allowed_ips:
+        info(f'GUI and SSH limited to the same IPs as the web app: {", ".join(allowed_ips)}')
+    else:
+        print()
+        print('  Enter IP addresses or CIDR ranges allowed to use the Velociraptor GUI and SSH.')
+        print('  Clients can always connect; all other GUI and SSH traffic is denied.')
+        print()
+        allowed_ips = collect_allowed_ips()
 
     return {
         'name':             name,
@@ -793,10 +852,10 @@ def confirm_plan(run_mode,
         if webapp_mode == 'local':
             print('\n  Web Application')
             info('Mode: Local (storage roles assigned to current user)')
-        elif webapp_mode == 'azure' and webapp_app:
+        elif webapp_mode == 'vm' and webapp_app:
             print('\n  Web Application')
-            info(f'Mode       : Azure App Service')
-            info(f'App name   : {webapp_app}')
+            info(f'URL        : https://{webapp_app["fqdn"]}/  (static IP, Let\'s Encrypt)')
+            info(f'VM         : {webapp_app["resource_prefix"]}-vm  ({webapp_app["vm_size"]}, {webapp_app["image"]})')
             info(f'Allowed IPs: {", ".join(webapp_allowed_ips)}')
 
     if velo_server:
@@ -1226,38 +1285,47 @@ def deploy_function(credential, subscription_id, app_name, function_name):
 # Phase 5: Web App
 # ---------------------------------------------------------------------------
 
-def provision_webapp(credential, subscription_id, resource_group, location,
-                     webapp_app, allowed_ips):
-    '''Create the Web App infrastructure. Returns its managed identity principal ID.'''
+def provision_webapp_vm(credential, subscription_id, resource_group, location, keyvault_name, vm, allowed_ips):
+    '''
+    Create the web app VM and its network. The VM gets a managed identity, which
+    the web app uses for storage, ADX and Key Vault, like an App Service would.
 
-    section('Provisioning — Web Application')
+    Port 80 is open for the Let's Encrypt challenge (Caddy only answers that
+    and redirects to HTTPS); 443 and SSH are limited to allowed_ips.
 
-    webapp = WebappManager(credential, subscription_id)
+    Returns:
+        str: The principal ID of the VM's managed identity.
+    '''
+    section('Provisioning — Web app VM')
 
-    plan_name = f'{webapp_app}-plan'
-    step(f"Ensuring App Service Plan '{plan_name}' exists...")
-    plan = webapp.provision_plan(resource_group, plan_name, location)
-    success(f"Plan '{plan_name}' ready.")
+    public_key = ensure_ssh_key(credential, keyvault_name, KEYVAULT_WEBAPP_SSH_KEY, KEYVAULT_WEBAPP_SSH_PUBKEY)
+    vms        = VmManager(credential, subscription_id)
+    prefix     = vm['resource_prefix']
 
-    step(f"Ensuring Web App '{webapp_app}' exists...")
-    result = webapp.provision_webapp(resource_group, webapp_app, location, plan['id'])
+    step(f"Ensuring static public IP '{prefix}-ip' ({vm['fqdn']})...")
+    ip = vms.provision_public_ip(resource_group, f'{prefix}-ip', location, vm['name'])
+    success(f"Public IP ready: {ip['ip_address']}")
+
+    step(f"Ensuring network security group '{prefix}-nsg'...")
+    nsg_id = vms.provision_nsg(resource_group, f'{prefix}-nsg', location, allowed_ips,
+                               public_ports=(80,), restricted_ports=(443, 22))
+    subnet_id = vms.provision_network(resource_group, f'{prefix}-vnet', location, WEBAPP_VNET_PREFIX)
+    nic_id    = vms.provision_nic(resource_group, f'{prefix}-nic', location, subnet_id, ip['id'], nsg_id)
+    success('Network ready.')
+
+    step(f"Ensuring VM '{prefix}-vm' ({vm['vm_size']})...")
+    result = vms.provision_vm(resource_group, f'{prefix}-vm', location, nic_id, vm['vm_size'],
+                              VELO_VM_ADMIN, public_key, vm['os_disk_gb'], vm['image'],
+                              os_disk_name=f'{prefix}-osdisk', managed_identity=True)
     principal_id = result.get('identity', {}).get('principalId')
-    success(f"Web App '{webapp_app}' ready.")
-
-    step(f"Configuring IP restrictions ({len(allowed_ips)} rule(s))...")
-    webapp.configure_ip_restrictions(resource_group, webapp_app, allowed_ips)
-    success('IP restrictions applied.')
-
-    step(f"Configuring startup command on '{webapp_app}'...")
-    webapp.configure_startup(resource_group, webapp_app,
-                             'gunicorn --bind=0.0.0.0:4040 --timeout 600 webapp.app:app')
-    success('Startup command configured.')
-
+    if not principal_id:
+        raise RuntimeError(f"VM '{prefix}-vm' has no managed identity; it was created without one.")
+    success(f"VM '{prefix}-vm' ready.")
     return principal_id
 
 
 def assign_webapp_roles(credential, subscription_id, resource_group,
-                        account_name, status_container, config_container, principal_id):
+                        account_name, status_container, config_container, keyvault_name, principal_id):
 
     section('Provisioning — Web Application roles')
 
@@ -1275,6 +1343,20 @@ def assign_webapp_roles(credential, subscription_id, resource_group,
     webapp.assign_blob_container_contributor(resource_group, account_name, config_container, principal_id)
     success(f"Blob Data Contributor on '{config_container}' container assigned.")
 
+    step(f"Assigning Key Vault Secrets User on '{keyvault_name}' to web app managed identity (login password)...")
+    FunctionsManager(credential, subscription_id).assign_keyvault_roles(resource_group, keyvault_name, principal_id)
+    success('Key Vault Secrets User assigned.')
+
+
+def ensure_webapp_password(credential, keyvault_name):
+    '''Create the web app login password in Key Vault, once; re-runs keep it.'''
+    kv = KeyvaultManager(f'https://{keyvault_name}.vault.azure.net')
+    kv.authenticate(credential, verify_enabled=False)
+    step('Ensuring web app login password in Key Vault...')
+    if not kv.read_creds(KEYVAULT_WEBAPP_PASSWORD):
+        kv.set_secret(KEYVAULT_WEBAPP_PASSWORD, secrets.token_urlsafe(18))
+    success(f"Web app login password in Key Vault secret '{KEYVAULT_WEBAPP_PASSWORD}'.")
+
 
 def assign_local_webapp_roles(credential, subscription_id, resource_group, account_name, current_user_id):
     step('Assigning storage roles to current user for local webapp...')
@@ -1283,23 +1365,80 @@ def assign_local_webapp_roles(credential, subscription_id, resource_group, accou
     success('Storage roles assigned to current user.')
 
 
-def deploy_webapp(credential, subscription_id, resource_group, webapp_app):
-    '''Apply app settings from the final .env and deploy the webapp code.'''
+def build_webapp_package(dest):
+    '''ZIP the web app with core/, velociraptor/ and a requirements.txt from
+    pyproject.toml, in the layout gunicorn expects (webapp.app:app).'''
+    import tomllib
+    deps = tomllib.loads((ROOT / 'pyproject.toml').read_text()).get('project', {}).get('dependencies', [])
+    with zipfile.ZipFile(dest, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for folder in ('webapp', 'core', 'velociraptor'):
+            for path in (ROOT / folder).rglob('*'):
+                rel = path.relative_to(ROOT)
+                if path.is_file() and not any(part in WEBAPP_STAGE_IGNORE or Path(part).match(pattern)
+                                              for part in rel.parts for pattern in WEBAPP_STAGE_IGNORE):
+                    zf.write(path, rel)
+        zf.writestr('requirements.txt', '\n'.join(deps) + '\n')
 
-    section('Deploying — Web Application')
 
-    webapp = WebappManager(credential, subscription_id)
+# vm_bootstrap.py runs in two parts: the slow steps that need no .env while
+# the rest of Azure is still being created (phase 1), the rest once the .env
+# is final (phase 2), so the app settings do not keep apt and pip waiting.
+WEBAPP_SETUP_STEPS     = ['packages', 'user', 'app', 'venv']
+WEBAPP_CONFIGURE_STEPS = ['env', 'service', 'caddy', 'certificate']
 
-    step(f"Applying app settings to '{webapp_app}'...")
-    env_settings = app_settings_from_env()
-    webapp.set_app_settings(resource_group, webapp_app, env_settings)
-    success('App settings applied.')
 
-    step(f"Deploying webapp code to '{webapp_app}'...")
-    webapp.deploy(resource_group, webapp_app, ROOT / 'webapp', ROOT / 'core')
-    success(f"Webapp deployed.")
+def run_webapp_bootstrap(credential, subscription_id, resource_group, location, account_name, vm,
+                         steps, env, with_app):
+    '''Upload vm_bootstrap.py (and the web app package when with_app) and run
+    the given steps of it on the web app VM.'''
+    blob = BlobManager(credential, f'https://{account_name}.blob.core.windows.net')
+    blob.authenticate()
+    blob.switch_to_account_key(subscription_id, resource_group, account_name)
 
-    success(f"Web App accessible at: https://{webapp_app}.azurewebsites.net")
+    file_uris = []
+    with tempfile.TemporaryDirectory() as tmp:
+        files = [ROOT / 'webapp' / 'vm_bootstrap.py']
+        if with_app:
+            step('Packaging and uploading the web app...')
+            files.append(Path(tmp) / 'app.zip')
+            build_webapp_package(files[-1])
+        for path in files:
+            blob_name = f'{WEBAPP_BLOB_PREFIX}/{path.name}'
+            with open(path, 'rb') as f:
+                blob.get_client(BINARIES_CONTAINER, blob_name).upload_blob(f, overwrite=True)
+            url, _ = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
+                                                BINARIES_CONTAINER, blob_name, expiry_days=1)
+            file_uris.append(url)
+
+    params  = {'fqdn': vm['fqdn'], 'app_zip': 'app.zip', 'env': env, 'steps': steps}
+    encoded = base64.b64encode(json.dumps(params).encode()).decode()
+    command = f'CYCAS_WEBAPP_PARAMS={encoded} python3 vm_bootstrap.py'
+
+    step(f'Running vm_bootstrap.py on the VM ({", ".join(steps)})...')
+    try:
+        VmManager(credential, subscription_id).run_script(
+            resource_group, f'{vm["resource_prefix"]}-vm', location, file_uris, command,
+            extension_name='cycas-webapp')
+    except ScriptFailed as e:
+        for line in e.stdout.strip().splitlines()[-15:]:
+            info(line)
+        raise RuntimeError(f'{e} (full log on the VM: /opt/cycas-webapp/bootstrap.log)') from None
+
+
+def setup_webapp_vm(credential, subscription_id, resource_group, location, account_name, vm):
+    '''Phase 1: packages, service user, web app code and its Python environment.'''
+    section('Provisioning — Web app setup')
+    run_webapp_bootstrap(credential, subscription_id, resource_group, location, account_name, vm,
+                         WEBAPP_SETUP_STEPS, env={}, with_app=True)
+    success('Web app installed, waiting for the final settings.')
+
+
+def configure_webapp_vm(credential, subscription_id, resource_group, location, account_name, vm):
+    '''Phase 2: the final .env, the service, and HTTPS.'''
+    section('Deploying — Web app')
+    run_webapp_bootstrap(credential, subscription_id, resource_group, location, account_name, vm,
+                         WEBAPP_CONFIGURE_STEPS, env=app_settings_from_env(), with_app=False)
+    success(f"Web app ready: https://{vm['fqdn']}/")
 
 
 # ---------------------------------------------------------------------------
@@ -1319,6 +1458,25 @@ def generate_ssh_key_pair():
     return private, f'{public} cycas-velociraptor'
 
 
+def ensure_ssh_key(credential, keyvault_name, private_secret, public_secret):
+    '''Return the public SSH key of a VM, generating the pair once. Only the
+    public key is put on the VM; the private key stays in Key Vault.'''
+    kv = KeyvaultManager(f'https://{keyvault_name}.vault.azure.net')
+    kv.authenticate(credential, verify_enabled=False)
+
+    step('Ensuring SSH key pair in Key Vault...')
+    public_key = kv.read_creds(public_secret)
+    if public_key:
+        info(f"Reusing SSH key from Key Vault secret '{public_secret}'.")
+    else:
+        private_key, public_key = generate_ssh_key_pair()
+        kv.set_secret(private_secret, private_key)
+        kv.set_secret(public_secret, public_key)
+        info(f"Generated an SSH key, private key stored in Key Vault secret '{private_secret}'.")
+    success('SSH key ready.')
+    return public_key
+
+
 def provision_velociraptor_vm(credential, subscription_id, resource_group, location, keyvault_name, velo):
     '''
     Create the Velociraptor server VM and its network. The SSH key pair is
@@ -1329,19 +1487,7 @@ def provision_velociraptor_vm(credential, subscription_id, resource_group, locat
     '''
     section('Provisioning — Velociraptor server VM')
 
-    kv = KeyvaultManager(f'https://{keyvault_name}.vault.azure.net')
-    kv.authenticate(credential, verify_enabled=False)
-
-    step('Ensuring SSH key pair in Key Vault...')
-    public_key = kv.read_creds(KEYVAULT_VELO_SSH_PUBKEY)
-    if public_key:
-        info(f"Reusing SSH key from Key Vault secret '{KEYVAULT_VELO_SSH_PUBKEY}'.")
-    else:
-        private_key, public_key = generate_ssh_key_pair()
-        kv.set_secret(KEYVAULT_VELO_SSH_KEY, private_key)
-        kv.set_secret(KEYVAULT_VELO_SSH_PUBKEY, public_key)
-        info(f"Generated an SSH key, private key stored in Key Vault secret '{KEYVAULT_VELO_SSH_KEY}'.")
-    success('SSH key ready.')
+    public_key = ensure_ssh_key(credential, keyvault_name, KEYVAULT_VELO_SSH_KEY, KEYVAULT_VELO_SSH_PUBKEY)
 
     vms  = VmManager(credential, subscription_id)
     name = velo_resource_prefix(velo)
@@ -1707,6 +1853,11 @@ def main():
                 webapp_mode                = saved.get('webapp_mode')
                 webapp_app                 = saved['webapp_app']
                 webapp_allowed_ips         = saved['webapp_allowed_ips']
+                if webapp_mode == 'azure':
+                    # App Service hosting was replaced by a VM; leave that app alone.
+                    info(f"The web app of this session runs on App Service ('{webapp_app}'), which the installer")
+                    info('no longer deploys; it is left as it is. Start a new session to put it on a VM.')
+                    webapp_mode = webapp_app = None
                 zip_password               = None  # not stored in state; provision_collector reads it from Key Vault
                 velo_server                = saved.get('velo_server')
             else:
@@ -1761,24 +1912,26 @@ def main():
                 watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
 
         if run_mode == 'azurefunction':
+            vms = VmManager(credential, subscription_id)
             if setup_mode == 'easy':
                 keyvault_password_location = KEYVAULT_PASSWORD_LOCATION
                 zip_password = None
-                webapp_mode, webapp_app, webapp_allowed_ips = 'local', None, None
-                info('Web app configured for local use (optional - run with gunicorn when needed).')
             else:
                 keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
-                webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
+            webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(vms, resource_group, location,
+                                                                                setup_mode, f'8/{total}')
 
-            velo_server = collect_velociraptor_server_config(VmManager(credential, subscription_id),
-                                                             resource_group, location, setup_mode, f'9/{total}')
-            if velo_server and not keyvault_name:
-                # The server's admin password and SSH key are kept in Key Vault.
+            # Easy mode asks for the allowed IPs once, for the web app and the server.
+            velo_server = collect_velociraptor_server_config(vms, resource_group, location, setup_mode, f'9/{total}',
+                                                             allowed_ips=webapp_allowed_ips if setup_mode == 'easy' else None)
+            if (velo_server or webapp_mode) and not keyvault_name:
+                # The web app login password and the Velociraptor server's admin
+                # password and SSH key are kept in Key Vault.
                 rg_slug       = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
                 kv_suffix     = f'-{rand6()}-keyvault'
                 keyvault_name = rg_slug[:24 - len(kv_suffix)] + kv_suffix
                 keyvault_password_location = KEYVAULT_PASSWORD_LOCATION
-                info(f"The Velociraptor server needs a Key Vault, '{keyvault_name}' will be created.")
+                info(f"The web app and Velociraptor server passwords need a Key Vault, '{keyvault_name}' will be created.")
         else:
             keyvault_name = keyvault_password_location = zip_password = None
             webapp_mode = webapp_app = webapp_allowed_ips = None
@@ -1890,12 +2043,19 @@ def main():
         if webapp_mode == 'local':
             tasks['webapp-roles'] = (lambda r: assign_local_webapp_roles(credential, subscription_id, resource_group,
                                                                          account_name, current_user_id), ['storage'])
-        elif webapp_mode == 'azure' and webapp_app:
-            tasks['webapp'] = (lambda r: provision_webapp(credential, subscription_id, resource_group, location,
-                                                          webapp_app, webapp_allowed_ips), [])
+        elif webapp_mode == 'vm' and webapp_app and use_keyvault:
+            tasks['webapp-vm'] = (lambda r: provision_webapp_vm(credential, subscription_id, resource_group, location,
+                                                                keyvault_name, webapp_app, webapp_allowed_ips),
+                                  ['keyvault'])
             tasks['webapp-roles'] = (lambda r: assign_webapp_roles(credential, subscription_id, resource_group,
                                                                    account_name, status_container, config_container,
-                                                                   r['webapp']), ['webapp', 'storage'])
+                                                                   keyvault_name, r['webapp-vm']),
+                                     ['webapp-vm', 'storage', 'keyvault'])
+            tasks['webapp-setup'] = (lambda r: setup_webapp_vm(credential, subscription_id, resource_group, location,
+                                                               account_name, webapp_app),
+                                     ['webapp-vm', 'storage'])
+        if webapp_mode and use_keyvault:
+            tasks['webapp-password'] = (lambda r: ensure_webapp_password(credential, keyvault_name), ['keyvault'])
         if velo_server and use_keyvault:
             # The VM only needs its SSH key; the software setup also needs the
             # storage account and the ZIP password the collector task ensures.
@@ -1930,8 +2090,9 @@ def main():
             'watcher':   (lambda r: deploy_function(credential, subscription_id, watcher_app, 'watcher'), ['functions']),
             'processor': (lambda r: deploy_function(credential, subscription_id, processor_app, 'processor'), ['functions']),
         }
-        if webapp_mode == 'azure' and webapp_app:
-            tasks['webapp'] = (lambda r: deploy_webapp(credential, subscription_id, resource_group, webapp_app), [])
+        if webapp_mode == 'vm' and webapp_app and use_keyvault:
+            tasks['webapp'] = (lambda r: configure_webapp_vm(credential, subscription_id, resource_group, location,
+                                                             account_name, webapp_app), [])
         run_tasks(tasks, 'Deploying', LOG_FILE, _file_log)
 
     state = load_state()
@@ -1952,6 +2113,8 @@ def main():
                 info(f'  Then open http://{wsl_ip}:4040 in your browser (WSL IP).')
             else:
                 info('  Then open http://localhost:4040 in your browser.')
+            info(f"  Login   — user {WEBAPP_USERNAME}, password in Key Vault '{keyvault_name}', "
+                 f"secret '{KEYVAULT_WEBAPP_PASSWORD}'")
             print()
     else:
         success('Installation complete.')
@@ -1967,11 +2130,13 @@ def main():
     if 'sftp' in input_sources:
         sftp = input_sources['sftp']
         info(f'  SFTP  — {sftp["SFTP_USERNAME"]}@{sftp["SFTP_URL"]}:{sftp["SFTP_PORT"]}')
-    if webapp_app:
+    if webapp_mode == 'vm' and webapp_app:
         print()
         info(f'Web application:')
-        info(f'  URL     — https://{webapp_app}.azurewebsites.net')
+        info(f'  URL     — https://{webapp_app["fqdn"]}/')
         info(f'  Access  — restricted to: {", ".join(webapp_allowed_ips)}')
+        info(f"  Login   — user {WEBAPP_USERNAME}, password in Key Vault '{keyvault_name}', "
+                 f"secret '{KEYVAULT_WEBAPP_PASSWORD}'")
     if velo_server:
         packages = f'https://{account_name}.blob.core.windows.net/{BINARIES_CONTAINER}/{VELO_BLOB_PREFIX}/'
         print()

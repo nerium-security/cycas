@@ -8,11 +8,13 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import hmac
 import json
 import yaml
 from dotenv import find_dotenv
-from flask import Flask, render_template, request, flash, jsonify
+from flask import Flask, Response, render_template, request, flash, jsonify
 from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
 from azure.data.tables import EntityProperty
 from azure.storage.blob import BlobServiceClient
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
@@ -22,6 +24,54 @@ from core.utils.status import Status
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-change-in-prod')
+
+
+# ---------------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------------
+# Every page and API call requires HTTP basic auth, so the browser asks once
+# and the dashboard's own fetch() calls send the same credentials. The
+# password is a Key Vault secret created by easy_install.py, read with the web
+# app's managed identity in Azure or the az login session locally. Without a
+# password the app refuses all requests rather than run without a login.
+
+WEBAPP_USERNAME        = os.environ.get('WEBAPP_USERNAME', 'cycas')
+WEBAPP_PASSWORD_SECRET = os.environ.get('WEBAPP_PASSWORD_SECRET', 'cycas-webapp-password')
+
+_password      = None
+_password_lock = threading.Lock()
+
+
+def _webapp_password():
+    '''The login password from Key Vault, cached once it has been read.'''
+    global _password
+    with _password_lock:
+        if _password is None:
+            config = load_config()
+            if config.keyvault_url:
+                client    = SecretClient(vault_url=config.keyvault_url, credential=DefaultAzureCredential())
+                _password = client.get_secret(WEBAPP_PASSWORD_SECRET).value
+        return _password
+
+
+@app.before_request
+def require_login():
+    try:
+        password = _webapp_password()
+    except Exception as exc:
+        app.logger.error(f'Could not read the web app password from Key Vault: {exc}')
+        password = None
+    if not password:
+        return Response(f"Login is not configured: Key Vault secret '{WEBAPP_PASSWORD_SECRET}' "
+                        'could not be read.', 503)
+
+    auth = request.authorization
+    # compare_digest on bytes: constant time, and safe for non-ASCII input.
+    if (auth and auth.type == 'basic'
+            and hmac.compare_digest((auth.username or '').encode(), WEBAPP_USERNAME.encode())
+            and hmac.compare_digest((auth.password or '').encode(), password.encode())):
+        return None
+    return Response('Login required.', 401, {'WWW-Authenticate': 'Basic realm="Cycas", charset="UTF-8"'})
 
 ALL_STATUSES = [
     Status.NEW, Status.PROCESSING, Status.DOWNLOADING, Status.DOWNLOADED,

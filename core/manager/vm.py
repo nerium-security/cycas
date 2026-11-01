@@ -169,43 +169,34 @@ class VmManager:
         log.info(f"Public IP '{name}' ready: {info['ip_address']} ({info['fqdn']}).")
         return info
 
-    def provision_nsg(self, resource_group, name, location, ssh_allowed_ips):
+    def provision_nsg(self, resource_group, name, location, allowed_ips,
+                      public_ports=(443, 80), restricted_ports=(22,)):
         '''
         Create or update the network security group.
 
-        Port 443 is open to the internet: the Velociraptor frontend and GUI
-        share it, clients must reach the frontend, and the GUI is limited to
-        GUI.allowed_cidr by Velociraptor itself. Port 80 is open for the
-        Let's Encrypt challenge (Velociraptor autocert); Velociraptor only
-        answers ACME challenges and redirects to HTTPS there. SSH is only open
-        to ssh_allowed_ips (IPs or CIDRs); with none given there is no SSH
-        rule. Everything else inbound is denied by the default rules.
+        public_ports are open to the internet, restricted_ports only to
+        allowed_ips (IPs or CIDRs); with no allowed_ips there is no rule for
+        them. Everything else inbound is denied by the default rules.
+
+        The defaults fit the Velociraptor server: its frontend and GUI share
+        443 (clients must reach the frontend; the GUI is limited to
+        GUI.allowed_cidr by Velociraptor itself), 80 serves the Let's Encrypt
+        challenge, and SSH is for the admin IPs only.
         '''
-        rules = [{
-            'name': 'allow-velociraptor-https',
-            'properties': {
-                'priority': 100, 'direction': 'Inbound', 'access': 'Allow', 'protocol': 'Tcp',
-                'sourceAddressPrefix': 'Internet', 'sourcePortRange': '*',
-                'destinationAddressPrefix': '*', 'destinationPortRange': '443',
-            },
-        }, {
-            'name': 'allow-letsencrypt-http',
-            'properties': {
-                'priority': 105, 'direction': 'Inbound', 'access': 'Allow', 'protocol': 'Tcp',
-                'sourceAddressPrefix': 'Internet', 'sourcePortRange': '*',
-                'destinationAddressPrefix': '*', 'destinationPortRange': '80',
-            },
-        }]
-        if ssh_allowed_ips:
-            rules.append({
-                'name': 'allow-ssh-admin',
-                'properties': {
-                    'priority': 110, 'direction': 'Inbound', 'access': 'Allow', 'protocol': 'Tcp',
-                    'sourceAddressPrefixes': [ip if '/' in ip else f'{ip}/32' for ip in ssh_allowed_ips],
-                    'sourcePortRange': '*',
-                    'destinationAddressPrefix': '*', 'destinationPortRange': '22',
-                },
-            })
+        def rule(name, priority, ports, sources):
+            source = {'sourceAddressPrefix': 'Internet'} if sources is None else {'sourceAddressPrefixes': sources}
+            return {'name': name, 'properties': {
+                'priority': priority, 'direction': 'Inbound', 'access': 'Allow', 'protocol': 'Tcp',
+                'sourcePortRange': '*', 'destinationAddressPrefix': '*',
+                'destinationPortRanges': [str(p) for p in ports], **source,
+            }}
+
+        rules = []
+        if public_ports:
+            rules.append(rule('allow-public', 100, public_ports, None))
+        if restricted_ports and allowed_ips:
+            rules.append(rule('allow-admin-ips', 110, restricted_ports,
+                              [ip if '/' in ip else f'{ip}/32' for ip in allowed_ips]))
         path   = f'{self._rg_path(resource_group)}/providers/Microsoft.Network/networkSecurityGroups/{name}'
         result = self._arm('PUT', path, _NETWORK_API,
                            json={'location': location, 'properties': {'securityRules': rules}})
@@ -261,7 +252,7 @@ class VmManager:
 
     def provision_vm(self, resource_group, name, location, nic_id, vm_size,
                      admin_username, ssh_public_key, os_disk_gb=1024, image=DEFAULT_IMAGE,
-                     os_disk_name=None):
+                     os_disk_name=None, managed_identity=False):
         '''
         Create a Linux VM with SSH key login only and Trusted Launch.
 
@@ -271,7 +262,9 @@ class VmManager:
         The datastore lives on the OS disk; Ubuntu grows the root partition to
         the full disk size on first boot. The disk and network interface are
         deleted together with the VM. os_disk_name defaults to <name>-osdisk,
-        instead of Azure's long generated name.
+        instead of Azure's long generated name. With managed_identity the VM
+        gets a system-assigned identity; its principal ID is in the result
+        under identity.principalId.
 
         An existing VM is returned unchanged: its OS profile cannot be updated.
         '''
@@ -280,11 +273,9 @@ class VmManager:
         if existing:
             log.info(f"VM '{name}' already exists, skipping creation.")
             return existing
-        result = self._arm(
-            'PUT', path, _COMPUTE_API,
-            json={
-                'location': location,
-                'properties': {
+        body = {
+            'location': location,
+            'properties': {
                     'hardwareProfile': {'vmSize': vm_size},
                     'storageProfile': {
                         'imageReference': parse_image_urn(image),
@@ -314,9 +305,11 @@ class VmManager:
                         'securityType': 'TrustedLaunch',
                         'uefiSettings': {'secureBootEnabled': True, 'vTpmEnabled': True},
                     },
-                },
             },
-        )
+        }
+        if managed_identity:
+            body['identity'] = {'type': 'SystemAssigned'}
+        result = self._arm('PUT', path, _COMPUTE_API, json=body)
         log.info(f"VM '{name}' ready.")
         return result
 

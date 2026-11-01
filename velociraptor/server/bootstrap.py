@@ -50,7 +50,7 @@ import zipfile
 from pathlib import Path
 
 DEFAULTS = {
-    'expected_clients':    100,
+    'expected_clients':    1000,
     'package_prefix':      'Velociraptor',
     'api_name':            'cycas_api',
     'msi_amd64_url':       '',   # empty: the MSI from the Velociraptor release
