@@ -37,7 +37,7 @@ from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 from core.manager.webapp import WebappManager
 from core.manager.vm import VmManager, ScriptFailed, parse_image_urn
 from core.utils.postprocess import download_velociraptor, get_velociraptor_version
-from core.utils.collector import build_offline_collector, CollectorBuildError
+from core.utils.collector import build_offline_collector, build_legacy_collectors, CollectorBuildError
 from core.utils.taskrunner import current_task, emit, run_tasks
 
 ROOT        = Path(__file__).parent
@@ -679,6 +679,12 @@ def download_password_setting():
     if 'velociraptor_server_download_password' in env:
         return env['velociraptor_server_download_password']
     return velociraptor_server_settings()['velociraptor_server_download_password']
+
+
+def collector_legacy_setting():
+    '''VELOCIRAPTOR_COLLECTOR_LEGACY, default true.'''
+    value = read_env_defaults(ENV_FILE).get('velociraptor_collector_legacy', 'true')
+    return value.strip().lower() not in ('false', 'no', 'n', '0')
 
 
 def expected_clients_setting():
@@ -1769,16 +1775,29 @@ def provision_collector(credential, subscription_id, resource_group,
     info('Run it on a Windows endpoint to collect Windows.Triage.Targets and')
     info(f'uploads the encrypted result to: {blob_uri}/{container}')
     info(f'The SAS URL embedded in the collector expires {expiry:%Y-%m-%d}.')
+    collectors = [(collector, 'Windows 10/11, Server 2016 and later (64-bit)')]
 
-    step(f"Uploading collector binary to '{BINARIES_CONTAINER}' container...")
+    if collector_legacy_setting():
+        step('Building legacy collectors (older and 32-bit Windows)...')
+        try:
+            collectors += build_legacy_collectors(velo_binary, collector, velo_url, ROOT / 'build' / 'collector')
+            success('Legacy collectors built.')
+        except CollectorBuildError as e:
+            # The regular collector is ready, so carry on without them.
+            info(f'Legacy collector build failed: {e}')
+            info('Re-run easy_install.py to try again.')
+
+    step(f"Uploading collector binaries to '{BINARIES_CONTAINER}' container...")
     blob.authenticate()
     blob.switch_to_account_key(subscription_id, resource_group, account_name)
-    blob.upload_file(BINARIES_CONTAINER, collector.name, collector)
-    success(f'Collector available at: {blob_uri}/{BINARIES_CONTAINER}/{collector.name}')
-    url, expiry = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
-                                             BINARIES_CONTAINER, collector.name, expiry_days=DOWNLOAD_SAS_VALID_DAYS)
-    info(f'Download link (expires {expiry:%Y-%m-%d}):')
-    info(f'  {url}')
+    for path, purpose in collectors:
+        blob.upload_file(BINARIES_CONTAINER, path.name, path)
+    success(f'Collectors available in: {blob_uri}/{BINARIES_CONTAINER}/')
+    for path, purpose in collectors:
+        url, link_expiry = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
+                                                      BINARIES_CONTAINER, path.name, expiry_days=DOWNLOAD_SAS_VALID_DAYS)
+        info(f'{path.name} — {purpose}')
+        info(f'  Download link (expires {link_expiry:%Y-%m-%d}): {url}')
 
 
 # ---------------------------------------------------------------------------
@@ -2170,11 +2189,14 @@ def main():
         info('             az keyvault secret show --vault-name '
              f"{keyvault_name} --name {KEYVAULT_VELO_CONFIGS['client.config.yaml']} --query value -o tsv > client.config.yaml")
 
-    # The build folder only ever holds the collector of the latest build.
-    collector = next((ROOT / 'build' / 'collector' / 'datastore').glob('Collector_*'), None)
-    if collector:
+    # The build folder only ever holds the collectors of the latest build.
+    build = ROOT / 'build' / 'collector'
+    collectors = sorted(build.glob('datastore/Collector_*')) + sorted(build.glob('legacy/Collector_*'))
+    if collectors:
         print()
-        info(f'Offline collector — {collector}')
+        info(f'Offline collector — {collectors[0]}')
+        for legacy in collectors[1:]:
+            info(f'  Legacy    — {legacy}')
         if keyvault_name:
             info(f"  ZIP password — Key Vault '{keyvault_name}', secret "
                  f"'{keyvault_password_location or KEYVAULT_PASSWORD_LOCATION}' (Cycas uses it to open the ZIPs)")

@@ -27,7 +27,7 @@ from azure.identity import DefaultAzureCredential
 
 from core.manager.keyvault import KeyvaultManager
 from core.utils.postprocess import download_velociraptor
-from core.utils.collector import build_offline_collector, CollectorBuildError
+from core.utils.collector import build_offline_collector, build_legacy_collectors, CollectorBuildError
 
 BASE_DIR     = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent.parent
@@ -145,6 +145,15 @@ def main():
         error(str(e))
 
     success(f'Collector built: {collector}')
+
+    if os.getenv('VELOCIRAPTOR_COLLECTOR_LEGACY', 'true').strip().lower() not in ('false', 'no', 'n', '0'):
+        step('Building legacy collectors (older and 32-bit Windows)...')
+        try:
+            for path, purpose in build_legacy_collectors(velo_binary, collector, velo_url, BUILD_DIR):
+                success(f'{path} — {purpose}')
+        except CollectorBuildError as e:
+            info(f'Legacy collector build failed: {e}')
+
     info('Run it on a Windows endpoint to collect Windows.Triage.Targets and')
     info('upload the encrypted results via the SAS URL above.')
 
