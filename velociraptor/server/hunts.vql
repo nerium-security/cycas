@@ -15,19 +15,38 @@
 
 LET Expires <= now() + 604800  -- 7 days
 
+-- Live data (HUN001-HUN006) has its own small hunts: it is volatile, so
+-- it should be collected first and not depend on the long triage collection.
+-- Server.Utils.BackupAzure sends each finished flow to Cycas, so these results
+-- end up in ADX as well. No hunt uploads executables, and potentially unstable
+-- Windows APIs are disabled (DISABLE_DANGEROUS_API_CALLS) where an artifact
+-- offers that.
+
 -- Mass triage collection: each endpoint collects _KapeTriage, zips it and
 -- uploads it straight to the Cycas input container, bypassing the server
 -- (see the "Collecting triage packages at scale" guide). Review the targets
 -- before starting it.
 SELECT hunt(
-    description="HUN006 - Triage collection to Cycas (direct upload)",
+    description="HUN007 - Mass triage collection to Cycas (direct upload)",
     artifacts="Custom.Windows.Triage.Targets.AzureUpload",
     spec=dict(`Custom.Windows.Triage.Targets.AzureUpload`=dict(
         SasURL=TriageSasURL,
         ZipPassword=TriageZipPassword,
-        HighLevelTargets='["_KapeTriage"]')),
+        -- Not _Live: it only adds the adaptive targets, which collect the
+        -- executables behind processes, connections, services and tasks.
+        HighLevelTargets='["_KapeTriage"]',
+        -- The live data comes from the separate hunts, so not twice in ADX.
+        CollectLiveData='N')),
     pause=TRUE, expires=Expires)
 FROM scope()
+
+SELECT hunt(
+    description="HUN006 - Scheduled tasks",
+    artifacts="Windows.System.TaskScheduler",
+    spec=dict(`Windows.System.TaskScheduler`=dict(AlsoUpload='N', UploadCommands='N')),
+    pause=TRUE, expires=Expires)
+FROM scope()
+
 
 SELECT hunt(
     description="HUN005 - Collect targeted Windows Security event log",
@@ -47,14 +66,16 @@ FROM scope()
 SELECT hunt(
     description="HUN003 - NetstatEnriched",
     artifacts="Windows.Network.NetstatEnriched",
-    spec=dict(`Windows.Network.NetstatEnriched`=dict(ProcessNameRegex=".", DISABLE_DANGEROUS_API_CALLS='Y')),
+    spec=dict(`Windows.Network.NetstatEnriched`=dict(
+        ProcessNameRegex=".", DumpProcess='N', KillProcess='N', DISABLE_DANGEROUS_API_CALLS='Y')),
     pause=TRUE, expires=Expires)
 FROM scope()
 
 SELECT hunt(
     description="HUN002 - Windows Services",
     artifacts="Windows.System.Services",
-    spec=dict(`Windows.System.Services`=dict(Calculate_hashes='Y', CertificateInfo='Y')),
+    spec=dict(`Windows.System.Services`=dict(
+        Calculate_hashes='Y', CertificateInfo='Y', DISABLE_DANGEROUS_API_CALLS='Y')),
     pause=TRUE, expires=Expires)
 FROM scope()
 
