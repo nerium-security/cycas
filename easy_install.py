@@ -909,7 +909,9 @@ def provision_keyvault(credential, subscription_id, resource_group, location,
         kv.set_secret(password_location, zip_password)
         success(f"Secret '{password_location}' uploaded.")
     else:
-        info(f"Skipping secret upload - set '{password_location}' in Key Vault manually if you use a password for the offline collector ZIP.")
+        # The collector task reuses the secret, or generates a password and stores it there.
+        info(f"No ZIP password given: the collector uses the one in Key Vault secret '{password_location}', "
+             'or generates it.')
 
     portal_url = (
         f'https://portal.azure.com/#resource/subscriptions/{subscription_id}'
@@ -2179,6 +2181,9 @@ def main():
     if collector:
         print()
         info(f'Offline collector — {collector}')
+        if keyvault_name:
+            info(f"  ZIP password — Key Vault '{keyvault_name}', secret "
+                 f"'{keyvault_password_location or KEYVAULT_PASSWORD_LOCATION}' (Cycas uses it to open the ZIPs)")
     info('')
 
 
