@@ -11,7 +11,7 @@ Requirements:
     - Contributor access on the target resource group
 '''
 
-import io
+import base64
 import json
 import logging
 import os
@@ -19,6 +19,7 @@ import re
 import secrets
 import subprocess
 import sys
+import tempfile
 import time
 import random
 import string
@@ -34,7 +35,10 @@ from core.manager.queue import QueueManager
 from core.manager.functions import FunctionsManager
 from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 from core.manager.webapp import WebappManager
-from core.utils.postprocess import download_velociraptor
+from core.manager.vm import VmManager, ScriptFailed, parse_image_urn
+from core.utils.postprocess import download_velociraptor, get_velociraptor_version
+from core.utils.collector import build_offline_collector, build_legacy_collectors, CollectorBuildError
+from core.utils.taskrunner import current_task, emit, run_tasks
 
 ROOT        = Path(__file__).parent
 ENV_FILE    = ROOT / '.env'
@@ -45,21 +49,73 @@ LOG_DIR  = ROOT / 'logs'
 LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / f'setup_{time.strftime("%Y%m%d_%H%M%S")}.log'
 
-_console_handler = logging.StreamHandler()
+class _ConsoleHandler(logging.Handler):
+    '''Show warnings on the console. Records logged from a provisioning task
+    go to the task status display rather than straight to the terminal.'''
+    def emit(self, record):
+        emit(self.format(record), file=sys.stderr, warning=True)
+
+_console_handler = _ConsoleHandler()
 _console_handler.setLevel(logging.WARNING)
 _console_handler.setFormatter(logging.Formatter('%(message)s'))
 
 _file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
 _file_handler.setLevel(logging.INFO)
-_file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s'))
+_file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)-8s [%(threadName)s] %(name)s: %(message)s'))
 
 logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
 
-TRIAGE_TARGETS_URL  = 'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip'
+# For details already summarised on the console, such as task tracebacks.
+_file_log = logging.getLogger('easy_install.file')
+_file_log.addHandler(_file_handler)
+_file_log.propagate = False
+
 COLLECTOR_SAS_VALID_DAYS = 90
+DOWNLOAD_SAS_VALID_DAYS  = 30   # read-only links to the collector and client packages
 BINARIES_CONTAINER  = 'binaries'
 KEYVAULT_PASSWORD_LOCATION = 'velociraptor-collection-password'
 KEYVAULT_SAS_LOCATION      = 'collector-sas-url'
+
+# Velociraptor server VM
+VELO_SERVER_DIR          = ROOT / 'velociraptor' / 'server'
+VELO_SERVER_FILES        = [VELO_SERVER_DIR / name for name in ('bootstrap.py', 'hunts.vql')]
+VELO_SERVER_FILES       += [ROOT / 'velociraptor' / 'definitions' / 'Server.Utils.BackupAzure.yaml',
+                            ROOT / 'velociraptor' / 'definitions' / 'Custom.Windows.Triage.Targets.AzureUpload.yaml',
+                            ROOT / 'velociraptor' / 'definitions' / 'Server.Monitor.Autolabeling.Clients.yaml']
+VELO_BLOB_PREFIX         = 'velociraptor-server'                              # in BINARIES_CONTAINER
+VELO_VM_ADMIN            = 'cycas'
+VELO_REMOTE_LOG          = '/opt/cycas-velociraptor/bootstrap.log'
+KEYVAULT_VELO_PASSWORD   = 'velociraptor-server-admin-password'
+KEYVAULT_WEBAPP_PASSWORD = 'cycas-webapp-password'   # must match WEBAPP_PASSWORD_SECRET in webapp/app.py
+WEBAPP_USERNAME          = 'cycas'
+KEYVAULT_WEBAPP_SSH_KEY    = 'cycas-webapp-ssh-private-key'
+KEYVAULT_WEBAPP_SSH_PUBKEY = 'cycas-webapp-ssh-public-key'
+WEBAPP_BLOB_PREFIX       = 'webapp'                                          # in BINARIES_CONTAINER
+# Not the 10.42.0.0/24 of the Velociraptor server's VNet, so the two can be peered later.
+WEBAPP_VNET_PREFIX       = '10.43.0.0/24'
+WEBAPP_STAGE_IGNORE      = ('__pycache__', '.venv', '.git', '.vscode', 'test', '*.pyc', '.env')
+WEBAPP_VM_DEFAULTS       = {
+    'webapp_vm_size':        'Standard_B1s',
+    # 24.04, not the 26.04 of the Velociraptor server: the pinned dependencies
+    # (pandas, pydantic_core, ...) have no wheels for its newer Python yet.
+    'webapp_vm_image':       'Canonical:ubuntu-24_04-lts:server:latest',
+    'webapp_vm_os_disk_gb':  '30',
+}
+KEYVAULT_VELO_SSH_KEY    = 'velociraptor-server-ssh-private-key'
+KEYVAULT_VELO_SSH_PUBKEY = 'velociraptor-server-ssh-public-key'
+KEYVAULT_VELO_CONFIGS    = {'server.config.yaml': 'velociraptor-server-config-yaml',
+                            'client.config.yaml': 'velociraptor-client-config-yaml'}
+KEYVAULT_MAX_SECRET_SIZE = 25 * 1024
+VELO_SETTINGS_DEFAULTS   = {
+    'velociraptor_server_vm_size':           'Standard_B2ms',
+    'velociraptor_server_image':             'Canonical:ubuntu-26_04-lts:server:latest',
+    'velociraptor_server_os_disk_gb':        '1024',
+    'velociraptor_server_expected_clients':  '1000',
+    'velociraptor_server_admin_user':        'admin',
+    'velociraptor_server_package_prefix':    'Velociraptor',
+    'velociraptor_server_api_name':          'cycas_api',
+    'velociraptor_server_download_password': 'infected',
+}
 
 SKUS = {
     '1': ('Dev(No SLA)_Standard_E2a_v4', 'Basic',    'Small engagements / Testing  (2 vCores,  16 GB RAM/node) ~$2.40/day when idle'),
@@ -71,11 +127,19 @@ SKUS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def section(title): print(f'\n{"="*60}\n  {title}\n{"="*60}\n'); logging.info('=== %s ===', title)
-def step(msg):      print(f'  >> {msg}'); logging.info('>> %s', msg)
-def info(msg):      print(f'     {msg}'); logging.info(msg)
-def success(msg):   print(f'  [OK] {msg}'); logging.info('[OK] %s', msg)
-def error(msg):     print(f'  [ERROR] {msg}', file=sys.stderr); logging.error(msg); sys.exit(1)
+# Inside a provisioning task these lines go to the task status display
+# (core.utils.taskrunner), outside one they are printed directly.
+def section(title):
+    if current_task():
+        emit(f'--- {title} ---', status=False)
+    else:
+        print(f'\n{"="*60}\n  {title}\n{"="*60}\n')
+    logging.info('=== %s ===', title)
+
+def step(msg):      emit(f'  >> {msg}'); logging.info('>> %s', msg)
+def info(msg):      emit(f'     {msg}'); logging.info(msg)
+def success(msg):   emit(f'  [OK] {msg}'); logging.info('[OK] %s', msg)
+def error(msg):     emit(f'  [ERROR] {msg}', file=sys.stderr); logging.error(msg); sys.exit(1)
 def rand6():        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
 def ask(prompt_text=''):
@@ -184,11 +248,24 @@ def select_location(azure, subscription_id, default='westeurope'):
         print('  Enter a number, M for more, or press Enter for default.')
 
 
-def write_env_values(values):
+def app_settings_from_env():
+    '''The .env values to apply as Function App / Web App settings. The
+    Velociraptor server settings are only used by this installer and can
+    hold SAS URLs, so they stay out.'''
+    return {k.upper(): v for k, v in read_env_defaults(ENV_FILE).items()
+            if v and not k.startswith(('velociraptor_server_', 'webapp_vm_'))}
+
+
+def ensure_env_file():
     if not ENV_FILE.exists():
         ENV_FILE.write_text(ENV_EXAMPLE.read_text() if ENV_EXAMPLE.exists() else '')
         info('Created .env from .env_example' if ENV_EXAMPLE.exists() else 'Created empty .env')
 
+
+def write_env_values(values):
+    '''Update .env in place. Not thread-safe: provisioning tasks return their
+    values instead, and the main thread writes them once a phase is done.'''
+    ensure_env_file()
     content = ENV_FILE.read_text()
 
     for key, value in values.items():
@@ -439,37 +516,89 @@ def collect_keyvault_config(resource_group, step_label='7/7'):
     return keyvault_name, password_location, zip_password
 
 
-def collect_webapp_config(resource_group, step_label='8/8'):
+def random_dns_label():
+    '''A random DNS label: a public name that reveals nothing about the case.'''
+    alphabet = string.ascii_lowercase + string.digits
+    return secrets.choice(string.ascii_lowercase) + ''.join(secrets.choice(alphabet) for _ in range(15))
+
+
+def unique_dns_label(vms, location):
+    name = random_dns_label()
+    while not vms.dns_label_available(location, name):
+        name = random_dns_label()
+    return name
+
+
+def vm_resource_prefix(resource_group, role):
+    '''<resource group>-<role>; VM names allow fewer characters than resource
+    group names (no '.', '(', ')' or '_').'''
+    return re.sub(r'[^A-Za-z0-9-]', '-', resource_group[:40]).strip('-') + f'-{role}'
+
+
+def webapp_vm_settings():
+    '''WEBAPP_VM_* settings: .env, then .env_example, then built-in defaults.'''
+    merged = dict(WEBAPP_VM_DEFAULTS)
+    for source in (read_env_defaults(ENV_EXAMPLE), read_env_defaults(ENV_FILE)):
+        merged.update({k: v for k, v in source.items() if k.startswith('webapp_vm_') and v})
+    return merged
+
+
+def collect_webapp_config(vms, resource_group, location, setup_mode, step_label='8/8'):
+    '''
+    Ask how to run the web app (the status dashboard).
+
+    Returns (mode, vm, allowed_ips): mode is 'vm', 'local' or None, vm the VM
+    settings stored in the install state for 'vm'. Easy mode always uses a VM.
+    '''
     section(f'Step {step_label} — Web Application')
 
-    info('A Web App provides a status dashboard for the Cycas pipeline.')
+    info('The web app is the status dashboard of the Cycas pipeline. It runs on a small VM')
+    info('(HTTPS with Let\'s Encrypt, login, limited to your IPs), or locally on your machine.')
     print()
-    create_wa = ask('  Set up the Web Application? [Y/n]: ').strip().lower()
-    if create_wa in ('n', 'no'):
-        return None, None, None
+    if setup_mode == 'advanced':
+        if ask('  Set up the web app? [Y/n]: ').strip().lower() in ('n', 'no'):
+            return None, None, None
+        print()
+        info('  1) VM     — reachable for your team from the allowed IPs  [recommended]')
+        info('  2) Local  — only on this machine, started by hand with gunicorn')
+        print()
+        if ask('  Select [1]: ').strip() == '2':
+            return 'local', None, None
 
-    print()
-    info('Run the webapp locally (1) or deploy it to Azure App Service (2)?')
-    info('  1) Local  — Fastest and most secure option. Only you can access it on your device.')
-    info('  2) Azure  — Adds 10+ minutes of deployment time. Multiple teammembers can access it.')
-    print()
-    mode_choice = ask('  Select [1]: ').strip()
-    if mode_choice == '2':
-        webapp_mode = 'azure'
-    else:
-        webapp_mode = 'local'
-
-    if webapp_mode == 'local':
+    settings = webapp_vm_settings()
+    prefix   = vm_resource_prefix(resource_group, 'webapp')
+    if vms.public_ip_exists(resource_group, f'{prefix}-ip'):
+        print()
+        info(f"'{prefix}-ip' already exists: this resource group already has a web app VM.")
+        info('Resume the saved session of that install, or use another resource group.')
+        info('Continuing with the web app running locally.')
         return 'local', None, None
 
-    rg_slug  = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
-    app_name = prompt('Web app name', default=f'{rg_slug[:43]}-webapp-{rand6()}')
+    name    = unique_dns_label(vms, location)
+    vm_size = settings['webapp_vm_size']
+    if setup_mode == 'advanced':
+        vm_size = prompt('VM size', default=vm_size)
+    parse_image_urn(settings['webapp_vm_image'])   # fail now on a malformed WEBAPP_VM_IMAGE
 
     print()
-    print('  Enter IP addresses or CIDR ranges allowed to access the webapp.')
+    print('  Enter IP addresses or CIDR ranges allowed to use the web app (and SSH to its VM).')
     print('  All other traffic will be denied.')
     print()
+    allowed_ips = collect_allowed_ips()
 
+    vm = {
+        'name':            name,
+        'resource_prefix': prefix,
+        'fqdn':            f'{name}.{location}.cloudapp.azure.com',
+        'vm_size':         vm_size,
+        'image':           settings['webapp_vm_image'],
+        'os_disk_gb':      int(settings['webapp_vm_os_disk_gb']),
+    }
+    return 'vm', vm, allowed_ips
+
+
+def collect_allowed_ips():
+    '''Ask for IPs / CIDR ranges, offering the current external IP first.'''
     try:
         my_ip = urlopen('https://api.ipify.org', timeout=5).read().decode()
     except Exception:
@@ -493,7 +622,164 @@ def collect_webapp_config(resource_group, step_label='8/8'):
         allowed_ips.append(ip)
         success(f"'{ip}' added.")
 
-    return webapp_mode, app_name, allowed_ips
+    return allowed_ips
+
+
+def velociraptor_server_settings():
+    '''VELOCIRAPTOR_SERVER_* settings: .env, then .env_example, then built-in defaults.'''
+    example = read_env_defaults(ENV_EXAMPLE)
+    env     = read_env_defaults(ENV_FILE)
+    merged  = dict(VELO_SETTINGS_DEFAULTS)
+    for source in (example, env):
+        merged.update({k: v for k, v in source.items() if k.startswith('velociraptor') and v})
+    return merged
+
+
+VELO_ROLES        = ('administrator', 'org_admin', 'investigator', 'analyst', 'artifact_writer', 'reader')
+VELO_DEFAULT_ROLE = 'investigator'
+
+
+def velociraptor_users_setting():
+    '''
+    VELOCIRAPTOR_SERVER_USERS as a list of (name, role, Key Vault secret name).
+
+    Format: comma-separated name[:role], e.g. "alice:administrator,bob". A user
+    without a role gets VELO_DEFAULT_ROLE. Raises ValueError for anything that
+    would fail on the server, so the installer stops before provisioning.
+    '''
+    settings = velociraptor_server_settings()
+    value    = settings.get('velociraptor_server_users', '')
+    reserved = {settings['velociraptor_server_admin_user'].lower(), settings['velociraptor_server_api_name'].lower()}
+    users, names, secrets_ = [], set(), set()
+    for item in filter(None, (part.strip() for part in value.split(','))):
+        name, _, role = item.partition(':')
+        name, role    = name.strip(), (role.strip().lower() or VELO_DEFAULT_ROLE)
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._@-]{0,63}', name):
+            raise ValueError(f"VELOCIRAPTOR_SERVER_USERS: invalid user name '{name}'.")
+        if role not in VELO_ROLES:
+            raise ValueError(f"VELOCIRAPTOR_SERVER_USERS: unknown role '{role}' for '{name}' "
+                             f"(use one of {', '.join(VELO_ROLES)}).")
+        if name.lower() in reserved:
+            raise ValueError(f"VELOCIRAPTOR_SERVER_USERS: '{name}' is already the admin or API account.")
+        if name.lower() in names:
+            raise ValueError(f"VELOCIRAPTOR_SERVER_USERS: '{name}' is listed twice.")
+        # Key Vault secret names only allow letters, digits and hyphens.
+        secret = 'velociraptor-user-' + re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-') + '-password'
+        if secret in secrets_:
+            raise ValueError(f"VELOCIRAPTOR_SERVER_USERS: '{name}' clashes with another user's Key Vault secret name.")
+        names.add(name.lower())
+        secrets_.add(secret)
+        users.append((name, role, secret))
+    return users
+
+
+def download_password_setting():
+    '''VELOCIRAPTOR_SERVER_DOWNLOAD_PASSWORD; set but empty in .env means no password.'''
+    env = read_env_defaults(ENV_FILE)
+    if 'velociraptor_server_download_password' in env:
+        return env['velociraptor_server_download_password']
+    return velociraptor_server_settings()['velociraptor_server_download_password']
+
+
+def collector_legacy_setting():
+    '''VELOCIRAPTOR_COLLECTOR_LEGACY, default true.'''
+    value = read_env_defaults(ENV_FILE).get('velociraptor_collector_legacy', 'true')
+    return value.strip().lower() not in ('false', 'no', 'n', '0')
+
+
+def expected_clients_setting():
+    '''VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS as a positive integer.'''
+    value = velociraptor_server_settings()['velociraptor_server_expected_clients']
+    if not value.isdigit() or int(value) < 1:
+        raise ValueError(f"VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS must be a positive number, got '{value}'.")
+    return int(value)
+
+
+def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, step_label='9/9',
+                                       allowed_ips=None):
+    '''
+    Ask whether to deploy a Velociraptor server and how.
+
+    Returns None when declined, otherwise a dict with the VM settings that are
+    stored in the install state. The server settings that only affect the
+    software (expected clients, package prefix, MSI templates, ...) are read
+    from .env when provisioning, so a re-run applies changes to them.
+
+    The Azure resources are named <resource group>-velo-vm, -ip, ... without
+    a suffix: their names only need to be unique within the resource group.
+    The DNS name is random, because it is public and globally unique.
+    '''
+    section(f'Step {step_label} — Velociraptor Server (optional)')
+
+    info('Deploys a Velociraptor server on an Ubuntu VM with a static IP. It builds client')
+    info('installers, creates default hunts (paused), and sends finished collections to')
+    info('the input container, so they are ingested into ADX.')
+    info(f'Settings: VELOCIRAPTOR_SERVER_* in .env. Default hunts: {VELO_SERVER_DIR / "hunts.vql"}')
+    print()
+    answer = ask('  Deploy a Velociraptor server? [Y/n]: ').strip().lower()
+    if answer in ('n', 'no'):
+        return None
+
+    # VM names allow fewer characters than resource group names (no '.', '(', ')' or '_').
+    resource_prefix = vm_resource_prefix(resource_group, 'velo')
+    if vms.public_ip_exists(resource_group, f'{resource_prefix}-ip'):
+        # Reusing it would give the existing server a new DNS name and cut off
+        # every client installed against the old one.
+        print()
+        info(f"'{resource_prefix}-ip' already exists: this resource group already has a Velociraptor server.")
+        info('Resume the saved session of that install, or use another resource group.')
+        info('Continuing without a Velociraptor server.')
+        return None
+
+    settings = velociraptor_server_settings()
+
+    if setup_mode == 'easy':
+        name    = unique_dns_label(vms, location)
+        vm_size = settings['velociraptor_server_vm_size']
+    else:
+        print()
+        while True:
+            name = prompt('Server name (DNS label: 3-63 lowercase letters, digits and hyphens)', default=random_dns_label())
+            if not re.fullmatch(r'[a-z][a-z0-9-]{1,61}[a-z0-9]', name):
+                print('  Invalid name: start with a letter, end with a letter or digit, only a-z, 0-9 and hyphens.')
+                continue
+            if not vms.dns_label_available(location, name):
+                print(f'  {name}.{location}.cloudapp.azure.com is already taken, choose another name.')
+                continue
+            break
+        vm_size = prompt('VM size', default=settings['velociraptor_server_vm_size'])
+
+    # Fail now on malformed settings rather than halfway through provisioning.
+    parse_image_urn(settings['velociraptor_server_image'])
+    expected_clients_setting()
+    velociraptor_users_setting()
+    image = settings['velociraptor_server_image']
+
+    if allowed_ips:
+        info(f'GUI and SSH limited to the same IPs as the web app: {", ".join(allowed_ips)}')
+    else:
+        print()
+        print('  Enter IP addresses or CIDR ranges allowed to use the Velociraptor GUI and SSH.')
+        print('  Clients can always connect; all other GUI and SSH traffic is denied.')
+        print()
+        allowed_ips = collect_allowed_ips()
+
+    return {
+        'name':             name,
+        'resource_prefix':  resource_prefix,
+        'fqdn':             f'{name}.{location}.cloudapp.azure.com',
+        'vm_size':          vm_size,
+        'image':            image,
+        'os_disk_gb':       int(settings['velociraptor_server_os_disk_gb']),
+        'admin_user':       settings['velociraptor_server_admin_user'],
+        'allowed_ips':      allowed_ips,
+    }
+
+
+def velo_resource_prefix(velo):
+    '''Return the prefix of the Velociraptor server's Azure resource names.
+    Sessions saved before resource_prefix existed used the DNS label.'''
+    return velo.get('resource_prefix', velo['name'])
 
 
 def collect_setup_mode():
@@ -527,19 +813,21 @@ def auto_generate_names(resource_group, defaults):
     suffix        = rand6()
     rg_slug       = re.sub(r'[^a-z0-9]', '', resource_group.lower())
 
-    account_name     = (rg_slug + 'data')[:18] + suffix
+    # Storage account names max out at 24 characters: shorten the resource
+    # group part, so the role and the suffix always stay in the name.
+    account_name     = rg_slug[:13] + 'input' + suffix
     table_name       = defaults.get('blob_logtable_name',    'statusupdate')
     queue_name       = defaults.get('blob_queue_name',       'triagepackages')
-    container        = defaults.get('blob_container_input',  'uploads')
+    container        = defaults.get('blob_container_input',  'triage-input')
     status_container = defaults.get('blob_container_status', 'status')
 
     cluster_name  = (rg_slug[:13] + 'adx' + suffix)
     database_name = defaults.get('adx_database_name', 'dfir')
 
     watcher_app   = f'{resource_group[:43]}-watcher-{suffix}'
-    watcher_sa    = (rg_slug + 'watcher')[:18] + suffix
+    watcher_sa    = rg_slug[:11] + 'watcher' + suffix
     processor_app = f'{resource_group[:41]}-processor-{suffix}'
-    processor_sa  = (rg_slug + 'processor')[:18] + suffix
+    processor_sa  = rg_slug[:9] + 'processor' + suffix
     insights_name = f'{rg_slug[:50]}-insights'
     keyvault_name = f'{rg_slug[:14]}-kv-{suffix}'
 
@@ -551,10 +839,10 @@ def collect_storage_config(defaults, resource_group, step_label='4/7'):
     section(f'Step {step_label} — Storage Account')
 
     rg_slug = re.sub(r'[^a-z0-9]', '', resource_group.lower())
-    account_name     = prompt('Storage account name (3-24 lowercase alphanumeric)', default=(rg_slug + 'data')[:18] + rand6())
+    account_name     = prompt('Input storage account name (3-24 lowercase alphanumeric)', default=rg_slug[:13] + 'input' + rand6())
     table_name       = prompt('Status table name',              default=defaults.get('blob_logtable_name',    'statusupdate'))
     queue_name       = prompt('Queue name',                     default=defaults.get('blob_queue_name',       'triagepackages'))
-    container        = prompt('Blob container for uploads',     default=defaults.get('blob_container_input',  'uploads'))
+    container        = prompt('Blob container for triage ZIPs to process', default=defaults.get('blob_container_input', 'triage-input'))
     status_container = prompt('Blob container for status JSON', default=defaults.get('blob_container_status', 'status'))
     config_container = prompt('Blob container for config',      default=defaults.get('blob_container_config', 'config'))
 
@@ -574,7 +862,8 @@ def confirm_plan(run_mode,
                  watcher_app=None, watcher_sa=None,
                  processor_app=None, processor_sa=None,
                  keyvault_name=None, keyvault_password_location=None,
-                 webapp_mode=None, webapp_app=None, webapp_allowed_ips=None):
+                 webapp_mode=None, webapp_app=None, webapp_allowed_ips=None,
+                 velo_server=None):
 
     section('Summary — Review before provisioning')
 
@@ -618,11 +907,28 @@ def confirm_plan(run_mode,
         if webapp_mode == 'local':
             print('\n  Web Application')
             info('Mode: Local (storage roles assigned to current user)')
-        elif webapp_mode == 'azure' and webapp_app:
+        elif webapp_mode == 'vm' and webapp_app:
             print('\n  Web Application')
-            info(f'Mode       : Azure App Service')
-            info(f'App name   : {webapp_app}')
+            info(f'URL        : https://{webapp_app["fqdn"]}/  (static IP, Let\'s Encrypt)')
+            info(f'VM         : {webapp_app["resource_prefix"]}-vm  ({webapp_app["vm_size"]}, {webapp_app["image"]})')
             info(f'Allowed IPs: {", ".join(webapp_allowed_ips)}')
+
+    if velo_server:
+        settings = velociraptor_server_settings()
+        version  = re.search(r'velociraptor-v([\d.]+)-', settings.get('velociraptor_url', ''))
+        print('\n  Velociraptor server')
+        info(f'URL          : https://{velo_server["fqdn"]}/  (static IP)')
+        info(f'VM           : {velo_resource_prefix(velo_server)}-vm  ({velo_server["vm_size"]}, {velo_server["image"]}, '
+             f'{velo_server["os_disk_gb"]} GB)')
+        info(f'Version      : {version.group(1) if version else settings.get("velociraptor_url", "?")}')
+        info(f'Endpoints    : {expected_clients_setting()} expected (VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS)')
+        info(f'GUI and SSH  : {", ".join(velo_server["allowed_ips"])}')
+        info(f'Users        : {velo_server["admin_user"]} (administrator)'
+             + ''.join(f', {name} ({role})' for name, role, _ in velociraptor_users_setting()))
+        for arch, key in (('x64', 'velociraptor_server_msi_amd64_url'), ('x86', 'velociraptor_server_msi_x86_url')):
+            info(f'MSI {arch}      : {"custom (" + key.upper() + ")" if settings.get(key) else "default (Velociraptor release)"}')
+        hunts = 'custom (VELOCIRAPTOR_SERVER_HUNTS_URL)' if settings.get('velociraptor_server_hunts_url') else 'default (hunts.vql)'
+        info(f'Hunts        : {hunts}, created paused')
 
     print()
     confirm = ask('Proceed with provisioning? [Y/n]: ').strip().lower()
@@ -659,40 +965,36 @@ def provision_keyvault(credential, subscription_id, resource_group, location,
         kv.set_secret(password_location, zip_password)
         success(f"Secret '{password_location}' uploaded.")
     else:
-        info(f"Skipping secret upload - set '{password_location}' in Key Vault manually if you use a password for the offline collector ZIP.")
+        # The collector task reuses the secret, or generates a password and stores it there.
+        info(f"No ZIP password given: the collector uses the one in Key Vault secret '{password_location}', "
+             'or generates it.')
 
     portal_url = (
         f'https://portal.azure.com/#resource/subscriptions/{subscription_id}'
         f'/resourceGroups/{resource_group}'
         f'/providers/Microsoft.KeyVault/vaults/{vault_name}'
     )
-    write_env_values({
+    return {
         'KEYVAULT_ENABLED':          'true',
         'KEYVAULT_URL':              vault_uri,
         'KEYVAULT_PORTAL_URL':       portal_url,
         'KEYVAULT_PASSWORDLOCATION': password_location,
-    })
-    success('.env updated with Key Vault settings.')
+    }
 
 
 # ---------------------------------------------------------------------------
 # Phase 3: Provision
 # ---------------------------------------------------------------------------
 
-def provision_storage(azure, credential, subscription_id,
-                      resource_group, location, new_rg,
+def provision_storage(credential, subscription_id,
+                      resource_group, location,
                       account_name, table_name, queue_name, container, status_container,
                       config_container,
                       defaults):
 
     section('Provisioning — Storage')
 
-    if new_rg:
-        step(f"Creating resource group '{resource_group}'...")
-        azure.create_resource_group(subscription_id, resource_group, location)
-        success(f"Resource group '{resource_group}' created.")
-
-    blob_uri       = f'https://{account_name}.blob.core.windows.net'
+    blob_uri      = f'https://{account_name}.blob.core.windows.net'
     table_endpoint = f'https://{account_name}.table.core.windows.net'
     queue_url      = f'https://{account_name}.queue.core.windows.net'
 
@@ -753,10 +1055,19 @@ def provision_storage(azure, credential, subscription_id,
                 for entry in entries
             ]
             defs_dest.mkdir(parents=True, exist_ok=True)
+            # Exported definitions are reused, but must match the binary that
+            # processes the collections: after a Velociraptor upgrade, export the
+            # built-in ones again. The Custom.* definitions are maintained in the
+            # repo and never overwritten.
+            version_file = defs_dest / '.velociraptor-version'
+            version      = get_velociraptor_version(binary) or ''
+            reexport     = version_file.is_file() and version_file.read_text().strip() != version
+            if reexport:
+                info(f'Velociraptor changed from {version_file.read_text().strip()} to {version}, exporting definitions again.')
             exported = 0
             for name in all_names:
                 dest = defs_dest / f'{name}.yaml'
-                if dest.exists():
+                if name.startswith('Custom.') or (dest.exists() and not reexport):
                     continue
                 result = subprocess.run(
                     [binary, 'artifacts', 'show', name],
@@ -767,6 +1078,7 @@ def provision_storage(azure, credential, subscription_id,
                     exported += 1
                 else:
                     info(f'Could not export {name}: {result.stderr.strip()}')
+            version_file.write_text(version + '\n')
             success(f'{exported} artifact definition(s) exported to {defs_dest}.')
     else:
         info('velociraptor_artifacts.json not found, skipping definition export.')
@@ -780,9 +1092,7 @@ def provision_storage(azure, credential, subscription_id,
     else:
         info('Definitions folder not found, skipping YAML upload.')
 
-    step('Writing .env...')
-
-    write_env_values({
+    return {
         'BLOB_LOGTABLE_ENABLED':   'true',
         'BLOB_LOGTABLE_URI':       table_endpoint,
         'BLOB_LOGTABLE_NAME':      table_name,
@@ -791,9 +1101,7 @@ def provision_storage(azure, credential, subscription_id,
         'BLOB_QUEUE_NAME':         queue_name,
         'BLOB_CONTAINER_STATUS':   status_container,
         'BLOB_CONTAINER_CONFIG':   config_container,
-    })
-
-    success('.env updated.')
+    }
 
 
 def provision_adx(credential, subscription_id,
@@ -838,9 +1146,7 @@ def provision_adx(credential, subscription_id,
     )
     success('Ingestion batching policy set.')
 
-    step('Writing .env...')
-
-    write_env_values({
+    return {
         'ADX_CLUSTER_ENABLED':                'true',
         'ADX_CLUSTER_URI':                    cluster.uri,
         'ADX_CLUSTER_INGESTION_URI':          cluster.data_ingestion_uri,
@@ -849,9 +1155,7 @@ def provision_adx(credential, subscription_id,
         'ADX_INGESTION_BATCHING_TIMESPAN':    defaults.get('adx_ingestion_batching_timespan', '00:00:30'),
         'ADX_INGESTION_BATCHING_MAX_ITEMS':   defaults.get('adx_ingestion_batching_max_items', '2500'),
         'ADX_INGESTION_BATCHING_MAX_SIZE_MB': defaults.get('adx_ingestion_batching_max_size_mb', '4096'),
-    })
-
-    success('.env updated.')
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -860,11 +1164,12 @@ def provision_adx(credential, subscription_id,
 
 def provision_functions(credential, subscription_id,
                         resource_group, location,
-                        data_account,
-                        cluster_name,
                         watcher_app, watcher_sa,
                         processor_app, processor_sa,
-                        keyvault_name, insights_name):
+                        insights_name):
+    '''Create the Function App infrastructure. Needs only the resource group,
+    so it runs alongside the storage and ADX provisioning. Returns the values
+    the role, settings, and deploy stages need.'''
 
     section('Provisioning — Azure Functions')
 
@@ -928,18 +1233,43 @@ def provision_functions(credential, subscription_id,
     )
     success(f"'{processor_app}' ready.")
 
-    watcher_principal   = watcher_result.get('identity', {}).get('principalId')
-    processor_principal = processor_result.get('identity', {}).get('principalId')
+    return {
+        'ai_conn_str':         ai_conn_str,
+        'watcher_conn':        watcher_conn,
+        'processor_conn':      processor_conn,
+        'watcher_principal':   watcher_result.get('identity', {}).get('principalId'),
+        'processor_principal': processor_result.get('identity', {}).get('principalId'),
+    }
 
-    # RBAC: grant both apps access to the data storage account
+
+def assign_functions_roles(credential, subscription_id, resource_group,
+                           data_account, keyvault_name, apps):
+    '''Grant both function apps access to the data storage account and Key Vault.'''
+
+    section('Provisioning — Azure Functions roles')
+
+    funcs = FunctionsManager(credential, subscription_id)
+
     step("Ensuring data storage roles for watcher managed identity...")
-    funcs.assign_data_storage_roles(resource_group, data_account, watcher_principal)
+    funcs.assign_data_storage_roles(resource_group, data_account, apps['watcher_principal'])
     success('Watcher storage roles ready.')
 
     step("Ensuring data storage roles for processor managed identity...")
-    funcs.assign_data_storage_roles(resource_group, data_account, processor_principal)
+    funcs.assign_data_storage_roles(resource_group, data_account, apps['processor_principal'])
     success('Processor storage roles ready.')
 
+    if keyvault_name:
+        step(f"Ensuring Key Vault Secrets User for watcher on '{keyvault_name}'...")
+        funcs.assign_keyvault_roles(resource_group, keyvault_name, apps['watcher_principal'])
+        success('Watcher Key Vault role ready.')
+
+        step(f"Ensuring Key Vault Secrets User for processor on '{keyvault_name}'...")
+        funcs.assign_keyvault_roles(resource_group, keyvault_name, apps['processor_principal'])
+        success('Processor Key Vault role ready.')
+
+
+def assign_processor_adx_role(credential, subscription_id, resource_group, cluster_name, apps):
+    processor_principal = apps['processor_principal']
     step(f"Ensuring AllDatabasesAdmin for processor managed identity on '{cluster_name}'...")
     adx_tmp = AdxManager(credential, '', '', '')
     adx_tmp.assign_cluster_admin(
@@ -949,34 +1279,38 @@ def provision_functions(credential, subscription_id,
     )
     success('Processor ADX role ready.')
 
-    if keyvault_name:
-        step(f"Ensuring Key Vault Secrets User for watcher on '{keyvault_name}'...")
-        funcs.assign_keyvault_roles(resource_group, keyvault_name, watcher_principal)
-        success('Watcher Key Vault role ready.')
 
-        step(f"Ensuring Key Vault Secrets User for processor on '{keyvault_name}'...")
-        funcs.assign_keyvault_roles(resource_group, keyvault_name, processor_principal)
-        success('Processor Key Vault role ready.')
+def configure_functions(credential, subscription_id, resource_group,
+                        data_account, watcher_app, processor_app, apps):
+    '''Apply app settings from the final .env, so this must run after every
+    task that contributes .env values has finished.'''
+
+    section('Configuring — Azure Functions')
+
+    funcs = FunctionsManager(credential, subscription_id)
+
+    # Install the Core Tools once up front; the two deploys that follow run in
+    # parallel and would otherwise race on the npm install.
+    funcs.ensure_core_tools()
 
     # App settings: read the final .env and convert to Azure app settings
-    env_raw      = read_env_defaults(ENV_FILE)
-    env_settings = {k.upper(): v for k, v in env_raw.items() if v}
+    env_settings = app_settings_from_env()
 
     queue_service_uri = f'https://{data_account}.queue.core.windows.net'
 
     watcher_settings = {
-        'AzureWebJobsStorage':                    watcher_conn,
-        'CYCAS_DEPLOY_STORAGE':                   watcher_conn,
-        'APPLICATIONINSIGHTS_CONNECTION_STRING':   ai_conn_str,
+        'AzureWebJobsStorage':                    apps['watcher_conn'],
+        'CYCAS_DEPLOY_STORAGE':                   apps['watcher_conn'],
+        'APPLICATIONINSIGHTS_CONNECTION_STRING':   apps['ai_conn_str'],
         **env_settings,
     }
     # Processor also needs the managed-identity connection for its queue trigger
     processor_settings = {
-        'AzureWebJobsStorage':                    processor_conn,
-        'CYCAS_DEPLOY_STORAGE':                   processor_conn,
+        'AzureWebJobsStorage':                    apps['processor_conn'],
+        'CYCAS_DEPLOY_STORAGE':                   apps['processor_conn'],
         'CYCAS_DATASTORAGE__queueServiceUri':      queue_service_uri,
         'CYCAS_DATASTORAGE__credential':           'managedidentity',
-        'APPLICATIONINSIGHTS_CONNECTION_STRING':   ai_conn_str,
+        'APPLICATIONINSIGHTS_CONNECTION_STRING':   apps['ai_conn_str'],
         **env_settings,
     }
 
@@ -997,48 +1331,67 @@ def provision_functions(credential, subscription_id,
     time.sleep(30)
     success('Function apps restarted.')
 
-    # Deploy code (ZIP includes function files + core/ package)
-    root     = Path(__file__).parent
-    core_dir = root / 'core'
-    step(f"Deploying watcher to '{watcher_app}'...")
-    info(f'Command: func azure functionapp publish {watcher_app}')
-    funcs.deploy(watcher_app, root / 'azurefunctions' / 'watcher', core_dir)
-    success('Watcher deployed.')
 
-    step(f"Deploying processor to '{processor_app}'...")
-    info(f'Command: func azure functionapp publish {processor_app}')
-    funcs.deploy(processor_app, root / 'azurefunctions' / 'processor', core_dir)
-    success('Processor deployed.')
+def deploy_function(credential, subscription_id, app_name, function_name):
+    '''Deploy one function app (ZIP includes function files + core/ package).'''
+    step(f"Deploying {function_name} to '{app_name}'...")
+    info(f'Command: func azure functionapp publish {app_name}')
+    funcs = FunctionsManager(credential, subscription_id)
+    funcs.deploy(app_name, ROOT / 'azurefunctions' / function_name, ROOT / 'core', echo=emit)
+    success(f'{function_name.capitalize()} deployed.')
 
 # ---------------------------------------------------------------------------
 # Phase 5: Web App
 # ---------------------------------------------------------------------------
 
-def provision_webapp_all(credential, subscription_id, resource_group, location,
-                         account_name, status_container, config_container, webapp_app, allowed_ips):
+def provision_webapp_vm(credential, subscription_id, resource_group, location, keyvault_name, vm, allowed_ips):
+    '''
+    Create the web app VM and its network. The VM gets a managed identity, which
+    the web app uses for storage, ADX and Key Vault, like an App Service would.
 
-    section('Provisioning — Web Application')
+    Port 80 is open for the Let's Encrypt challenge (Caddy only answers that
+    and redirects to HTTPS); 443 and SSH are limited to allowed_ips.
 
-    webapp   = WebappManager(credential, subscription_id)
-    root     = Path(__file__).parent
-    core_dir = root / 'core'
+    Returns:
+        str: The principal ID of the VM's managed identity.
+    '''
+    section('Provisioning — Web app VM')
 
-    plan_name = f'{webapp_app}-plan'
-    step(f"Ensuring App Service Plan '{plan_name}' exists...")
-    plan = webapp.provision_plan(resource_group, plan_name, location)
-    success(f"Plan '{plan_name}' ready.")
+    public_key = ensure_ssh_key(credential, keyvault_name, KEYVAULT_WEBAPP_SSH_KEY, KEYVAULT_WEBAPP_SSH_PUBKEY)
+    vms        = VmManager(credential, subscription_id)
+    prefix     = vm['resource_prefix']
 
-    step(f"Ensuring Web App '{webapp_app}' exists...")
-    result = webapp.provision_webapp(resource_group, webapp_app, location, plan['id'])
+    step(f"Ensuring static public IP '{prefix}-ip' ({vm['fqdn']})...")
+    ip = vms.provision_public_ip(resource_group, f'{prefix}-ip', location, vm['name'])
+    success(f"Public IP ready: {ip['ip_address']}")
+
+    step(f"Ensuring network security group '{prefix}-nsg'...")
+    nsg_id = vms.provision_nsg(resource_group, f'{prefix}-nsg', location, allowed_ips,
+                               public_ports=(80,), restricted_ports=(443, 22))
+    subnet_id = vms.provision_network(resource_group, f'{prefix}-vnet', location, WEBAPP_VNET_PREFIX)
+    nic_id    = vms.provision_nic(resource_group, f'{prefix}-nic', location, subnet_id, ip['id'], nsg_id)
+    success('Network ready.')
+
+    step(f"Ensuring VM '{prefix}-vm' ({vm['vm_size']})...")
+    result = vms.provision_vm(resource_group, f'{prefix}-vm', location, nic_id, vm['vm_size'],
+                              VELO_VM_ADMIN, public_key, vm['os_disk_gb'], vm['image'],
+                              os_disk_name=f'{prefix}-osdisk', managed_identity=True)
     principal_id = result.get('identity', {}).get('principalId')
-    success(f"Web App '{webapp_app}' ready.")
+    if not principal_id:
+        raise RuntimeError(f"VM '{prefix}-vm' has no managed identity; it was created without one.")
+    success(f"VM '{prefix}-vm' ready.")
+    return principal_id
 
-    step(f"Configuring IP restrictions ({len(allowed_ips)} rule(s))...")
-    webapp.configure_ip_restrictions(resource_group, webapp_app, allowed_ips)
-    success('IP restrictions applied.')
 
-    step('Assigning Table Data Contributor to web app managed identity...')
-    webapp.assign_storage_roles(resource_group, account_name, principal_id)
+def assign_webapp_roles(credential, subscription_id, resource_group,
+                        account_name, table_name, status_container, config_container, keyvault_name, principal_id):
+
+    section('Provisioning — Web Application roles')
+
+    webapp = WebappManager(credential, subscription_id)
+
+    step(f"Assigning Table Data Contributor on table '{table_name}' to web app managed identity...")
+    webapp.assign_storage_roles(resource_group, account_name, principal_id, table_name)
     success('Table Data Contributor assigned.')
 
     step(f"Assigning Blob Data Reader on '{status_container}' container to web app managed identity...")
@@ -1049,79 +1402,318 @@ def provision_webapp_all(credential, subscription_id, resource_group, location,
     webapp.assign_blob_container_contributor(resource_group, account_name, config_container, principal_id)
     success(f"Blob Data Contributor on '{config_container}' container assigned.")
 
-    step(f"Configuring startup command on '{webapp_app}'...")
-    webapp.configure_startup(resource_group, webapp_app,
-                             'gunicorn --bind=0.0.0.0:4040 --timeout 600 webapp.app:app')
-    success('Startup command configured.')
-
-    step(f"Applying app settings to '{webapp_app}'...")
-    env_raw      = read_env_defaults(ENV_FILE)
-    env_settings = {k.upper(): v for k, v in env_raw.items() if v}
-    webapp.set_app_settings(resource_group, webapp_app, env_settings)
-    success('App settings applied.')
-
-    step(f"Deploying webapp code to '{webapp_app}'...")
-    webapp.deploy(resource_group, webapp_app, root / 'webapp', core_dir)
-    success(f"Webapp deployed.")
-
-    success(f"Web App accessible at: https://{webapp_app}.azurewebsites.net")
+    step(f"Assigning Key Vault Secrets User on '{keyvault_name}' to web app managed identity (login password)...")
+    FunctionsManager(credential, subscription_id).assign_keyvault_roles(resource_group, keyvault_name, principal_id)
+    success('Key Vault Secrets User assigned.')
 
 
-def download_triage_targets(dest_dir):
-    '''Download and extract the latest Windows.Triage.Targets artifact definition.'''
-    with urlopen(TRIAGE_TARGETS_URL) as resp:
-        data = resp.read()
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        zf.extractall(dest_dir)
+def assign_webapp_adx_viewer(credential, subscription_id, resource_group, cluster_name, database_name, principal_id):
+    '''Let the web app VM's identity query the database: the web app checks there
+    when ingested data has become queryable. Viewer, so it cannot change data.'''
+    step(f"Ensuring Viewer on ADX database '{database_name}' for the web app VM identity...")
+    AdxManager(credential, '', '', '').assign_database_viewer(
+        resource_group, cluster_name, database_name, principal_id, 'App',
+        f'cycas-webapp-{principal_id[:8]}', subscription_id=subscription_id,
+    )
+    success('Web app ADX role ready.')
 
 
-def write_collector_spec(spec_path, sas_url, password):
-    '''Write a velociraptor `collector` spec that runs Windows.Triage.Targets with
-    the _KapeTriage high-level target, plus a handful of standalone artifacts,
-    and uploads the encrypted result via SAS URL.'''
-    spec_path.write_text(f'''OS: Windows
+def ensure_webapp_password(credential, keyvault_name):
+    '''Create the web app login password in Key Vault, once; re-runs keep it.'''
+    kv = KeyvaultManager(f'https://{keyvault_name}.vault.azure.net')
+    kv.authenticate(credential, verify_enabled=False)
+    step('Ensuring web app login password in Key Vault...')
+    if not kv.read_creds(KEYVAULT_WEBAPP_PASSWORD):
+        kv.set_secret(KEYVAULT_WEBAPP_PASSWORD, secrets.token_urlsafe(18))
+    success(f"Web app login password in Key Vault secret '{KEYVAULT_WEBAPP_PASSWORD}'.")
 
-Artifacts:
-  Windows.Triage.Targets:
-    HighLevelTargets: '["_KapeTriage"]'
-  Windows.System.Services:
-    Calculate_hashes: "Y"
-    CertificateInfo: "Y"
-    DISABLE_DANGEROUS_API_CALLS: "Y"
-  Windows.Network.NetstatEnriched:
-    DISABLE_DANGEROUS_API_CALLS: "Y"
-  Windows.System.DNSCache: {{}}
 
-Target: Azure
-TargetArgs:
-  sas_url: "{sas_url}"
+def assign_local_webapp_roles(credential, subscription_id, resource_group, account_name, current_user_id):
+    step('Assigning storage roles to current user for local webapp...')
+    funcs = FunctionsManager(credential, subscription_id)
+    funcs.assign_data_storage_roles(resource_group, account_name, current_user_id, principal_type='User')
+    success('Storage roles assigned to current user.')
 
-EncryptionScheme: Password
-EncryptionArgs:
-  password: "{password}"
 
-OptVerbose: true
-OptBanner: true
-OptPrompt: false
-OptAdmin: true
-OptLevel: 4
-OptConcurrency: 2
-OptFormat: "jsonl"
-OptFilenameTemplate: "Triage-%FQDN%-%TIMESTAMP%"
-OptProgressTimeout: 1800
-OptTimeout: 0
-OptDeleteAtExit: true
-''')
+def build_webapp_package(dest):
+    '''ZIP the web app with core/, velociraptor/ and a requirements.txt from
+    pyproject.toml, in the layout gunicorn expects (webapp.app:app).'''
+    import tomllib
+    deps = tomllib.loads((ROOT / 'pyproject.toml').read_text()).get('project', {}).get('dependencies', [])
+    with zipfile.ZipFile(dest, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for folder in ('webapp', 'core', 'velociraptor'):
+            for path in (ROOT / folder).rglob('*'):
+                rel = path.relative_to(ROOT)
+                if path.is_file() and not any(part in WEBAPP_STAGE_IGNORE or Path(part).match(pattern)
+                                              for part in rel.parts for pattern in WEBAPP_STAGE_IGNORE):
+                    zf.write(path, rel)
+        zf.writestr('requirements.txt', '\n'.join(deps) + '\n')
+
+
+# vm_bootstrap.py runs in two parts: the slow steps that need no .env while
+# the rest of Azure is still being created (phase 1), the rest once the .env
+# is final (phase 2), so the app settings do not keep apt and pip waiting.
+WEBAPP_SETUP_STEPS     = ['packages', 'user', 'app', 'venv']
+WEBAPP_CONFIGURE_STEPS = ['env', 'service', 'caddy', 'certificate']
+
+
+def run_webapp_bootstrap(credential, subscription_id, resource_group, location, account_name, vm,
+                         steps, env, with_app):
+    '''Upload vm_bootstrap.py (and the web app package when with_app) and run
+    the given steps of it on the web app VM.'''
+    blob = BlobManager(credential, f'https://{account_name}.blob.core.windows.net')
+    blob.authenticate()
+    blob.switch_to_account_key(subscription_id, resource_group, account_name)
+
+    file_uris = []
+    with tempfile.TemporaryDirectory() as tmp:
+        files = [ROOT / 'webapp' / 'vm_bootstrap.py']
+        if with_app:
+            step('Packaging and uploading the web app...')
+            files.append(Path(tmp) / 'app.zip')
+            build_webapp_package(files[-1])
+        for path in files:
+            blob_name = f'{WEBAPP_BLOB_PREFIX}/{path.name}'
+            with open(path, 'rb') as f:
+                blob.get_client(BINARIES_CONTAINER, blob_name).upload_blob(f, overwrite=True)
+            url, _ = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
+                                                BINARIES_CONTAINER, blob_name, expiry_days=1)
+            file_uris.append(url)
+
+    params  = {'fqdn': vm['fqdn'], 'app_zip': 'app.zip', 'env': env, 'steps': steps}
+    encoded = base64.b64encode(json.dumps(params).encode()).decode()
+    command = f'CYCAS_WEBAPP_PARAMS={encoded} python3 vm_bootstrap.py'
+
+    step(f'Running vm_bootstrap.py on the VM ({", ".join(steps)})...')
+    try:
+        VmManager(credential, subscription_id).run_script(
+            resource_group, f'{vm["resource_prefix"]}-vm', location, file_uris, command,
+            extension_name='cycas-webapp')
+    except ScriptFailed as e:
+        for line in e.stdout.strip().splitlines()[-15:]:
+            info(line)
+        raise RuntimeError(f'{e} (full log on the VM: /opt/cycas-webapp/bootstrap.log)') from None
+
+
+def setup_webapp_vm(credential, subscription_id, resource_group, location, account_name, vm):
+    '''Phase 1: packages, service user, web app code and its Python environment.'''
+    section('Provisioning — Web app setup')
+    run_webapp_bootstrap(credential, subscription_id, resource_group, location, account_name, vm,
+                         WEBAPP_SETUP_STEPS, env={}, with_app=True)
+    success('Web app installed, waiting for the final settings.')
+
+
+def configure_webapp_vm(credential, subscription_id, resource_group, location, account_name, vm):
+    '''Phase 2: the final .env, the service, and HTTPS.'''
+    section('Deploying — Web app')
+    run_webapp_bootstrap(credential, subscription_id, resource_group, location, account_name, vm,
+                         WEBAPP_CONFIGURE_STEPS, env=app_settings_from_env(), with_app=False)
+    success(f"Web app ready: https://{vm['fqdn']}/")
+
+
+# ---------------------------------------------------------------------------
+# Velociraptor server
+# ---------------------------------------------------------------------------
+
+def generate_ssh_key_pair():
+    '''Return a new Ed25519 key pair as (OpenSSH private key, authorized_keys line).'''
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key     = Ed25519PrivateKey.generate()
+    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                                serialization.NoEncryption()).decode()
+    public  = key.public_key().public_bytes(serialization.Encoding.OpenSSH,
+                                            serialization.PublicFormat.OpenSSH).decode()
+    return private, f'{public} cycas-velociraptor'
+
+
+def ensure_ssh_key(credential, keyvault_name, private_secret, public_secret):
+    '''Return the public SSH key of a VM, generating the pair once. Only the
+    public key is put on the VM; the private key stays in Key Vault.'''
+    kv = KeyvaultManager(f'https://{keyvault_name}.vault.azure.net')
+    kv.authenticate(credential, verify_enabled=False)
+
+    step('Ensuring SSH key pair in Key Vault...')
+    public_key = kv.read_creds(public_secret)
+    if public_key:
+        info(f"Reusing SSH key from Key Vault secret '{public_secret}'.")
+    else:
+        private_key, public_key = generate_ssh_key_pair()
+        kv.set_secret(private_secret, private_key)
+        kv.set_secret(public_secret, public_key)
+        info(f"Generated an SSH key, private key stored in Key Vault secret '{private_secret}'.")
+    success('SSH key ready.')
+    return public_key
+
+
+def provision_velociraptor_vm(credential, subscription_id, resource_group, location, keyvault_name, velo):
+    '''
+    Create the Velociraptor server VM and its network. The SSH key pair is
+    kept in Key Vault; only the public key is put on the VM.
+
+    Returns:
+        dict: 'ip_address' and 'fqdn' of the static public IP.
+    '''
+    section('Provisioning — Velociraptor server VM')
+
+    public_key = ensure_ssh_key(credential, keyvault_name, KEYVAULT_VELO_SSH_KEY, KEYVAULT_VELO_SSH_PUBKEY)
+
+    vms  = VmManager(credential, subscription_id)
+    name = velo_resource_prefix(velo)
+
+    step(f"Ensuring static public IP '{name}-ip' ({velo['fqdn']})...")
+    ip = vms.provision_public_ip(resource_group, f'{name}-ip', location, velo['name'])
+    success(f"Public IP ready: {ip['ip_address']}")
+
+    step(f"Ensuring network security group '{name}-nsg'...")
+    nsg_id = vms.provision_nsg(resource_group, f'{name}-nsg', location, velo['allowed_ips'])
+    success('Network security group ready.')
+
+    step(f"Ensuring virtual network '{name}-vnet'...")
+    subnet_id = vms.provision_network(resource_group, f'{name}-vnet', location)
+    nic_id    = vms.provision_nic(resource_group, f'{name}-nic', location, subnet_id, ip['id'], nsg_id)
+    success('Network ready.')
+
+    step(f"Ensuring VM '{name}-vm' ({velo['vm_size']})...")
+    vms.provision_vm(resource_group, f'{name}-vm', location, nic_id, velo['vm_size'],
+                     VELO_VM_ADMIN, public_key, velo['os_disk_gb'], velo['image'],
+                     os_disk_name=f'{name}-osdisk')
+    success(f"VM '{name}-vm' ready.")
+
+    return ip
+
+
+def setup_velociraptor_server(credential, subscription_id, resource_group, location,
+                              account_name, input_container, keyvault_name, password_location,
+                              velo, ip):
+    '''
+    Install and configure Velociraptor on the VM by running bootstrap.py
+    through the Custom Script Extension. Must run after the collector task,
+    which ensures the ZIP password exists in Key Vault.
+
+    Returns the .env values for the server.
+    '''
+    section('Provisioning — Velociraptor server')
+    settings = velociraptor_server_settings()
+
+    kv = KeyvaultManager(f'https://{keyvault_name}.vault.azure.net')
+    kv.authenticate(credential, verify_enabled=False)
+
+    step('Ensuring GUI admin password in Key Vault...')
+    admin_password = kv.read_creds(KEYVAULT_VELO_PASSWORD)
+    if not admin_password:
+        admin_password = secrets.token_urlsafe(18)
+        kv.set_secret(KEYVAULT_VELO_PASSWORD, admin_password)
+    success(f"Admin password in Key Vault secret '{KEYVAULT_VELO_PASSWORD}'.")
+
+    # Generated once per user; re-runs reuse them, so passwords stay the same.
+    users = []
+    for name, role, secret_name in velociraptor_users_setting():
+        password = kv.read_creds(secret_name)
+        if not password:
+            password = secrets.token_urlsafe(18)
+            kv.set_secret(secret_name, password)
+        users.append({'name': name, 'role': role, 'password': password})
+        info(f"User '{name}' ({role}): password in Key Vault secret '{secret_name}'.")
+    zip_password = kv.read_creds(password_location) or ''
+
+    blob = BlobManager(credential, f'https://{account_name}.blob.core.windows.net')
+    blob.authenticate()
+    blob.switch_to_account_key(subscription_id, resource_group, account_name)
+
+    step(f"Uploading server files to '{BINARIES_CONTAINER}/{VELO_BLOB_PREFIX}/bootstrap/'...")
+    file_uris = []
+    # The extension downloads every file into one directory, where bootstrap.py reads them by name.
+    for path in VELO_SERVER_FILES:
+        blob_name = f'{VELO_BLOB_PREFIX}/bootstrap/{path.name}'
+        # Not BlobManager.upload_file: it only logs failures, and a missing
+        # file would surface much later as a download error on the VM.
+        with open(path, 'rb') as f:
+            blob.get_client(BINARIES_CONTAINER, blob_name).upload_blob(f, overwrite=True)
+        url, _ = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
+                                            BINARIES_CONTAINER, blob_name, expiry_days=1)
+        file_uris.append(url)
+    success(f'{len(file_uris)} file(s) uploaded.')
+
+    step('Generating SAS URLs for package upload and collection backup...')
+    upload_sas, _ = blob.generate_container_sas_url(subscription_id, resource_group, account_name,
+                                                    BINARIES_CONTAINER, expiry_days=1)
+    backup_sas, backup_expiry = blob.generate_container_sas_url(subscription_id, resource_group, account_name,
+                                                                input_container, expiry_days=COLLECTOR_SAS_VALID_DAYS)
+    success(f'SAS URLs ready (collection backup expires {backup_expiry:%Y-%m-%d}).')
+
+    params = {
+        'dns':                 velo['fqdn'],
+        'admin_user':          velo['admin_user'],
+        'admin_password':      admin_password,
+        'users':               users,
+        'gui_allowed_cidrs':   velo['allowed_ips'],
+        'expected_clients':    expected_clients_setting(),
+        'velociraptor_url':    settings.get('velociraptor_url', ''),
+        'package_prefix':      settings['velociraptor_server_package_prefix'],
+        'api_name':            settings['velociraptor_server_api_name'],
+        'download_password':   download_password_setting(),
+        'writeback_windows':   settings.get('velociraptor_server_writeback_windows', ''),
+        'msi_amd64_url':       settings.get('velociraptor_server_msi_amd64_url', ''),
+        'msi_x86_url':         settings.get('velociraptor_server_msi_x86_url', ''),
+        'hunts_url':           settings.get('velociraptor_server_hunts_url', ''),
+        'upload_sas_url':      upload_sas,
+        'upload_prefix':       VELO_BLOB_PREFIX,
+        'backup_sas_url':      backup_sas,
+        'backup_zip_password': zip_password,
+    }
+    # Base64 keeps the JSON free of shell quoting; the command is only stored
+    # in the extension's encrypted protectedSettings.
+    encoded = base64.b64encode(json.dumps(params).encode()).decode()
+    command = f'CYCAS_BOOTSTRAP_PARAMS={encoded} python3 bootstrap.py'
+
+    step('Running bootstrap.py on the VM (install, client packages, hunts)...')
+    vms = VmManager(credential, subscription_id)
+    try:
+        output = vms.run_script(resource_group, f'{velo_resource_prefix(velo)}-vm', location, file_uris, command)
+    except ScriptFailed as e:
+        for line in e.stdout.strip().splitlines()[-15:]:
+            info(line)
+        raise RuntimeError(f'{e} (full log on the VM: {VELO_REMOTE_LOG})') from None
+
+    result_line = next((l for l in reversed(output.splitlines()) if 'CYCAS_BOOTSTRAP_RESULT ' in l), None)
+    result      = json.loads(result_line.split('CYCAS_BOOTSTRAP_RESULT ', 1)[1]) if result_line else {}
+    gui_url     = result.get('gui_url', f'https://{velo["fqdn"]}/')
+    success(f'Velociraptor {result.get("version", "")} server ready: {gui_url}')
+    for name in result.get('uploaded', []):
+        url, expiry = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
+                                                 BINARIES_CONTAINER, name, expiry_days=DOWNLOAD_SAS_VALID_DAYS)
+        info(f'{name.rsplit("/", 1)[1]} (link expires {expiry:%Y-%m-%d}):')
+        info(f'  {url}')
+
+    step('Backing up server and client config to Key Vault...')
+    for name in result.get('config_backup', []):
+        secret_name = KEYVAULT_VELO_CONFIGS[name.rsplit('/', 1)[1]]
+        text        = blob.read_text(BINARIES_CONTAINER, name)
+        if text is None:
+            raise RuntimeError(f"Staged config '{BINARIES_CONTAINER}/{name}' not found.")
+        if len(text.encode()) > KEYVAULT_MAX_SECRET_SIZE:
+            # Left in the blob, so it is not lost.
+            info(f"'{name}' exceeds the Key Vault secret size limit, kept in '{BINARIES_CONTAINER}/{name}'.")
+            continue
+        kv.set_secret(secret_name, text)
+        blob.delete(BINARIES_CONTAINER, name)
+        info(f"'{name.rsplit('/', 1)[1]}' in Key Vault secret '{secret_name}'.")
+    success('Config backup done.')
+
+    return {
+        'VELOCIRAPTOR_SERVER_URL': gui_url,
+    }
 
 
 def provision_collector(credential, subscription_id, resource_group,
                         account_name, container,
                         keyvault_name, keyvault_password_location, zip_password,
                         defaults):
-    '''Build a stand-alone Velociraptor collector that runs Windows.Triage.Targets
-    with the _KapeTriage high-level target, plus a handful of standalone artifacts,
-    and uploads the encrypted result straight to the just-provisioned input
+    '''Build the stand-alone Velociraptor collector (core.utils.collector):
+    Windows.Triage.Targets with _KapeTriage plus the live data artifacts, with
+    the encrypted result uploaded straight to the just-provisioned input
     container via a write-only SAS URL.'''
 
     section('Provisioning — Offline Collector')
@@ -1161,17 +1753,6 @@ def provision_collector(credential, subscription_id, resource_group,
         kv.set_secret(KEYVAULT_SAS_LOCATION, sas_url)
         success(f"SAS URL stored in Key Vault secret '{KEYVAULT_SAS_LOCATION}'.")
 
-    step('Downloading latest Windows.Triage.Targets artifact definition...')
-    build_dir = ROOT / 'build' / 'collector'
-    datastore = build_dir / 'datastore'
-    try:
-        download_triage_targets(datastore / 'artifact_definitions' / 'Windows' / 'Triage')
-    except Exception as e:
-        info(f'Could not download Windows.Triage.Targets: {e}')
-        info('Re-run easy_install.py once you have network access to build the collector.')
-        return
-    success('Artifact definition downloaded.')
-
     step('Ensuring Velociraptor binary is available...')
     velo_binary = defaults.get('velociraptor_binary', '/tmp/velociraptor')
     velo_url    = defaults.get('velociraptor_url', '')
@@ -1182,36 +1763,41 @@ def provision_collector(credential, subscription_id, resource_group,
         return
     success(f'Using {velo_binary}.')
 
-    step('Writing collector spec...')
-    spec_path = build_dir / 'spec.yaml'
-    write_collector_spec(spec_path, sas_url, password)
-    success(f'Spec written to {spec_path}.')
-
-    step('Building offline collector...')
-    result = subprocess.run(
-        [velo_binary, 'collector', '--datastore', str(datastore), str(spec_path)],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        info('Collector build failed:')
-        info((result.stderr.strip().splitlines() or ['Unknown error.'])[-1])
-        return
-
-    collector = next(datastore.glob('Collector_*'), None)
-    if not collector:
-        info('Collector build did not produce an output binary.')
+    step('Building offline collector (triage data and live data)...')
+    try:
+        collector = build_offline_collector(velo_binary, ROOT / 'build' / 'collector', sas_url, password)
+    except CollectorBuildError as e:
+        info(f'Collector build failed: {e}')
+        info('Re-run easy_install.py to try again.')
         return
 
     success(f'Collector built: {collector}')
     info('Run it on a Windows endpoint to collect Windows.Triage.Targets and')
     info(f'uploads the encrypted result to: {blob_uri}/{container}')
     info(f'The SAS URL embedded in the collector expires {expiry:%Y-%m-%d}.')
+    collectors = [(collector, 'Windows 10/11, Server 2016 and later (64-bit)')]
 
-    step(f"Uploading collector binary to '{BINARIES_CONTAINER}' container...")
+    if collector_legacy_setting():
+        step('Building legacy collectors (older and 32-bit Windows)...')
+        try:
+            collectors += build_legacy_collectors(velo_binary, collector, velo_url, ROOT / 'build' / 'collector')
+            success('Legacy collectors built.')
+        except CollectorBuildError as e:
+            # The regular collector is ready, so carry on without them.
+            info(f'Legacy collector build failed: {e}')
+            info('Re-run easy_install.py to try again.')
+
+    step(f"Uploading collector binaries to '{BINARIES_CONTAINER}' container...")
     blob.authenticate()
     blob.switch_to_account_key(subscription_id, resource_group, account_name)
-    blob.upload_file(BINARIES_CONTAINER, collector.name, collector)
-    success(f'Collector available at: {blob_uri}/{BINARIES_CONTAINER}/{collector.name}')
+    for path, purpose in collectors:
+        blob.upload_file(BINARIES_CONTAINER, path.name, path)
+    success(f'Collectors available in: {blob_uri}/{BINARIES_CONTAINER}/')
+    for path, purpose in collectors:
+        url, link_expiry = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
+                                                      BINARIES_CONTAINER, path.name, expiry_days=DOWNLOAD_SAS_VALID_DAYS)
+        info(f'{path.name} — {purpose}')
+        info(f'  Download link (expires {link_expiry:%Y-%m-%d}): {url}')
 
 
 # ---------------------------------------------------------------------------
@@ -1231,7 +1817,7 @@ def main():
     else:
         run_mode = 'azurefunction'
 
-    total = '8' if run_mode == 'azurefunction' else '5'
+    total = '9' if run_mode == 'azurefunction' else '5'
 
     print()
     print('  What will be created:')
@@ -1241,6 +1827,7 @@ def main():
     if run_mode == 'azurefunction':
         print('    - Two Azure Function Apps (watcher + processor)')
         print('    - (Optional) Key Vault for ZIP password storage')
+        print('    - (Optional) Velociraptor server VM with a static IP, client installers and hunts')
     print('    - Offline Velociraptor collector (Windows.Triage.Targets -> input container)')
     print()
     print('  Progress is saved automatically. If the script is interrupted,')
@@ -1264,6 +1851,8 @@ def main():
         info(f'Storage      : {saved["account_name"]}')
         if run_mode == 'azurefunction':
             info(f'Functions    : {saved["watcher_app"]}, {saved["processor_app"]}')
+            if saved.get('velo_server'):
+                info(f'Velociraptor : https://{saved["velo_server"]["fqdn"]}/')
         print()
         prompt_text = '  Re-run with this configuration? [Y/n]: ' if completed else '  Resume from saved session? [Y/n]: '
         resume = ask(prompt_text).strip().lower()
@@ -1295,11 +1884,18 @@ def main():
                 webapp_mode                = saved.get('webapp_mode')
                 webapp_app                 = saved['webapp_app']
                 webapp_allowed_ips         = saved['webapp_allowed_ips']
+                if webapp_mode == 'azure':
+                    # App Service hosting was replaced by a VM; leave that app alone.
+                    info(f"The web app of this session runs on App Service ('{webapp_app}'), which the installer")
+                    info('no longer deploys; it is left as it is. Start a new session to put it on a VM.')
+                    webapp_mode = webapp_app = None
                 zip_password               = None  # not stored in state; provision_collector reads it from Key Vault
+                velo_server                = saved.get('velo_server')
             else:
                 watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
                 keyvault_name = keyvault_password_location = zip_password = None
                 webapp_mode = webapp_app = webapp_allowed_ips = None
+                velo_server = None
         else:
             clear_state()
             saved = None
@@ -1313,7 +1909,7 @@ def main():
         if setup_mode == 'advanced':
             section('Deployment Mode')
             run_mode = collect_run_mode()
-            total = '8' if run_mode == 'azurefunction' else '5'
+            total = '9' if run_mode == 'azurefunction' else '5'
 
         resource_group, location, new_rg = collect_resource_group(azure, subscription_id, f'2/{total}')
 
@@ -1347,17 +1943,30 @@ def main():
                 watcher_app = watcher_sa = processor_app = processor_sa = insights_name = None
 
         if run_mode == 'azurefunction':
+            vms = VmManager(credential, subscription_id)
             if setup_mode == 'easy':
                 keyvault_password_location = KEYVAULT_PASSWORD_LOCATION
                 zip_password = None
-                webapp_mode, webapp_app, webapp_allowed_ips = 'local', None, None
-                info('Web app configured for local use (optional - run with gunicorn when needed).')
             else:
                 keyvault_name, keyvault_password_location, zip_password = collect_keyvault_config(resource_group, f'7/{total}')
-                webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(resource_group, f'8/{total}')
+            webapp_mode, webapp_app, webapp_allowed_ips = collect_webapp_config(vms, resource_group, location,
+                                                                                setup_mode, f'8/{total}')
+
+            # Easy mode asks for the allowed IPs once, for the web app and the server.
+            velo_server = collect_velociraptor_server_config(vms, resource_group, location, setup_mode, f'9/{total}',
+                                                             allowed_ips=webapp_allowed_ips if setup_mode == 'easy' else None)
+            if (velo_server or webapp_mode) and not keyvault_name:
+                # The web app login password and the Velociraptor server's admin
+                # password and SSH key are kept in Key Vault.
+                rg_slug       = re.sub(r'[^a-z0-9-]', '-', resource_group.lower()).strip('-')
+                kv_suffix     = f'-{rand6()}-keyvault'
+                keyvault_name = rg_slug[:24 - len(kv_suffix)] + kv_suffix
+                keyvault_password_location = KEYVAULT_PASSWORD_LOCATION
+                info(f"The web app and Velociraptor server passwords need a Key Vault, '{keyvault_name}' will be created.")
         else:
             keyvault_name = keyvault_password_location = zip_password = None
             webapp_mode = webapp_app = webapp_allowed_ips = None
+            velo_server = None
 
         state = {
             'run_mode':                  run_mode,
@@ -1390,6 +1999,7 @@ def main():
                 'webapp_mode':               webapp_mode,
                 'webapp_app':                webapp_app,
                 'webapp_allowed_ips':        webapp_allowed_ips,
+                'velo_server':               velo_server,
             })
         save_state(state)
 
@@ -1401,60 +2011,123 @@ def main():
                         input_sources,
                         watcher_app, watcher_sa, processor_app, processor_sa,
                         keyvault_name, keyvault_password_location,
-                        webapp_mode, webapp_app, webapp_allowed_ips):
+                        webapp_mode, webapp_app, webapp_allowed_ips,
+                        velo_server):
         print('Aborted.')
         sys.exit(0)
 
-    provision_storage(azure, credential, subscription_id,
-                      resource_group, location, new_rg,
-                      account_name, table_name, queue_name, container, status_container,
-                      config_container,
-                      defaults)
+    # .env must exist before the parallel phase: tasks read Velociraptor
+    # settings from it, and only the main thread writes to it.
+    ensure_env_file()
 
-    step('Writing input source settings to .env...')
-    for source_settings in input_sources.values():
-        write_env_values(source_settings)
-    success('Input source settings written.')
+    if new_rg:
+        step(f"Creating resource group '{resource_group}'...")
+        azure.create_resource_group(subscription_id, resource_group, location)
+        success(f"Resource group '{resource_group}' created.")
 
-    if run_mode == 'azurefunction' and keyvault_name:
-        adx_tmp = AdxManager(credential, '', '', '')
-        principal_id, _ = adx_tmp.get_current_user_id()
-        provision_keyvault(credential, subscription_id, resource_group, location,
-                           keyvault_name, keyvault_password_location, zip_password,
-                           principal_id)
+    current_user_id, _ = AdxManager(credential, '', '', '').get_current_user_id()
+    use_functions = run_mode == 'azurefunction'
+    use_keyvault  = use_functions and keyvault_name
+    kv_deps       = ['keyvault'] if use_keyvault else []
 
-    provision_collector(credential, subscription_id, resource_group,
-                        account_name, container,
-                        keyvault_name, keyvault_password_location, zip_password,
-                        read_env_defaults(ENV_FILE))
+    # Phase 1: everything that only needs the resource group runs in parallel.
+    # The ADX cluster (10+ minutes when new) is the critical path; the rest
+    # finishes while it is being created.
+    section('Provisioning')
+    info('Independent resources are provisioned in parallel.')
+    info('A new ADX cluster takes 10+ minutes, the other tasks finish while it is being created.')
+    info(f'Full output of every task: {LOG_FILE}')
+    print()
 
-    provision_adx(credential, subscription_id,
-                  resource_group, location,
-                  cluster_name, database_name, sku_name, sku_tier,
-                  admin_users,
-                  defaults)
-
-    if run_mode == 'azurefunction':
-        provision_functions(credential, subscription_id,
-                            resource_group, location,
-                            account_name,
-                            cluster_name,
-                            watcher_app, watcher_sa,
-                            processor_app, processor_sa,
-                            keyvault_name, insights_name)
-
+    tasks = {
+        'storage': (lambda r: provision_storage(credential, subscription_id,
+                                                resource_group, location,
+                                                account_name, table_name, queue_name, container, status_container,
+                                                config_container,
+                                                defaults), []),
+        'adx':     (lambda r: provision_adx(credential, subscription_id,
+                                            resource_group, location,
+                                            cluster_name, database_name, sku_name, sku_tier,
+                                            admin_users,
+                                            defaults), []),
+    }
+    if use_keyvault:
+        tasks['keyvault'] = (lambda r: provision_keyvault(credential, subscription_id, resource_group, location,
+                                                          keyvault_name, keyvault_password_location, zip_password,
+                                                          current_user_id), [])
+    tasks['collector'] = (lambda r: provision_collector(credential, subscription_id, resource_group,
+                                                        account_name, container,
+                                                        keyvault_name, keyvault_password_location, zip_password,
+                                                        read_env_defaults(ENV_FILE)), ['storage'] + kv_deps)
+    if use_functions:
+        tasks['functions'] = (lambda r: provision_functions(credential, subscription_id,
+                                                            resource_group, location,
+                                                            watcher_app, watcher_sa,
+                                                            processor_app, processor_sa,
+                                                            insights_name), [])
+        tasks['functions-roles'] = (lambda r: assign_functions_roles(credential, subscription_id, resource_group,
+                                                                     account_name, keyvault_name, r['functions']),
+                                    ['functions', 'storage'] + kv_deps)
+        tasks['processor-adx'] = (lambda r: assign_processor_adx_role(credential, subscription_id, resource_group,
+                                                                      cluster_name, r['functions']),
+                                  ['functions', 'adx'])
         if webapp_mode == 'local':
-            step('Assigning storage roles to current user for local webapp...')
-            from core.manager.functions import FunctionsManager
-            funcs_tmp = FunctionsManager(credential, subscription_id)
-            adx_tmp2  = AdxManager(credential, '', '', '')
-            current_user_id, _ = adx_tmp2.get_current_user_id()
-            funcs_tmp.assign_data_storage_roles(resource_group, account_name, current_user_id, principal_type='User')
-            success('Storage roles assigned to current user.')
-        elif webapp_mode == 'azure' and webapp_app:
-            provision_webapp_all(credential, subscription_id,
-                                 resource_group, location,
-                                 account_name, status_container, config_container, webapp_app, webapp_allowed_ips)
+            tasks['webapp-roles'] = (lambda r: assign_local_webapp_roles(credential, subscription_id, resource_group,
+                                                                         account_name, current_user_id), ['storage'])
+        elif webapp_mode == 'vm' and webapp_app and use_keyvault:
+            tasks['webapp-vm'] = (lambda r: provision_webapp_vm(credential, subscription_id, resource_group, location,
+                                                                keyvault_name, webapp_app, webapp_allowed_ips),
+                                  ['keyvault'])
+            tasks['webapp-roles'] = (lambda r: assign_webapp_roles(credential, subscription_id, resource_group,
+                                                                   account_name, table_name, status_container, config_container,
+                                                                   keyvault_name, r['webapp-vm']),
+                                     ['webapp-vm', 'storage', 'keyvault'])
+            tasks['webapp-setup'] = (lambda r: setup_webapp_vm(credential, subscription_id, resource_group, location,
+                                                               account_name, webapp_app),
+                                     ['webapp-vm', 'storage'])
+            tasks['webapp-adx'] = (lambda r: assign_webapp_adx_viewer(credential, subscription_id, resource_group,
+                                                                      cluster_name, database_name, r['webapp-vm']),
+                                   ['webapp-vm', 'adx'])
+        if webapp_mode and use_keyvault:
+            tasks['webapp-password'] = (lambda r: ensure_webapp_password(credential, keyvault_name), ['keyvault'])
+        if velo_server and use_keyvault:
+            # The VM only needs its SSH key; the software setup also needs the
+            # storage account and the ZIP password the collector task ensures.
+            tasks['velo-vm'] = (lambda r: provision_velociraptor_vm(credential, subscription_id, resource_group,
+                                                                    location, keyvault_name, velo_server),
+                                ['keyvault'])
+            tasks['velo-server'] = (lambda r: setup_velociraptor_server(credential, subscription_id, resource_group,
+                                                                        location, account_name, container,
+                                                                        keyvault_name, keyvault_password_location,
+                                                                        velo_server, r['velo-vm']),
+                                    ['velo-vm', 'storage', 'collector'])
+
+    results = run_tasks(tasks, 'Provisioning', LOG_FILE, _file_log)
+
+    step('Writing .env...')
+    env_values = {}
+    for name in ('storage', 'keyvault', 'adx', 'velo-server'):
+        env_values.update(results.get(name) or {})
+    for source_settings in input_sources.values():
+        env_values.update(source_settings)
+    write_env_values(env_values)
+    success('.env updated.')
+
+    # Phase 2: app settings are built from the final .env, so they wait for
+    # phase 1. The two function deploys and the webapp deploy run in parallel.
+    if use_functions:
+        section('Deploying')
+        apps  = results['functions']
+        tasks = {
+            'functions': (lambda r: configure_functions(credential, subscription_id, resource_group,
+                                                        account_name, watcher_app, processor_app, apps), []),
+            'watcher':   (lambda r: deploy_function(credential, subscription_id, watcher_app, 'watcher'), ['functions']),
+            'processor': (lambda r: deploy_function(credential, subscription_id, processor_app, 'processor'), ['functions']),
+        }
+        if webapp_mode == 'vm' and webapp_app and use_keyvault:
+            tasks['webapp'] = (lambda r: configure_webapp_vm(credential, subscription_id, resource_group, location,
+                                                             account_name, webapp_app), [])
+        run_tasks(tasks, 'Deploying', LOG_FILE, _file_log)
 
     state = load_state()
     if state:
@@ -1474,13 +2147,59 @@ def main():
                 info(f'  Then open http://{wsl_ip}:4040 in your browser (WSL IP).')
             else:
                 info('  Then open http://localhost:4040 in your browser.')
+            info(f"  Login   — user {WEBAPP_USERNAME}, password in Key Vault '{keyvault_name}', "
+                 f"secret '{KEYVAULT_WEBAPP_PASSWORD}'")
             print()
     else:
         success('Installation complete.')
         print()
         info('Run `zip2adx.py` to launch the script locally.')
         print()
-    
+
+    if webapp_mode == 'vm' and webapp_app:
+        info('Cycas dashboard:')
+        info(f'  URL     — https://{webapp_app["fqdn"]}/')
+        info(f'  Access  — restricted to: {", ".join(webapp_allowed_ips)}')
+        info(f"  Login   — user {WEBAPP_USERNAME}, password in Key Vault '{keyvault_name}', "
+                 f"secret '{KEYVAULT_WEBAPP_PASSWORD}'")
+    if velo_server:
+        packages = f'https://{account_name}.blob.core.windows.net/{BINARIES_CONTAINER}/{VELO_BLOB_PREFIX}/'
+        print()
+        info('Velociraptor server:')
+        info(f'  GUI      — https://{velo_server["fqdn"]}/  (user: {velo_server["admin_user"]})')
+        info(f"  Password — Key Vault '{keyvault_name}', secret '{KEYVAULT_VELO_PASSWORD}'")
+        for name, role, secret_name in velociraptor_users_setting():
+            info(f"  User     — {name} ({role}), password in secret '{secret_name}'")
+        info(f'  Access   — GUI and SSH restricted to: {", ".join(velo_server["allowed_ips"])}')
+        info(f'  Packages — {packages}ClientInstallationPackages/')
+        info('             *_legacy.exe: Windows 7/8, Server 2008 R2/2012 and 32-bit Windows;')
+        info('             install as administrator with: <file>.exe service install')
+        info('             (see *_client_windows_legacy_README.txt next to them)')
+        info('  SSH      — az keyvault secret show --vault-name '
+             f'{keyvault_name} --name {KEYVAULT_VELO_SSH_KEY} --query value -o tsv > velo_key && chmod 600 velo_key')
+        info(f'             ssh -i velo_key {VELO_VM_ADMIN}@{velo_server["fqdn"]}')
+
+    # The build folder only ever holds the collectors of the latest build.
+    build = ROOT / 'build' / 'collector'
+    collectors = sorted(build.glob('datastore/Collector_*')) + sorted(build.glob('legacy/Collector_*'))
+    if collectors:
+        print()
+        info(f'Offline collector — {collectors[0]}')
+        for legacy in collectors[1:]:
+            info(f'  Legacy    — {legacy}')
+        if keyvault_name:
+            info(f"  ZIP password — Key Vault '{keyvault_name}', secret "
+                 f"'{keyvault_password_location or KEYVAULT_PASSWORD_LOCATION}' (Cycas uses it to open the ZIPs)")
+
+    adx_uri = env_values.get('ADX_CLUSTER_URI')
+    if adx_uri:
+        adx_host = adx_uri.split('://', 1)[-1].rstrip('/').removesuffix('.kusto.windows.net')
+        print()
+        info('Azure Data Explorer:')
+        info(f'  Cluster  — {adx_uri}  (database: {database_name})')
+        info(f'  Web UI   — https://dataexplorer.azure.com/clusters/{adx_host}/databases/{database_name}')
+
+    print()
     info('Place triage ZIPs in any of the configured input sources to start processing:')
     if 'blob' in input_sources:
         info(f'  Blob  — {account_name} / {container}')
@@ -1489,16 +2208,6 @@ def main():
     if 'sftp' in input_sources:
         sftp = input_sources['sftp']
         info(f'  SFTP  — {sftp["SFTP_USERNAME"]}@{sftp["SFTP_URL"]}:{sftp["SFTP_PORT"]}')
-    if webapp_app:
-        print()
-        info(f'Web application:')
-        info(f'  URL     — https://{webapp_app}.azurewebsites.net')
-        info(f'  Access  — restricted to: {", ".join(webapp_allowed_ips)}')
-
-    collector = next((ROOT / 'build' / 'collector' / 'datastore').glob('Collector_*'), None)
-    if collector:
-        print()
-        info(f'Offline collector — {collector}')
     info('')
 
 

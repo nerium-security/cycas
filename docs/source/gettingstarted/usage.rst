@@ -18,7 +18,7 @@ scaling, which allows for processing multiple ZIPs simultaneously.
 
 Once you've completed the installation, upload a ZIP file containing 
 the endpoint data collected with Velociraptor. If the configured input source 
-is ``blob``, upload the ZIP file to the ``uploads`` container as shown below.
+is ``blob``, upload the ZIP file to the ``triage-input`` container as shown below.
 
 .. image:: /_static/images/runningatscale_uploadblob.png
 

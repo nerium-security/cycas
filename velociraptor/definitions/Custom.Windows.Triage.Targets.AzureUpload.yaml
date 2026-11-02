@@ -3,11 +3,19 @@ description: |
   Collects Windows.Triage.Targets, zips the results on the endpoint,
   then uploads the single zip directly to Azure Blob Storage via SAS URL.
   Meaning the results are not uploaded to the Velociraptor server.
-  
-  To run this artefact, you need to import Windows.Triage.Targets first: 
+
+  In a Cycas deployment the Velociraptor server is set up by easy_install.py:
+  Windows.Triage.Targets and this artifact are imported, and hunt HUN006 uses
+  them with the SAS URL and ZIP password already filled in. CollectLiveData
+  stays off there, because separate hunts collect the live data: turning it on
+  as well would put that data in ADX twice.
+
+  Without that setup, import Windows.Triage.Targets first:
   - https://triage.velocidex.com/docs/windows.triage.targets/
 
   ## Generating a write-only SAS URL
+  Only needed without the Cycas installer, which generates it and stores it in
+  Key Vault (secret collector-sas-url).
   Azure Portal → Storage Account → Containers → <container> →
   Shared access tokens → Permissions: Write + Create (NOT Read/Delete) →
   Set expiry → Generate SAS token and URL → copy the Blob SAS URL.
@@ -460,6 +468,14 @@ parameters:
     type: int
     default: "5"
 
+  - name: CollectLiveData
+    type: bool
+    default: N
+    description: |
+      Also collect processes, network connections, services, the DNS cache
+      and scheduled tasks into the zip (see the description). Off by default:
+      Cycas collects these with separate hunts.
+
 required_permissions:
   - FILESYSTEM_READ
   - FILESYSTEM_WRITE
@@ -501,21 +517,40 @@ sources:
       //    collect() runs the artifact and stores all uploaded files into
       //    a zip container at the path we provide via `output`.
       //    The `password` arg is optional — empty string means no encryption.
+      // Live data, collected as artifact results next to the triage files.
+      // Hashes and certificate info where the artifact offers them; no
+      // executables (DumpProcess, UploadCommands) and no unstable APIs.
+      // collect() rejects args for an artifact it does not collect, so the
+      // live data parameters are only added when the live data is collected.
+      LET LiveArgs <= dict(
+        `Windows.System.Pslist`=dict(DISABLE_DANGEROUS_API_CALLS="Y"),
+        `Windows.Network.NetstatEnriched`=dict(
+          ProcessNameRegex=".", DumpProcess="N", KillProcess="N", DISABLE_DANGEROUS_API_CALLS="Y"),
+        `Windows.System.Services`=dict(
+          Calculate_hashes="Y", CertificateInfo="Y", DISABLE_DANGEROUS_API_CALLS="Y"),
+        `Windows.System.DNSCache`=dict(),
+        `Windows.System.TaskScheduler`=dict(AlsoUpload="N", UploadCommands="N"))
+
+      LET TriageArgs <= dict(
+        `Windows.Triage.Targets`=dict(
+          HighLevelTargets=serialize(item=HighLevelTargets, format="json"),
+          Targets=serialize(item=Targets, format="json"),
+          Devices=Devices,
+          DropVerySlowRules=DropVerySlowRules,
+          TrustedPathRegex=TrustedPathRegex,
+          MaxFileSize=MaxFileSize,
+          VSS_MAX_AGE_DAYS=VSS_MAX_AGE_DAYS,
+          WORKERS=WORKERS
+        ))
+
+      LET LiveArtifacts <= if(condition=CollectLiveData, else=[], then=[
+        "Windows.System.Pslist", "Windows.Network.NetstatEnriched", "Windows.System.Services",
+        "Windows.System.DNSCache", "Windows.System.TaskScheduler"])
+
       LET ZipResult <= SELECT *
       FROM collect(
-        artifacts="Windows.Triage.Targets",
-        args=dict(
-          `Windows.Triage.Targets`=dict(
-            HighLevelTargets=serialize(item=HighLevelTargets, format="json"),
-            Targets=serialize(item=Targets, format="json"),
-            Devices=Devices,
-            DropVerySlowRules=DropVerySlowRules,
-            TrustedPathRegex=TrustedPathRegex,
-            MaxFileSize=MaxFileSize,
-            VSS_MAX_AGE_DAYS=VSS_MAX_AGE_DAYS,
-            WORKERS=WORKERS
-          )
-        ),
+        artifacts=("Windows.Triage.Targets", ) + LiveArtifacts,
+        args=TriageArgs + if(condition=CollectLiveData, then=LiveArgs, else=dict()),
         output=TempZip,
         password=ZipPassword
       )

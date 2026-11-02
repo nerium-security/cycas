@@ -8,11 +8,14 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import hmac
+import re
 import json
 import yaml
 from dotenv import find_dotenv
-from flask import Flask, render_template, request, flash, jsonify
+from flask import Flask, Response, render_template, request, flash, jsonify
 from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
 from azure.data.tables import EntityProperty
 from azure.storage.blob import BlobServiceClient
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
@@ -23,6 +26,54 @@ from core.utils.status import Status
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-change-in-prod')
 
+
+# ---------------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------------
+# Every page and API call requires HTTP basic auth, so the browser asks once
+# and the dashboard's own fetch() calls send the same credentials. The
+# password is a Key Vault secret created by easy_install.py, read with the web
+# app's managed identity in Azure or the az login session locally. Without a
+# password the app refuses all requests rather than run without a login.
+
+WEBAPP_USERNAME        = os.environ.get('WEBAPP_USERNAME', 'cycas')
+WEBAPP_PASSWORD_SECRET = os.environ.get('WEBAPP_PASSWORD_SECRET', 'cycas-webapp-password')
+
+_password      = None
+_password_lock = threading.Lock()
+
+
+def _webapp_password():
+    '''The login password from Key Vault, cached once it has been read.'''
+    global _password
+    with _password_lock:
+        if _password is None:
+            config = load_config()
+            if config.keyvault_url:
+                client    = SecretClient(vault_url=config.keyvault_url, credential=DefaultAzureCredential())
+                _password = client.get_secret(WEBAPP_PASSWORD_SECRET).value
+        return _password
+
+
+@app.before_request
+def require_login():
+    try:
+        password = _webapp_password()
+    except Exception as exc:
+        app.logger.error(f'Could not read the web app password from Key Vault: {exc}')
+        password = None
+    if not password:
+        return Response(f"Login is not configured: Key Vault secret '{WEBAPP_PASSWORD_SECRET}' "
+                        'could not be read.', 503)
+
+    auth = request.authorization
+    # compare_digest on bytes: constant time, and safe for non-ASCII input.
+    if (auth and auth.type == 'basic'
+            and hmac.compare_digest((auth.username or '').encode(), WEBAPP_USERNAME.encode())
+            and hmac.compare_digest((auth.password or '').encode(), password.encode())):
+        return None
+    return Response('Login required.', 401, {'WWW-Authenticate': 'Basic realm="Cycas", charset="UTF-8"'})
+
 ALL_STATUSES = [
     Status.NEW, Status.PROCESSING, Status.DOWNLOADING, Status.DOWNLOADED,
     Status.DOWNLOADFAILED, Status.POSTPROCESSING, Status.UPLOADING,
@@ -30,117 +81,126 @@ ALL_STATUSES = [
 ]
 
 PARTITION_KEY     = 'pipeline-uploads'
-POLL_INTERVAL_SEC = 10
-POLL_TIMEOUT_MIN  = int(os.environ.get('ADX_POLL_TIMEOUT_MIN', '30'))
+CHECK_INTERVAL_SEC = 30
+POLL_TIMEOUT_MIN   = int(os.environ.get('ADX_POLL_TIMEOUT_MIN', '30'))
 
 
 # ---------------------------------------------------------------------------
-# ADX ingestion poller
+# ADX ingestion status
 # ---------------------------------------------------------------------------
 
-class IngestionPoller:
+class AdxStatusChecker:
     '''
-    Background thread that confirms when ingested data becomes queryable in ADX.
+    Background thread that records when ingested data becomes queryable in ADX.
 
-    Tracks uploadids that have finished processing. Every POLL_INTERVAL_SEC seconds
-    it fires a single batched KQL query against _status_summary for all pending
-    entries. Polling stops per-entry once confirmed or after POLL_TIMEOUT_MIN minutes.
+    Every CHECK_INTERVAL_SEC seconds it reads the FINISHED entries of the status
+    table that have no ADX result yet, and looks their uploadids up in the
+    _status_summary table with one batched KQL query. The result is stored on the
+    entity itself (AdxStatus 'confirmed' or 'timeout', with AdxCheckedAt), so it
+    survives restarts and is shared by all workers; an entry is never checked
+    again once it has a result.
+
+    The timeout counts from LastUpdatedTime: the pipeline writes FINISHED as its
+    last update, and this checker never changes that field.
     '''
+
+    BATCH = 100
 
     def __init__(self, cluster_uri, database, summary_table):
-        self._cluster_uri  = cluster_uri
-        self._database     = database
+        self._cluster_uri   = cluster_uri
+        self._database      = database
         self._summary_table = summary_table
-        self._pending     = {}    # uploadid -> finished_at (UTC-aware datetime)
-        self._confirmed   = set()
-        self._timed_out   = set()
-        self._lock        = threading.Lock()
-        self._init_lock   = threading.Lock()
-        self._thread      = None
-        self._client      = None
+        self._client        = None
+        self._thread        = None
+        self._lock          = threading.Lock()
 
-    def _build_client(self):
-        kcsb = KustoConnectionStringBuilder.with_azure_token_credential(
-            self._cluster_uri, DefaultAzureCredential()
-        )
-        return KustoClient(kcsb)
-
-    def track(self, uploadid, finished_at):
-        '''Register an uploadid for ADX confirmation. Idempotent.'''
+    def start(self):
         with self._lock:
-            if (uploadid not in self._confirmed
-                    and uploadid not in self._timed_out
-                    and uploadid not in self._pending):
-                self._pending[uploadid] = finished_at
-        self._ensure_running()
-
-    def get_status(self, uploadid):
-        with self._lock:
-            if uploadid in self._confirmed:
-                return 'confirmed'
-            if uploadid in self._timed_out:
-                return 'timeout'
-            if uploadid in self._pending:
-                return 'pending'
-        return 'unknown'
-
-    def _ensure_running(self):
-        with self._init_lock:
             if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(target=self._loop, daemon=True)
+                self._thread = threading.Thread(target=self._loop, daemon=True, name='adx-status')
                 self._thread.start()
 
     def _loop(self):
-        if self._client is None:
-            try:
-                self._client = self._build_client()
-            except Exception:
-                return
-
         while True:
-            with self._lock:
-                cutoff = datetime.now(timezone.utc) - timedelta(minutes=POLL_TIMEOUT_MIN)
-                for uid, ts in list(self._pending.items()):
-                    if ts < cutoff:
-                        del self._pending[uid]
-                        self._timed_out.add(uid)
-                pending = list(self._pending.keys())
-
-            if not pending:
-                break
-
             try:
-                ids_kql = ', '.join(f'"{uid}"' for uid in pending)
-                query   = f'{self._summary_table} | where uploadid in ({ids_kql}) | project uploadid'
-                result  = self._client.execute(self._database, query)
-                found   = {row['uploadid'] for row in result.primary_results[0]}
-                with self._lock:
-                    for uid in found:
-                        self._pending.pop(uid, None)
-                        self._confirmed.add(uid)
-            except Exception:
-                pass
+                self.check_once()
+            except Exception as exc:
+                app.logger.warning(f'ADX status check failed: {exc}')
+            time.sleep(CHECK_INTERVAL_SEC)
 
-            time.sleep(POLL_INTERVAL_SEC)
+    def _kusto(self):
+        if self._client is None:
+            kcsb = KustoConnectionStringBuilder.with_azure_token_credential(
+                self._cluster_uri, DefaultAzureCredential()
+            )
+            self._client = KustoClient(kcsb)
+        return self._client
+
+    def check_once(self):
+        manager, _ = get_table_client()
+        table      = manager.table_client
+        entities   = table.query_entities(
+            f"PartitionKey eq '{PARTITION_KEY}' and Status eq '{Status.FINISHED}'",
+            select=['PartitionKey', 'RowKey', 'UploadId', 'AdxStatus', 'LastUpdatedTime'],
+        )
+        # Only ids that are safe to put in a KQL string literal.
+        open_entries = [e for e in entities
+                        if e.get('AdxStatus') not in ('confirmed', 'timeout')
+                        and re.fullmatch(r'[A-Za-z0-9._-]+', e.get('UploadId') or '')]
+        if not open_entries:
+            return
+
+        found = set()
+        for i in range(0, len(open_entries), self.BATCH):
+            ids    = ', '.join(f'"{e["UploadId"]}"' for e in open_entries[i:i + self.BATCH])
+            query  = f'{self._summary_table} | where uploadid in ({ids}) | distinct uploadid'
+            result = self._kusto().execute(self._database, query)
+            found.update(row['uploadid'] for row in result.primary_results[0])
+
+        now    = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=POLL_TIMEOUT_MIN)
+        for e in open_entries:
+            if e['UploadId'] in found:
+                status = 'confirmed'
+            elif _parse_time(e.get('LastUpdatedTime')) < cutoff:
+                status = 'timeout'
+            else:
+                continue   # still pending: nothing to write
+            manager.update_log_entry({
+                'PartitionKey': e['PartitionKey'],
+                'RowKey':       e['RowKey'],
+                'AdxStatus':    status,
+                'AdxCheckedAt': f'{now:%Y-%m-%dT%H:%M:%SZ}',
+            })
 
 
-_poller      = None
-_poller_lock = threading.Lock()
+_checker      = None
+_checker_lock = threading.Lock()
 
 
-def get_poller():
-    global _poller
-    if _poller is not None:
-        return _poller
-    with _poller_lock:
-        if _poller is None:
-            try:
-                config = load_config()
-                if config.adx_cluster_enabled:
-                    _poller = IngestionPoller(config.adx_cluster_uri, config.adx_database_name, config.adx_status_table_summary)
-            except Exception:
-                pass
-    return _poller
+def get_checker():
+    '''The ADX status checker, started on first use; None without ADX.'''
+    global _checker
+    if _checker is None:
+        with _checker_lock:
+            if _checker is None:
+                try:
+                    config = load_config()
+                    if config.adx_cluster_enabled:
+                        _checker = AdxStatusChecker(config.adx_cluster_uri, config.adx_database_name,
+                                                    config.adx_status_table_summary)
+                except Exception:
+                    pass
+    if _checker:
+        _checker.start()
+    return _checker
+
+
+def adx_status_of(entry):
+    '''The ADX status shown for a status table entry: '' unless FINISHED.'''
+    if entry.get('Status') != Status.FINISHED or not get_checker():
+        return ''
+    return entry.get('AdxStatus') or 'pending'
 
 
 # ---------------------------------------------------------------------------
@@ -175,18 +235,21 @@ def _compute_duration(entry):
         return entry.get('Duration') or '-'
 
 
-def _parse_finished_at(start_time_str):
+def _parse_time(value):
+    '''Parse a status table time (2026-11-01T10:00:00Z). Missing or invalid counts
+    as long ago, so such an entry is checked once and then gets a final result.'''
     try:
-        return datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+        return datetime.fromisoformat(value.replace('Z', '+00:00'))
     except Exception:
-        return datetime.now(timezone.utc)
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def get_table_client():
     config = load_config()
     credential = DefaultAzureCredential()
     manager = TablestorageManager(credential, config.blob_logtable_uri, config.blob_logtable_name)
-    manager.authenticate(verify_enabled=False)
+    # The installer creates the table; the web app only has a role on that table.
+    manager.authenticate(verify_enabled=False, create_table=False)
     return manager, config.blob_logtable_name
 
 
@@ -227,16 +290,8 @@ def index():
         error_msg = str(exc)
         table_name = os.environ.get('BLOB_LOGTABLE_NAME', 'status table')
 
-    # Register FINISHED entries with the ADX poller, then read back their status
-    poller = get_poller()
     for e in entries:
-        upload_id = e.get('UploadId') or ''
-        if poller and e.get('Status') == Status.FINISHED and upload_id:
-            finished_at = _parse_finished_at(e.get('StartTime', ''))
-            poller.track(upload_id, finished_at)
-            e['AdxStatus'] = poller.get_status(upload_id)
-        else:
-            e['AdxStatus'] = ''
+        e['AdxStatus'] = adx_status_of(e)
 
     if error_msg:
         flash(f'Could not connect to Table Storage: {error_msg}', 'error')
@@ -259,7 +314,7 @@ def index():
         status_filter=status_filter,
         q=q,
         table_name=table_name,
-        adx_enabled=(poller is not None),
+        adx_enabled=(get_checker() is not None),
     )
 
 
@@ -288,11 +343,9 @@ def api_entries():
 
         entries = sorted(raw, key=lambda e: e.get('StartTime') or '', reverse=True)
 
-        poller = get_poller()
         result = []
         for e in entries:
-            upload_id = e.get('UploadId') or ''
-            adx = poller.get_status(upload_id) if (poller and upload_id) else 'unknown'
+            adx = adx_status_of(e) or 'unknown'
             size = e.get('Size')
             result.append({
                 'RowKey':            e.get('RowKey') or '',
@@ -369,25 +422,19 @@ def api_artifact_log(uploadid, artifact_name):
 @app.route('/api/adx-status')
 def adx_status():
     '''
-    Return ADX queryability status for all tracked uploadids.
+    Return the ADX queryability status of the FINISHED uploads, by uploadid.
 
-    The frontend polls this every 10 s and stops once all pending entries
-    are either confirmed or timed out.
+    The frontend polls this every 10 s and stops once no entry is pending. The
+    status comes from the status table, where AdxStatusChecker stores it.
     '''
-    poller = get_poller()
-    if not poller:
+    if not get_checker():
         return jsonify({})
-
-    with poller._lock:
-        result = {}
-        for uid in poller._confirmed:
-            result[uid] = 'confirmed'
-        for uid in poller._timed_out:
-            result[uid] = 'timeout'
-        for uid in poller._pending:
-            result[uid] = 'pending'
-
-    return jsonify(result)
+    manager, _ = get_table_client()
+    entities = manager.table_client.query_entities(
+        f"PartitionKey eq '{PARTITION_KEY}' and Status eq '{Status.FINISHED}'",
+        select=['UploadId', 'Status', 'AdxStatus'],
+    )
+    return jsonify({e['UploadId']: adx_status_of(e) for e in entities if e.get('UploadId')})
 
 
 # ---------------------------------------------------------------------------

@@ -163,13 +163,21 @@ class WebappManager:
         )
         log.info(f"IP restrictions applied to '{app_name}'.")
 
-    def assign_storage_roles(self, resource_group, account_name, principal_id):
-        '''Grant the webapp managed identity Table Data Contributor on the data storage account.'''
+    def assign_storage_roles(self, resource_group, account_name, principal_id, table_name):
+        '''
+        Grant the webapp managed identity Table Data Contributor on the status
+        table only, not on every table in the storage account.
+
+        Installs before this assigned the role on the whole account; that
+        assignment of the same role to the same principal is removed, so a
+        re-run narrows it. Other assignments are left alone.
+        '''
         import uuid
-        storage_scope = (
+        account_scope = (
             f'/subscriptions/{self.subscription_id}/resourceGroups/{resource_group}'
             f'/providers/Microsoft.Storage/storageAccounts/{account_name}'
         )
+        storage_scope = f'{account_scope}/tableServices/default/tables/{table_name}'
         role_def = (
             f'/subscriptions/{self.subscription_id}'
             f'/providers/Microsoft.Authorization/roleDefinitions/{ROLE_TABLE_DATA_CONTRIBUTOR}'
@@ -189,7 +197,16 @@ class WebappManager:
                 log.info('Table Data Contributor already assigned, skipping.')
             else:
                 raise
-        log.info('Table Data Contributor assigned to webapp principal.')
+        log.info(f"Table Data Contributor on table '{table_name}' assigned to webapp principal.")
+
+        for assignment in self._auth.role_assignments.list_for_scope(
+                account_scope, filter=f"principalId eq '{principal_id}'"):
+            # list_for_scope also returns assignments inherited from above the
+            # account; only the one made on the account itself is ours to remove.
+            if (assignment.scope.lower() == account_scope.lower()
+                    and assignment.role_definition_id.lower().endswith(ROLE_TABLE_DATA_CONTRIBUTOR)):
+                self._auth.role_assignments.delete_by_id(assignment.id)
+                log.info(f"Removed the account-wide Table Data Contributor of '{principal_id}'.")
 
     def assign_blob_container_reader(self, resource_group, account_name, container_name, principal_id):
         '''Grant the webapp managed identity Storage Blob Data Reader on a specific container.'''

@@ -929,3 +929,41 @@ class AdxManager:
                 log.info(f"Principal '{principal_id}' already has AllDatabasesAdmin, skipping.")
             else:
                 raise
+
+    def assign_database_viewer(self, resource_group, cluster_name, database_name, principal_id,
+                               principal_type, assignment_name, subscription_id=None):
+        '''
+        Grant Viewer on one ADX database to a principal: it can query the
+        data, but not change it or the schema.
+
+        Args:
+            resource_group (str): Resource group name.
+            cluster_name (str): ADX cluster name.
+            database_name (str): Database name.
+            principal_id (str): Object ID of the user or service principal.
+            principal_type (str): "User" or "App".
+            assignment_name (str): Unique name for this assignment resource.
+            subscription_id (str): Required when _mgmt has not been initialised yet.
+        '''
+
+        if not getattr(self, '_mgmt', None):
+            self._mgmt = KustoManagementClient(self.credential, subscription_id)
+
+        from azure.mgmt.kusto.models import DatabasePrincipalAssignment
+
+        assignment = DatabasePrincipalAssignment(
+            principal_id=principal_id,
+            principal_type=principal_type,
+            role='Viewer'
+        )
+
+        try:
+            self._mgmt.database_principal_assignments.begin_create_or_update(
+                resource_group, cluster_name, database_name, assignment_name, assignment
+            ).result()
+            log.info(f"Viewer on '{database_name}' granted to '{principal_id}'.")
+        except Exception as e:
+            if 'already exists' in str(e):
+                log.info(f"Principal '{principal_id}' already has Viewer on '{database_name}', skipping.")
+            else:
+                raise
