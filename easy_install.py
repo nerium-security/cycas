@@ -72,7 +72,8 @@ _file_log.propagate = False
 
 COLLECTOR_SAS_VALID_DAYS = 90
 DOWNLOAD_SAS_VALID_DAYS  = 30   # read-only links to the collector and client packages
-BINARIES_CONTAINER  = 'binaries'
+BINARIES_CONTAINER  = 'binaries'   # downloads: collectors and client installers
+STAGING_CONTAINER   = 'staging'    # internal: VM setup files and configs on their way to Key Vault
 KEYVAULT_PASSWORD_LOCATION = 'velociraptor-collection-password'
 KEYVAULT_SAS_LOCATION      = 'collector-sas-url'
 
@@ -82,7 +83,9 @@ VELO_SERVER_FILES        = [VELO_SERVER_DIR / name for name in ('bootstrap.py', 
 VELO_SERVER_FILES       += [ROOT / 'velociraptor' / 'definitions' / 'Server.Utils.BackupAzure.yaml',
                             ROOT / 'velociraptor' / 'definitions' / 'Custom.Windows.Triage.Targets.AzureUpload.yaml',
                             ROOT / 'velociraptor' / 'definitions' / 'Server.Monitor.Autolabeling.Clients.yaml']
-VELO_BLOB_PREFIX         = 'velociraptor-server'                              # in BINARIES_CONTAINER
+VELO_BLOB_PREFIX         = 'velociraptor-server'                              # in STAGING_CONTAINER
+VELO_INSTALLERS_PREFIX   = 'Velociraptor-ClientInstallers'                    # in BINARIES_CONTAINER
+VELO_COLLECTORS_PREFIX   = 'Velociraptor-OfflineCollectors'                   # in BINARIES_CONTAINER
 VELO_VM_ADMIN            = 'cycas'
 VELO_REMOTE_LOG          = '/opt/cycas-velociraptor/bootstrap.log'
 KEYVAULT_VELO_PASSWORD   = 'velociraptor-server-admin-password'
@@ -90,7 +93,7 @@ KEYVAULT_WEBAPP_PASSWORD = 'cycas-webapp-password'   # must match WEBAPP_PASSWOR
 WEBAPP_USERNAME          = 'cycas'
 KEYVAULT_WEBAPP_SSH_KEY    = 'cycas-webapp-ssh-private-key'
 KEYVAULT_WEBAPP_SSH_PUBKEY = 'cycas-webapp-ssh-public-key'
-WEBAPP_BLOB_PREFIX       = 'webapp'                                          # in BINARIES_CONTAINER
+WEBAPP_BLOB_PREFIX       = 'webapp'                                          # in STAGING_CONTAINER
 # Not the 10.42.0.0/24 of the Velociraptor server's VNet, so the two can be peered later.
 WEBAPP_VNET_PREFIX       = '10.43.0.0/24'
 WEBAPP_STAGE_IGNORE      = ('__pycache__', '.venv', '.git', '.vscode', 'test', '*.pyc', '.env')
@@ -1029,6 +1032,10 @@ def provision_storage(credential, subscription_id,
     blob_mgr.create_container(BINARIES_CONTAINER)
     success(f"Container '{BINARIES_CONTAINER}' ready.")
 
+    step(f"Ensuring blob container '{STAGING_CONTAINER}' exists...")
+    blob_mgr.create_container(STAGING_CONTAINER)
+    success(f"Container '{STAGING_CONTAINER}' ready.")
+
     step(f"Uploading initial velociraptor_artifacts.json to '{config_container}' container...")
     import json as _json
     artifacts_src = Path(__file__).parent / 'velociraptor' / 'artifacts' / 'velociraptor_artifacts.json'
@@ -1475,9 +1482,9 @@ def run_webapp_bootstrap(credential, subscription_id, resource_group, location, 
         for path in files:
             blob_name = f'{WEBAPP_BLOB_PREFIX}/{path.name}'
             with open(path, 'rb') as f:
-                blob.get_client(BINARIES_CONTAINER, blob_name).upload_blob(f, overwrite=True)
+                blob.get_client(STAGING_CONTAINER, blob_name).upload_blob(f, overwrite=True)
             url, _ = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
-                                                BINARIES_CONTAINER, blob_name, expiry_days=1)
+                                                STAGING_CONTAINER, blob_name, expiry_days=1)
             file_uris.append(url)
 
     params  = {'fqdn': vm['fqdn'], 'app_zip': 'app.zip', 'env': env, 'steps': steps}
@@ -1622,7 +1629,7 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
     blob.authenticate()
     blob.switch_to_account_key(subscription_id, resource_group, account_name)
 
-    step(f"Uploading server files to '{BINARIES_CONTAINER}/{VELO_BLOB_PREFIX}/bootstrap/'...")
+    step(f"Uploading server files to '{STAGING_CONTAINER}/{VELO_BLOB_PREFIX}/bootstrap/'...")
     file_uris = []
     # The extension downloads every file into one directory, where bootstrap.py reads them by name.
     for path in VELO_SERVER_FILES:
@@ -1630,15 +1637,17 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         # Not BlobManager.upload_file: it only logs failures, and a missing
         # file would surface much later as a download error on the VM.
         with open(path, 'rb') as f:
-            blob.get_client(BINARIES_CONTAINER, blob_name).upload_blob(f, overwrite=True)
+            blob.get_client(STAGING_CONTAINER, blob_name).upload_blob(f, overwrite=True)
         url, _ = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
-                                            BINARIES_CONTAINER, blob_name, expiry_days=1)
+                                            STAGING_CONTAINER, blob_name, expiry_days=1)
         file_uris.append(url)
     success(f'{len(file_uris)} file(s) uploaded.')
 
-    step('Generating SAS URLs for package upload and collection backup...')
+    step('Generating SAS URLs for package upload, config staging and collection backup...')
     upload_sas, _ = blob.generate_container_sas_url(subscription_id, resource_group, account_name,
                                                     BINARIES_CONTAINER, expiry_days=1)
+    staging_sas, _ = blob.generate_container_sas_url(subscription_id, resource_group, account_name,
+                                                     STAGING_CONTAINER, expiry_days=1)
     backup_sas, backup_expiry = blob.generate_container_sas_url(subscription_id, resource_group, account_name,
                                                                 input_container, expiry_days=COLLECTOR_SAS_VALID_DAYS)
     success(f'SAS URLs ready (collection backup expires {backup_expiry:%Y-%m-%d}).')
@@ -1659,7 +1668,9 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         'msi_x86_url':         settings.get('velociraptor_server_msi_x86_url', ''),
         'hunts_url':           settings.get('velociraptor_server_hunts_url', ''),
         'upload_sas_url':      upload_sas,
+        'staging_sas_url':     staging_sas,
         'upload_prefix':       VELO_BLOB_PREFIX,
+        'installers_prefix':   VELO_INSTALLERS_PREFIX,
         'backup_sas_url':      backup_sas,
         'backup_zip_password': zip_password,
     }
@@ -1690,15 +1701,15 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
     step('Backing up server and client config to Key Vault...')
     for name in result.get('config_backup', []):
         secret_name = KEYVAULT_VELO_CONFIGS[name.rsplit('/', 1)[1]]
-        text        = blob.read_text(BINARIES_CONTAINER, name)
+        text        = blob.read_text(STAGING_CONTAINER, name)
         if text is None:
-            raise RuntimeError(f"Staged config '{BINARIES_CONTAINER}/{name}' not found.")
+            raise RuntimeError(f"Staged config '{STAGING_CONTAINER}/{name}' not found.")
         if len(text.encode()) > KEYVAULT_MAX_SECRET_SIZE:
             # Left in the blob, so it is not lost.
-            info(f"'{name}' exceeds the Key Vault secret size limit, kept in '{BINARIES_CONTAINER}/{name}'.")
+            info(f"'{name}' exceeds the Key Vault secret size limit, kept in '{STAGING_CONTAINER}/{name}'.")
             continue
         kv.set_secret(secret_name, text)
-        blob.delete(BINARIES_CONTAINER, name)
+        blob.delete(STAGING_CONTAINER, name)
         info(f"'{name.rsplit('/', 1)[1]}' in Key Vault secret '{secret_name}'.")
     success('Config backup done.')
 
@@ -1787,15 +1798,16 @@ def provision_collector(credential, subscription_id, resource_group,
             info(f'Legacy collector build failed: {e}')
             info('Re-run easy_install.py to try again.')
 
-    step(f"Uploading collector binaries to '{BINARIES_CONTAINER}' container...")
+    step(f"Uploading collector binaries to '{BINARIES_CONTAINER}/{VELO_COLLECTORS_PREFIX}/'...")
     blob.authenticate()
     blob.switch_to_account_key(subscription_id, resource_group, account_name)
     for path, purpose in collectors:
-        blob.upload_file(BINARIES_CONTAINER, path.name, path)
-    success(f'Collectors available in: {blob_uri}/{BINARIES_CONTAINER}/')
+        blob.upload_file(BINARIES_CONTAINER, f'{VELO_COLLECTORS_PREFIX}/{path.name}', path)
+    success(f'Collectors available in: {blob_uri}/{BINARIES_CONTAINER}/{VELO_COLLECTORS_PREFIX}/')
     for path, purpose in collectors:
         url, link_expiry = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
-                                                      BINARIES_CONTAINER, path.name, expiry_days=DOWNLOAD_SAS_VALID_DAYS)
+                                                      BINARIES_CONTAINER, f'{VELO_COLLECTORS_PREFIX}/{path.name}',
+                                                      expiry_days=DOWNLOAD_SAS_VALID_DAYS)
         info(f'{path.name} — {purpose}')
         info(f'  Download link (expires {link_expiry:%Y-%m-%d}): {url}')
 
@@ -2163,7 +2175,7 @@ def main():
         info(f"  Login   — user {WEBAPP_USERNAME}, password in Key Vault '{keyvault_name}', "
                  f"secret '{KEYVAULT_WEBAPP_PASSWORD}'")
     if velo_server:
-        packages = f'https://{account_name}.blob.core.windows.net/{BINARIES_CONTAINER}/{VELO_BLOB_PREFIX}/'
+        installers = f'https://{account_name}.blob.core.windows.net/{BINARIES_CONTAINER}/{VELO_INSTALLERS_PREFIX}/'
         print()
         info('Velociraptor server:')
         info(f'  GUI      — https://{velo_server["fqdn"]}/  (user: {velo_server["admin_user"]})')
@@ -2171,7 +2183,7 @@ def main():
         for name, role, secret_name in velociraptor_users_setting():
             info(f"  User     — {name} ({role}), password in secret '{secret_name}'")
         info(f'  Access   — GUI and SSH restricted to: {", ".join(velo_server["allowed_ips"])}')
-        info(f'  Client installers — {packages}ClientInstallationPackages/')
+        info(f'  Client installers — {installers}')
         info('  SSH      — az keyvault secret show --vault-name '
              f'{keyvault_name} --name {KEYVAULT_VELO_SSH_KEY} --query value -o tsv > velo_key && chmod 600 velo_key')
         info(f'             ssh -i velo_key {VELO_VM_ADMIN}@{velo_server["fqdn"]}')

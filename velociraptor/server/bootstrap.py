@@ -61,7 +61,9 @@ DEFAULTS = {
     'hunts_url':           '',   # empty: hunts.vql from files_dir
     'writeback_windows':   '',   # empty: keep the Velociraptor default
     'triage_targets_url':  'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip',
-    'upload_sas_url':      '',   # container SAS with write access; empty: no upload
+    'upload_sas_url':      '',   # container SAS with write access for the client packages; empty: no upload
+    'installers_prefix':   'Velociraptor-ClientInstallers',
+    'staging_sas_url':     '',   # container SAS with write access for the config backup; empty: no backup
     'upload_prefix':       'velociraptor-server',
     'backup_sas_url':      '',   # container SAS for Server.Utils.BackupAzure; empty: not set up
     'backup_zip_password': '',
@@ -613,7 +615,7 @@ class Bootstrap:
         base, _, token = sas.partition('?')
         uploaded = []
         for path in sorted(self.packages.iterdir()):
-            name = f'{self.p["upload_prefix"]}/ClientInstallationPackages/{path.name}'
+            name = f'{self.p["installers_prefix"]}/{path.name}'
             self.log(f'Uploading {name}')
             self.upload(path, f'{base}/{urllib.parse.quote(name)}?{token}')
             uploaded.append(name)
@@ -626,9 +628,9 @@ class Bootstrap:
         write to Key Vault itself, and the extension output is too short to
         carry them back.
         '''
-        sas = self.p['upload_sas_url']
+        sas = self.p['staging_sas_url']
         if not sas:
-            self.log('No upload_sas_url, configs are not backed up.')
+            self.log('No staging_sas_url, configs are not backed up.')
             return
         base, _, token = sas.partition('?')
         staged = []
