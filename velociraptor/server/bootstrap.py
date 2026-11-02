@@ -82,6 +82,40 @@ TRIAGE_UPLOAD_ARTIFACT = 'Custom.Windows.Triage.Targets.AzureUpload'
 AUTOLABEL_ARTIFACT     = 'Server.Monitor.Autolabeling.Clients'
 
 
+# Uploaded next to the legacy client executables. CRLF line endings, as it is
+# read on Windows endpoints.
+LEGACY_README = '''Velociraptor legacy clients
+===========================
+
+For Windows 7/8, Server 2008 R2/2012 and 32-bit Windows, which the MSI does
+not support. Velociraptor publishes no MSI for these builds, so the client
+is an executable with the client configuration embedded:
+
+{files}
+
+x64: 64-bit Windows 7/8 and Server 2008 R2/2012.
+x86: 32-bit Windows (check with: echo %PROCESSOR_ARCHITECTURE%).
+
+Install
+-------
+Copy the executable to the endpoint and run in an elevated command prompt:
+
+  <file>.exe service install
+
+This copies the client to C:\\Program Files\\Velociraptor\\Velociraptor.exe and
+installs and starts the "Velociraptor" service. The endpoint shows up in the
+Velociraptor GUI within a minute. Check the service with:
+
+  sc query Velociraptor
+
+For mass deployment (GPO startup script, SCCM, PsExec) run the same command.
+
+Uninstall
+---------
+  "C:\\Program Files\\Velociraptor\\Velociraptor.exe" service remove
+'''
+
+
 class StepFailed(Exception):
     pass
 
@@ -215,7 +249,8 @@ class Bootstrap:
                     req = urllib.request.Request(url, data=f, method='PUT', headers={
                         'x-ms-blob-type': 'BlockBlob',
                         'x-ms-version':   '2021-08-06',
-                        'Content-Type':   'application/octet-stream',
+                        'Content-Type':   'text/plain; charset=utf-8' if path.suffix == '.txt'
+                                          else 'application/octet-stream',
                         'Content-Length': str(path.stat().st_size),
                     })
                     urllib.request.urlopen(req, timeout=600).close()
@@ -378,6 +413,25 @@ class Bootstrap:
                 self.download(url, template)
                 self.run([self.bin, 'config', 'repack', '--msi', template, self.client_config,
                           self.packages / f'{prefix}_client_windows_install_{arch}.msi'])
+
+        # The legacy builds (Windows 7/8, Server 2008 R2/2012, and the only
+        # 32-bit build from 0.77) have no MSI: the client config is repacked
+        # into the executable, installed with `<exe> service install`.
+        legacy = []
+        for arch, build in (('x64', 'windows-amd64-legacy'), ('x86', 'windows-386-legacy')):
+            url = self.release_url(f'velociraptor-v{self.version}-{build}.exe.gz')
+            if not self.url_exists(url):
+                self.log(f'Legacy client {arch}: none in the {self.version} release, skipping it.')
+                continue
+            with tempfile.TemporaryDirectory() as tmp:
+                template = Path(tmp) / 'template.exe'
+                self.download(url, template)
+                output = self.packages / f'{prefix}_client_windows_install_{arch}_legacy.exe'
+                self.run([self.bin, 'config', 'repack', '--exe', template, self.client_config, output])
+                legacy.append(output.name)
+        if legacy:
+            (self.packages / f'{prefix}_client_windows_legacy_README.txt').write_text(
+                LEGACY_README.format(files='\n'.join(f'  {name}' for name in legacy)).replace('\n', '\r\n'))
 
         for binary, flavour in ((self.bin, ''), (self.bin_musl, 'musl_')):
             for kind, ext in (('debian', 'deb'), ('rpm', 'rpm')):
