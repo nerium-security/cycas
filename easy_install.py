@@ -50,13 +50,18 @@ LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / f'setup_{time.strftime("%Y%m%d_%H%M%S")}.log'
 
 class _ConsoleHandler(logging.Handler):
-    '''Show warnings on the console. Records logged from a provisioning task
-    go to the task status display rather than straight to the terminal.'''
+    '''Show warnings on the console, and info records logged with
+    extra={'status': True} as progress (e.g. waiting for role propagation).
+    Records logged from a provisioning task go to the task status display
+    rather than straight to the terminal.'''
     def emit(self, record):
-        emit(self.format(record), file=sys.stderr, warning=True)
+        if record.levelno >= logging.WARNING:
+            emit(self.format(record), file=sys.stderr, warning=True)
+        elif getattr(record, 'status', False):
+            emit(self.format(record))
 
 _console_handler = _ConsoleHandler()
-_console_handler.setLevel(logging.WARNING)
+_console_handler.setLevel(logging.INFO)
 _console_handler.setFormatter(logging.Formatter('%(message)s'))
 
 _file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
