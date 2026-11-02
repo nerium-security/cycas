@@ -53,6 +53,7 @@ DEFAULTS = {
     'expected_clients':    1000,
     'package_prefix':      'Velociraptor',
     'api_name':            'cycas_api',
+    'download_password':   'infected',   # default ZIP password for GUI exports; empty: none
     'msi_amd64_url':       '',   # empty: the MSI from the Velociraptor release
     'msi_x86_url':         '',
     'hunts_url':           '',   # empty: hunts.vql from files_dir
@@ -470,9 +471,14 @@ class Bootstrap:
                 time.sleep(10)
 
     def step_admin_user(self):
-        self.vql('SELECT user_create(user=AdminUser, password=AdminPassword, roles=["administrator"]) FROM scope()',
-                 env={'AdminUser': self.p['admin_user'], 'AdminPassword': self.p['admin_password']},
-                 secret=('AdminPassword',))
+        # The download password is the user preference the GUI sets ("Password"
+        # in the user tile): ZIP exports from the GUI are protected with it, so
+        # triage data does not end up unprotected on an analyst's machine.
+        self.vql('SELECT user_create(user=AdminUser, password=AdminPassword, roles=["administrator"]) FROM scope()'
+                 '  SELECT user_options(user=AdminUser, default_password=DownloadPassword) FROM scope()',
+                 env={'AdminUser': self.p['admin_user'], 'AdminPassword': self.p['admin_password'],
+                      'DownloadPassword': self.p['download_password']},
+                 secret=('AdminPassword', 'DownloadPassword'))
         self.result['admin_user'] = self.p['admin_user']
 
     def step_artifacts(self):

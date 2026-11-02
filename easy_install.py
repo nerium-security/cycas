@@ -114,6 +114,7 @@ VELO_SETTINGS_DEFAULTS   = {
     'velociraptor_server_admin_user':        'admin',
     'velociraptor_server_package_prefix':    'Velociraptor',
     'velociraptor_server_api_name':          'cycas_api',
+    'velociraptor_server_download_password': 'infected',
 }
 
 SKUS = {
@@ -632,6 +633,14 @@ def velociraptor_server_settings():
     for source in (example, env):
         merged.update({k: v for k, v in source.items() if k.startswith('velociraptor') and v})
     return merged
+
+
+def download_password_setting():
+    '''VELOCIRAPTOR_SERVER_DOWNLOAD_PASSWORD; set but empty in .env means no password.'''
+    env = read_env_defaults(ENV_FILE)
+    if 'velociraptor_server_download_password' in env:
+        return env['velociraptor_server_download_password']
+    return velociraptor_server_settings()['velociraptor_server_download_password']
 
 
 def expected_clients_setting():
@@ -1586,6 +1595,7 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         'velociraptor_url':    settings.get('velociraptor_url', ''),
         'package_prefix':      settings['velociraptor_server_package_prefix'],
         'api_name':            settings['velociraptor_server_api_name'],
+        'download_password':   download_password_setting(),
         'writeback_windows':   settings.get('velociraptor_server_writeback_windows', ''),
         'msi_amd64_url':       settings.get('velociraptor_server_msi_amd64_url', ''),
         'msi_x86_url':         settings.get('velociraptor_server_msi_x86_url', ''),
