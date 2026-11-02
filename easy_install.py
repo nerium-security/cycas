@@ -2155,18 +2155,9 @@ def main():
         print()
         info('Run `zip2adx.py` to launch the script locally.')
         print()
-    
-    info('Place triage ZIPs in any of the configured input sources to start processing:')
-    if 'blob' in input_sources:
-        info(f'  Blob  — {account_name} / {container}')
-    if 'sas' in input_sources:
-        info(f'  SAS   — container configured via SAS URL')
-    if 'sftp' in input_sources:
-        sftp = input_sources['sftp']
-        info(f'  SFTP  — {sftp["SFTP_USERNAME"]}@{sftp["SFTP_URL"]}:{sftp["SFTP_PORT"]}')
+
     if webapp_mode == 'vm' and webapp_app:
-        print()
-        info(f'Web application:')
+        info('Cycas dashboard:')
         info(f'  URL     — https://{webapp_app["fqdn"]}/')
         info(f'  Access  — restricted to: {", ".join(webapp_allowed_ips)}')
         info(f"  Login   — user {WEBAPP_USERNAME}, password in Key Vault '{keyvault_name}', "
@@ -2187,10 +2178,6 @@ def main():
         info('  SSH      — az keyvault secret show --vault-name '
              f'{keyvault_name} --name {KEYVAULT_VELO_SSH_KEY} --query value -o tsv > velo_key && chmod 600 velo_key')
         info(f'             ssh -i velo_key {VELO_VM_ADMIN}@{velo_server["fqdn"]}')
-        info(f"  Configs  — Key Vault '{keyvault_name}', secrets "
-             f"'{KEYVAULT_VELO_CONFIGS['server.config.yaml']}', '{KEYVAULT_VELO_CONFIGS['client.config.yaml']}'")
-        info('             az keyvault secret show --vault-name '
-             f"{keyvault_name} --name {KEYVAULT_VELO_CONFIGS['client.config.yaml']} --query value -o tsv > client.config.yaml")
 
     # The build folder only ever holds the collectors of the latest build.
     build = ROOT / 'build' / 'collector'
@@ -2203,6 +2190,24 @@ def main():
         if keyvault_name:
             info(f"  ZIP password — Key Vault '{keyvault_name}', secret "
                  f"'{keyvault_password_location or KEYVAULT_PASSWORD_LOCATION}' (Cycas uses it to open the ZIPs)")
+
+    adx_uri = env_values.get('ADX_CLUSTER_URI')
+    if adx_uri:
+        adx_host = adx_uri.split('://', 1)[-1].rstrip('/').removesuffix('.kusto.windows.net')
+        print()
+        info('Azure Data Explorer:')
+        info(f'  Cluster  — {adx_uri}  (database: {database_name})')
+        info(f'  Web UI   — https://dataexplorer.azure.com/clusters/{adx_host}/databases/{database_name}')
+
+    print()
+    info('Place triage ZIPs in any of the configured input sources to start processing:')
+    if 'blob' in input_sources:
+        info(f'  Blob  — {account_name} / {container}')
+    if 'sas' in input_sources:
+        info(f'  SAS   — container configured via SAS URL')
+    if 'sftp' in input_sources:
+        sftp = input_sources['sftp']
+        info(f'  SFTP  — {sftp["SFTP_USERNAME"]}@{sftp["SFTP_URL"]}:{sftp["SFTP_PORT"]}')
     info('')
 
 
