@@ -520,6 +520,29 @@ sources:
       // Live data, collected as artifact results next to the triage files.
       // Hashes and certificate info where the artifact offers them; no
       // executables (DumpProcess, UploadCommands) and no unstable APIs.
+      // collect() rejects args for an artifact it does not collect, so the
+      // live data parameters are only added when the live data is collected.
+      LET LiveArgs <= dict(
+        `Windows.System.Pslist`=dict(DISABLE_DANGEROUS_API_CALLS="Y"),
+        `Windows.Network.NetstatEnriched`=dict(
+          ProcessNameRegex=".", DumpProcess="N", KillProcess="N", DISABLE_DANGEROUS_API_CALLS="Y"),
+        `Windows.System.Services`=dict(
+          Calculate_hashes="Y", CertificateInfo="Y", DISABLE_DANGEROUS_API_CALLS="Y"),
+        `Windows.System.DNSCache`=dict(),
+        `Windows.System.TaskScheduler`=dict(AlsoUpload="N", UploadCommands="N"))
+
+      LET TriageArgs <= dict(
+        `Windows.Triage.Targets`=dict(
+          HighLevelTargets=serialize(item=HighLevelTargets, format="json"),
+          Targets=serialize(item=Targets, format="json"),
+          Devices=Devices,
+          DropVerySlowRules=DropVerySlowRules,
+          TrustedPathRegex=TrustedPathRegex,
+          MaxFileSize=MaxFileSize,
+          VSS_MAX_AGE_DAYS=VSS_MAX_AGE_DAYS,
+          WORKERS=WORKERS
+        ))
+
       LET LiveArtifacts <= if(condition=CollectLiveData, else=[], then=[
         "Windows.System.Pslist", "Windows.Network.NetstatEnriched", "Windows.System.Services",
         "Windows.System.DNSCache", "Windows.System.TaskScheduler"])
@@ -527,24 +550,7 @@ sources:
       LET ZipResult <= SELECT *
       FROM collect(
         artifacts=("Windows.Triage.Targets", ) + LiveArtifacts,
-        args=dict(
-          `Windows.System.Pslist`=dict(DISABLE_DANGEROUS_API_CALLS="Y"),
-          `Windows.Network.NetstatEnriched`=dict(
-            ProcessNameRegex=".", DumpProcess="N", KillProcess="N", DISABLE_DANGEROUS_API_CALLS="Y"),
-          `Windows.System.Services`=dict(
-            Calculate_hashes="Y", CertificateInfo="Y", DISABLE_DANGEROUS_API_CALLS="Y"),
-          `Windows.System.TaskScheduler`=dict(AlsoUpload="N", UploadCommands="N"),
-          `Windows.Triage.Targets`=dict(
-            HighLevelTargets=serialize(item=HighLevelTargets, format="json"),
-            Targets=serialize(item=Targets, format="json"),
-            Devices=Devices,
-            DropVerySlowRules=DropVerySlowRules,
-            TrustedPathRegex=TrustedPathRegex,
-            MaxFileSize=MaxFileSize,
-            VSS_MAX_AGE_DAYS=VSS_MAX_AGE_DAYS,
-            WORKERS=WORKERS
-          )
-        ),
+        args=TriageArgs + if(condition=CollectLiveData, then=LiveArgs, else=dict()),
         output=TempZip,
         password=ZipPassword
       )
