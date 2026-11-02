@@ -10,8 +10,9 @@ Parameters are JSON, passed base64-encoded in CYCAS_BOOTSTRAP_PARAMS or read
 from a file with --params. Required: dns, admin_user, admin_password,
 gui_allowed_cidrs, velociraptor_url. See DEFAULTS for the optional ones.
 
-The files it uses (hunts.vql, Server.Utils.BackupAzure.yaml and
-Custom.Windows.Triage.Targets.AzureUpload.yaml)
+The files it uses (hunts.vql, Server.Utils.BackupAzure.yaml,
+Custom.Windows.Triage.Targets.AzureUpload.yaml and
+Server.Monitor.Autolabeling.Clients.yaml)
 are read from files_dir, by default the directory this script is in. On the VM the extension downloads them all
 there; in the repo the artifacts live in velociraptor/definitions/.
 
@@ -78,6 +79,7 @@ REQUIRED = ('dns', 'admin_user', 'admin_password', 'gui_allowed_cidrs', 'velocir
 
 BACKUP_ARTIFACT = 'Server.Utils.BackupAzure'
 TRIAGE_UPLOAD_ARTIFACT = 'Custom.Windows.Triage.Targets.AzureUpload'
+AUTOLABEL_ARTIFACT     = 'Server.Monitor.Autolabeling.Clients'
 
 
 class StepFailed(Exception):
@@ -494,7 +496,7 @@ class Bootstrap:
     def step_artifacts(self):
         # Windows.Triage.Targets first: the triage upload artifact builds on it.
         paths = [self.triage_targets()]
-        for name in (BACKUP_ARTIFACT, TRIAGE_UPLOAD_ARTIFACT):
+        for name in (BACKUP_ARTIFACT, TRIAGE_UPLOAD_ARTIFACT, AUTOLABEL_ARTIFACT):
             path = self.artifacts / f'{name}.yaml'
             shutil.copy(self.files / f'{name}.yaml', path)
             path.chmod(0o644)
@@ -507,6 +509,14 @@ class Bootstrap:
             self.log(f'Imported {rows[0]["Name"]}.')
 
     def step_server_monitoring(self):
+        # Labels new clients Workstation, Server, Domain Controller or Linux when
+        # their interrogation finishes. Remove first (here and below) so a re-run
+        # replaces the entry instead of adding a second one.
+        self.vql(f'''
+            SELECT rm_server_monitoring(artifact="{AUTOLABEL_ARTIFACT}") FROM scope()
+            SELECT add_server_monitoring(artifact="{AUTOLABEL_ARTIFACT}") FROM scope()''')
+        self.result['autolabeling'] = True
+
         if not self.p['backup_sas_url']:
             self.log(f'No backup_sas_url, not adding {BACKUP_ARTIFACT} to server monitoring.')
             return

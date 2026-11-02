@@ -81,7 +81,8 @@ KEYVAULT_SAS_LOCATION      = 'collector-sas-url'
 VELO_SERVER_DIR          = ROOT / 'velociraptor' / 'server'
 VELO_SERVER_FILES        = [VELO_SERVER_DIR / name for name in ('bootstrap.py', 'hunts.vql')]
 VELO_SERVER_FILES       += [ROOT / 'velociraptor' / 'definitions' / 'Server.Utils.BackupAzure.yaml',
-                            ROOT / 'velociraptor' / 'definitions' / 'Custom.Windows.Triage.Targets.AzureUpload.yaml']
+                            ROOT / 'velociraptor' / 'definitions' / 'Custom.Windows.Triage.Targets.AzureUpload.yaml',
+                            ROOT / 'velociraptor' / 'definitions' / 'Server.Monitor.Autolabeling.Clients.yaml']
 VELO_BLOB_PREFIX         = 'velociraptor-server'                              # in BINARIES_CONTAINER
 VELO_VM_ADMIN            = 'cycas'
 VELO_REMOTE_LOG          = '/opt/cycas-velociraptor/bootstrap.log'
