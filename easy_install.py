@@ -635,6 +635,44 @@ def velociraptor_server_settings():
     return merged
 
 
+VELO_ROLES        = ('administrator', 'org_admin', 'investigator', 'analyst', 'artifact_writer', 'reader')
+VELO_DEFAULT_ROLE = 'investigator'
+
+
+def velociraptor_users_setting():
+    '''
+    VELOCIRAPTOR_SERVER_USERS as a list of (name, role, Key Vault secret name).
+
+    Format: comma-separated name[:role], e.g. "alice:administrator,bob". A user
+    without a role gets VELO_DEFAULT_ROLE. Raises ValueError for anything that
+    would fail on the server, so the installer stops before provisioning.
+    '''
+    settings = velociraptor_server_settings()
+    value    = settings.get('velociraptor_server_users', '')
+    reserved = {settings['velociraptor_server_admin_user'].lower(), settings['velociraptor_server_api_name'].lower()}
+    users, names, secrets_ = [], set(), set()
+    for item in filter(None, (part.strip() for part in value.split(','))):
+        name, _, role = item.partition(':')
+        name, role    = name.strip(), (role.strip().lower() or VELO_DEFAULT_ROLE)
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._@-]{0,63}', name):
+            raise ValueError(f"VELOCIRAPTOR_SERVER_USERS: invalid user name '{name}'.")
+        if role not in VELO_ROLES:
+            raise ValueError(f"VELOCIRAPTOR_SERVER_USERS: unknown role '{role}' for '{name}' "
+                             f"(use one of {', '.join(VELO_ROLES)}).")
+        if name.lower() in reserved:
+            raise ValueError(f"VELOCIRAPTOR_SERVER_USERS: '{name}' is already the admin or API account.")
+        if name.lower() in names:
+            raise ValueError(f"VELOCIRAPTOR_SERVER_USERS: '{name}' is listed twice.")
+        # Key Vault secret names only allow letters, digits and hyphens.
+        secret = 'velociraptor-user-' + re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-') + '-password'
+        if secret in secrets_:
+            raise ValueError(f"VELOCIRAPTOR_SERVER_USERS: '{name}' clashes with another user's Key Vault secret name.")
+        names.add(name.lower())
+        secrets_.add(secret)
+        users.append((name, role, secret))
+    return users
+
+
 def download_password_setting():
     '''VELOCIRAPTOR_SERVER_DOWNLOAD_PASSWORD; set but empty in .env means no password.'''
     env = read_env_defaults(ENV_FILE)
@@ -708,6 +746,7 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
     # Fail now on malformed settings rather than halfway through provisioning.
     parse_image_urn(settings['velociraptor_server_image'])
     expected_clients_setting()
+    velociraptor_users_setting()
     image = settings['velociraptor_server_image']
 
     if allowed_ips:
@@ -878,6 +917,8 @@ def confirm_plan(run_mode,
         info(f'Version      : {version.group(1) if version else settings.get("velociraptor_url", "?")}')
         info(f'Endpoints    : {expected_clients_setting()} expected (VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS)')
         info(f'GUI and SSH  : {", ".join(velo_server["allowed_ips"])}')
+        info(f'Users        : {velo_server["admin_user"]} (administrator)'
+             + ''.join(f', {name} ({role})' for name, role, _ in velociraptor_users_setting()))
         for arch, key in (('x64', 'velociraptor_server_msi_amd64_url'), ('x86', 'velociraptor_server_msi_x86_url')):
             info(f'MSI {arch}      : {"custom (" + key.upper() + ")" if settings.get(key) else "default (Velociraptor release)"}')
         hunts = 'custom (VELOCIRAPTOR_SERVER_HUNTS_URL)' if settings.get('velociraptor_server_hunts_url') else 'default (hunts.vql)'
@@ -1559,6 +1600,16 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         admin_password = secrets.token_urlsafe(18)
         kv.set_secret(KEYVAULT_VELO_PASSWORD, admin_password)
     success(f"Admin password in Key Vault secret '{KEYVAULT_VELO_PASSWORD}'.")
+
+    # Generated once per user; re-runs reuse them, so passwords stay the same.
+    users = []
+    for name, role, secret_name in velociraptor_users_setting():
+        password = kv.read_creds(secret_name)
+        if not password:
+            password = secrets.token_urlsafe(18)
+            kv.set_secret(secret_name, password)
+        users.append({'name': name, 'role': role, 'password': password})
+        info(f"User '{name}' ({role}): password in Key Vault secret '{secret_name}'.")
     zip_password = kv.read_creds(password_location) or ''
 
     blob = BlobManager(credential, f'https://{account_name}.blob.core.windows.net')
@@ -1590,6 +1641,7 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         'dns':                 velo['fqdn'],
         'admin_user':          velo['admin_user'],
         'admin_password':      admin_password,
+        'users':               users,
         'gui_allowed_cidrs':   velo['allowed_ips'],
         'expected_clients':    expected_clients_setting(),
         'velociraptor_url':    settings.get('velociraptor_url', ''),
@@ -2177,6 +2229,8 @@ def main():
         info('Velociraptor server:')
         info(f'  GUI      — https://{velo_server["fqdn"]}/  (user: {velo_server["admin_user"]})')
         info(f"  Password — Key Vault '{keyvault_name}', secret '{KEYVAULT_VELO_PASSWORD}'")
+        for name, role, secret_name in velociraptor_users_setting():
+            info(f"  User     — {name} ({role}), password in secret '{secret_name}'")
         info(f'  Access   — GUI and SSH restricted to: {", ".join(velo_server["allowed_ips"])}')
         info(f'  Packages — {packages}ClientInstallationPackages/')
         info('  SSH      — az keyvault secret show --vault-name '

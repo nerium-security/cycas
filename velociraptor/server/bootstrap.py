@@ -54,6 +54,7 @@ DEFAULTS = {
     'package_prefix':      'Velociraptor',
     'api_name':            'cycas_api',
     'download_password':   'infected',   # default ZIP password for GUI exports; empty: none
+    'users':               [],           # extra GUI users: [{name, role, password}]
     'msi_amd64_url':       '',   # empty: the MSI from the Velociraptor release
     'msi_x86_url':         '',
     'hunts_url':           '',   # empty: hunts.vql from files_dir
@@ -471,15 +472,24 @@ class Bootstrap:
                 time.sleep(10)
 
     def step_admin_user(self):
+        # The admin user plus the extra users. user_create also updates an
+        # existing user, so a re-run applies the role and (Key Vault) password
+        # again. Users removed from the list are left alone, so a typo cannot
+        # lock anyone out.
+        #
         # The download password is the user preference the GUI sets ("Password"
         # in the user tile): ZIP exports from the GUI are protected with it, so
         # triage data does not end up unprotected on an analyst's machine.
-        self.vql('SELECT user_create(user=AdminUser, password=AdminPassword, roles=["administrator"]) FROM scope()'
-                 '  SELECT user_options(user=AdminUser, default_password=DownloadPassword) FROM scope()',
-                 env={'AdminUser': self.p['admin_user'], 'AdminPassword': self.p['admin_password'],
-                      'DownloadPassword': self.p['download_password']},
-                 secret=('AdminPassword', 'DownloadPassword'))
+        accounts = [{'name': self.p['admin_user'], 'role': 'administrator', 'password': self.p['admin_password']}]
+        for user in accounts + list(self.p['users']):
+            self.vql('SELECT user_create(user=UserName, password=UserPassword, roles=[UserRole]) FROM scope()'
+                     '  SELECT user_options(user=UserName, default_password=DownloadPassword) FROM scope()',
+                     env={'UserName': user['name'], 'UserPassword': user['password'], 'UserRole': user['role'],
+                          'DownloadPassword': self.p['download_password']},
+                     secret=('UserPassword', 'DownloadPassword'))
+            self.log(f"User '{user['name']}' ({user['role']}) ready.")
         self.result['admin_user'] = self.p['admin_user']
+        self.result['users']      = [user['name'] for user in self.p['users']]
 
     def step_artifacts(self):
         # Windows.Triage.Targets first: the triage upload artifact builds on it.
