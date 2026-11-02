@@ -12,7 +12,6 @@ Requirements:
 '''
 
 import base64
-import io
 import json
 import logging
 import os
@@ -38,6 +37,7 @@ from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 from core.manager.webapp import WebappManager
 from core.manager.vm import VmManager, ScriptFailed, parse_image_urn
 from core.utils.postprocess import download_velociraptor, get_velociraptor_version
+from core.utils.collector import build_offline_collector, CollectorBuildError
 from core.utils.taskrunner import current_task, emit, run_tasks
 
 ROOT        = Path(__file__).parent
@@ -70,7 +70,6 @@ _file_log = logging.getLogger('easy_install.file')
 _file_log.addHandler(_file_handler)
 _file_log.propagate = False
 
-TRIAGE_TARGETS_URL  = 'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip'
 COLLECTOR_SAS_VALID_DAYS = 90
 DOWNLOAD_SAS_VALID_DAYS  = 30   # read-only links to the collector and client packages
 BINARIES_CONTAINER  = 'binaries'
@@ -1702,61 +1701,13 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
     }
 
 
-def download_triage_targets(dest_dir):
-    '''Download and extract the latest Windows.Triage.Targets artifact definition.'''
-    with urlopen(TRIAGE_TARGETS_URL) as resp:
-        data = resp.read()
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        zf.extractall(dest_dir)
-
-
-def write_collector_spec(spec_path, sas_url, password):
-    '''Write a velociraptor `collector` spec that runs Windows.Triage.Targets with
-    the _KapeTriage high-level target, plus a handful of standalone artifacts,
-    and uploads the encrypted result via SAS URL.'''
-    spec_path.write_text(f'''OS: Windows
-
-Artifacts:
-  Windows.Triage.Targets:
-    HighLevelTargets: '["_KapeTriage"]'
-  Windows.System.Services:
-    Calculate_hashes: "Y"
-    CertificateInfo: "Y"
-    DISABLE_DANGEROUS_API_CALLS: "Y"
-  Windows.Network.NetstatEnriched:
-    DISABLE_DANGEROUS_API_CALLS: "Y"
-  Windows.System.DNSCache: {{}}
-
-Target: Azure
-TargetArgs:
-  sas_url: "{sas_url}"
-
-EncryptionScheme: Password
-EncryptionArgs:
-  password: "{password}"
-
-OptVerbose: true
-OptBanner: true
-OptPrompt: false
-OptAdmin: true
-OptLevel: 4
-OptConcurrency: 2
-OptFormat: "jsonl"
-OptFilenameTemplate: "Triage-%FQDN%-%TIMESTAMP%"
-OptProgressTimeout: 1800
-OptTimeout: 0
-OptDeleteAtExit: true
-''')
-
-
 def provision_collector(credential, subscription_id, resource_group,
                         account_name, container,
                         keyvault_name, keyvault_password_location, zip_password,
                         defaults):
-    '''Build a stand-alone Velociraptor collector that runs Windows.Triage.Targets
-    with the _KapeTriage high-level target, plus a handful of standalone artifacts,
-    and uploads the encrypted result straight to the just-provisioned input
+    '''Build the stand-alone Velociraptor collector (core.utils.collector):
+    Windows.Triage.Targets with _KapeTriage plus the live data artifacts, with
+    the encrypted result uploaded straight to the just-provisioned input
     container via a write-only SAS URL.'''
 
     section('Provisioning — Offline Collector')
@@ -1796,17 +1747,6 @@ def provision_collector(credential, subscription_id, resource_group,
         kv.set_secret(KEYVAULT_SAS_LOCATION, sas_url)
         success(f"SAS URL stored in Key Vault secret '{KEYVAULT_SAS_LOCATION}'.")
 
-    step('Downloading latest Windows.Triage.Targets artifact definition...')
-    build_dir = ROOT / 'build' / 'collector'
-    datastore = build_dir / 'datastore'
-    try:
-        download_triage_targets(datastore / 'artifact_definitions' / 'Windows' / 'Triage')
-    except Exception as e:
-        info(f'Could not download Windows.Triage.Targets: {e}')
-        info('Re-run easy_install.py once you have network access to build the collector.')
-        return
-    success('Artifact definition downloaded.')
-
     step('Ensuring Velociraptor binary is available...')
     velo_binary = defaults.get('velociraptor_binary', '/tmp/velociraptor')
     velo_url    = defaults.get('velociraptor_url', '')
@@ -1817,24 +1757,12 @@ def provision_collector(credential, subscription_id, resource_group,
         return
     success(f'Using {velo_binary}.')
 
-    step('Writing collector spec...')
-    spec_path = build_dir / 'spec.yaml'
-    write_collector_spec(spec_path, sas_url, password)
-    success(f'Spec written to {spec_path}.')
-
-    step('Building offline collector...')
-    result = subprocess.run(
-        [velo_binary, 'collector', '--datastore', str(datastore), str(spec_path)],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        info('Collector build failed:')
-        info((result.stderr.strip().splitlines() or ['Unknown error.'])[-1])
-        return
-
-    collector = next(datastore.glob('Collector_*'), None)
-    if not collector:
-        info('Collector build did not produce an output binary.')
+    step('Building offline collector (triage data and live data)...')
+    try:
+        collector = build_offline_collector(velo_binary, ROOT / 'build' / 'collector', sas_url, password)
+    except CollectorBuildError as e:
+        info(f'Collector build failed: {e}')
+        info('Re-run easy_install.py to try again.')
         return
 
     success(f'Collector built: {collector}')
@@ -2242,6 +2170,7 @@ def main():
         info('             az keyvault secret show --vault-name '
              f"{keyvault_name} --name {KEYVAULT_VELO_CONFIGS['client.config.yaml']} --query value -o tsv > client.config.yaml")
 
+    # The build folder only ever holds the collector of the latest build.
     collector = next((ROOT / 'build' / 'collector' / 'datastore').glob('Collector_*'), None)
     if collector:
         print()
