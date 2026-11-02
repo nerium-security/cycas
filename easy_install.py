@@ -2171,7 +2171,7 @@ def main():
         for name, role, secret_name in velociraptor_users_setting():
             info(f"  User     — {name} ({role}), password in secret '{secret_name}'")
         info(f'  Access   — GUI and SSH restricted to: {", ".join(velo_server["allowed_ips"])}')
-        info(f'  Packages — {packages}ClientInstallationPackages/')
+        info(f'  Client installers — {packages}ClientInstallationPackages/')
         info('  SSH      — az keyvault secret show --vault-name '
              f'{keyvault_name} --name {KEYVAULT_VELO_SSH_KEY} --query value -o tsv > velo_key && chmod 600 velo_key')
         info(f'             ssh -i velo_key {VELO_VM_ADMIN}@{velo_server["fqdn"]}')
