@@ -64,6 +64,7 @@ DEFAULTS = {
     'msi_amd64_url':       '',   # empty: the MSI from the Velociraptor release
     'msi_x86_url':         '',
     'linux_client_name':   '',   # empty: stock velociraptor_client deb/rpm only; set: also build packages renamed to this
+    'obfuscated_msi_prefix': 'Brokerplugin',   # name prefix for the obfuscated MSI (built from msi_*_url)
     'hunts_url':           '',   # empty: hunts.vql from files_dir
     'writeback_windows':   '',   # empty: keep the Velociraptor default
     'triage_targets_url':  'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip',
@@ -684,8 +685,8 @@ class Bootstrap:
         for old in self.packages.iterdir():
             shutil.rmtree(old) if old.is_dir() else old.unlink()
         # Everything built from the Velociraptor release goes to standard/,
-        # the MSIs built from a custom (obfuscated) template to custom/.
-        standard, custom = self.packages / 'standard', self.packages / 'custom'
+        # the MSIs built from a custom (obfuscated) template to obfuscated/.
+        standard, obfuscated = self.packages / 'standard', self.packages / 'obfuscated'
         standard.mkdir()
 
         for arch, key, release_name in (
@@ -702,8 +703,8 @@ class Bootstrap:
                 self.log(f'MSI {arch}: no template in the {self.version} release, skipping the standard {arch} installer.')
             if self.p[key]:
                 self.log(f'MSI {arch}: custom (obfuscated template)')
-                custom.mkdir(exist_ok=True)
-                self.repack_msi(self.p[key], custom / f'{prefix}_client_windows_install_{arch}_custom.msi')
+                obfuscated.mkdir(exist_ok=True)
+                self.repack_msi(self.p[key], obfuscated / f'{self.p["obfuscated_msi_prefix"]}_client_windows_install_{arch}.msi')
 
         # The legacy builds (Windows 7/8, Server 2008 R2/2012, and the only
         # 32-bit build from 0.77) have no MSI: the client config is repacked
@@ -728,7 +729,7 @@ class Bootstrap:
 
 
         # Linux: stock velociraptor_client deb/rpm, glibc and musl, into
-        # standard/. With a custom name, an extra set is built into custom/
+        # standard/. With a custom name, an extra set is built into obfuscated/
         # where the binary, service, paths and package all use that name.
         name = self.p['linux_client_name']
         for binary, flavour in ((self.bin, ''), (self.bin_musl, 'musl_')):
@@ -741,9 +742,9 @@ class Bootstrap:
                     shutil.move(built[0], standard / f'{prefix}_{flavour}client_{kind}_linux_x64.{ext}')
                 if name:
                     self.log(f'Linux {kind} {flavour}client: custom (renamed to {name})')
-                    custom.mkdir(exist_ok=True)
+                    obfuscated.mkdir(exist_ok=True)
                     self.build_renamed_linux_package(
-                        binary, ext, name, custom / f'{name}_{flavour}client_{kind}_linux_x64.{ext}')
+                        binary, ext, name, obfuscated / f'{name}_{flavour}client_{kind}_linux_x64.{ext}')
 
     def step_permissions(self):
         '''

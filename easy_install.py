@@ -122,6 +122,7 @@ VELO_SETTINGS_DEFAULTS   = {
     'velociraptor_server_expected_clients':  '1000',
     'velociraptor_server_admin_user':        'admin',
     'velociraptor_server_package_prefix':    'Velociraptor',
+    'velociraptor_server_obfuscated_msi_prefix': 'Brokerplugin',
     'velociraptor_server_api_name':          'cycas_api',
     'velociraptor_server_download_password': 'infected',
 }
@@ -771,7 +772,7 @@ def collect_msi_templates():
     print()
     info('Windows client installers (MSI) are built from the Velociraptor release MSI, in')
     info(f'{VELO_INSTALLERS_PREFIX}/standard/. With your own (obfuscated) template from a URL,')
-    info(f'such as a SAS URL, an extra installer is built in {VELO_INSTALLERS_PREFIX}/custom/.')
+    info(f'such as a SAS URL, an extra installer is built in {VELO_INSTALLERS_PREFIX}/obfuscated/.')
     for arch, key in MSI_TEMPLATE_SETTINGS:
         current = settings.get(key.lower(), '')
         default = 'none, standard installer only'
@@ -1811,6 +1812,7 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         'msi_amd64_url':       settings.get('velociraptor_server_msi_amd64_url', ''),
         'msi_x86_url':         settings.get('velociraptor_server_msi_x86_url', ''),
         'linux_client_name':   settings.get('velociraptor_server_linux_client_name', ''),
+        'obfuscated_msi_prefix': settings.get('velociraptor_server_obfuscated_msi_prefix', 'Brokerplugin'),
         'hunts_url':           settings.get('velociraptor_server_hunts_url', ''),
         'upload_sas_url':      upload_sas,
         'staging_sas_url':     staging_sas,

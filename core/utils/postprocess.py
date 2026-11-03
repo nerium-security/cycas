@@ -135,20 +135,34 @@ def get_velociraptor_version(binary):
         return None
 
 
+def static_build_url(url):
+    '''
+    The URL of the statically linked (musl) build for a Linux release URL.
+
+    The regular Linux build of recent releases needs a recent glibc (0.77.3:
+    GLIBC_2.38), which the Azure Functions image (Debian 12, glibc 2.36) does
+    not have. The musl build does not depend on glibc, so it runs there and on
+    any other Linux. Other URLs are returned unchanged.
+    '''
+    return re.sub(r'(/velociraptor-v[\d.]+-linux-amd64)(\.gz)?$', r'\1-musl\2', url)
+
+
 def download_velociraptor(binary, url):
     '''
     Download the Velociraptor binary if it does not already exist or is out of date.
 
-    Fetches the binary from the provided URL and writes it to `binary`.
-    Release binaries ending in .gz (Velociraptor 0.77 and later) are
-    decompressed. If the destination file already exists and matches the
-    version encoded in `url`, no download is performed.
+    Fetches the binary from the provided URL and writes it to `binary`. A
+    Linux release URL is replaced by its statically linked (musl) build, see
+    static_build_url(). Release binaries ending in .gz (Velociraptor 0.77 and
+    later) are decompressed. If the destination file already exists, runs and
+    matches the version encoded in `url`, no download is performed.
 
     Args:
         binary (str): Destination path for the Velociraptor binary.
         url (str): Download URL for the Velociraptor binary.
     '''
 
+    url = static_build_url(url)
     if os.path.exists(binary):
         url_version_match = re.search(r'velociraptor-v([\d.]+)-', url)
         url_version = url_version_match.group(1) if url_version_match else None
