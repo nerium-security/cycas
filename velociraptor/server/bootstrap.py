@@ -58,6 +58,7 @@ DEFAULTS = {
     'users':               [],           # extra GUI users: [{name, role, password}]
     'msi_amd64_url':       '',   # empty: the MSI from the Velociraptor release
     'msi_x86_url':         '',
+    'linux_client_name':   '',   # empty: stock velociraptor_client deb/rpm only; set: also build packages renamed to this
     'hunts_url':           '',   # empty: hunts.vql from files_dir
     'writeback_windows':   '',   # empty: keep the Velociraptor default
     'triage_targets_url':  'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip',
@@ -278,6 +279,49 @@ class Bootstrap:
             self.download(template_url, template)
             self.run([self.bin, 'config', 'repack', '--msi', template, self.client_config, output])
 
+    def renamed_linux_spec(self, binary, create, name):
+        '''
+        The default <create> (deb_create/rpm_create) client package spec with
+        every "velociraptor_client" name replaced by name: the installed binary,
+        the systemd and SysV service, the config path, the service user and
+        group, and the package filename. The paths inside the spec are templated
+        off these Expansion fields, so renaming the fields renames everything.
+        '''
+        result = self.run([binary, '--config', self.client_config, 'query', '--format', 'json',
+                           f'SELECT Spec FROM {create}(show_spec=TRUE)'])
+        rows = parse_json_arrays(result.stdout)
+        if not rows or not rows[0].get('Spec'):
+            raise StepFailed(f'{create} show_spec returned no spec.')
+        spec = rows[0]['Spec']
+        spec['Expansion'].update({
+            'Name':                   name,
+            'ConfigPath':             f'/etc/{name}/client.config.yaml',
+            'VelociraptorBinaryPath': f'/usr/local/bin/{name}',
+            'SystemdServiceFile':     f'{name}.service',
+            'SysvService':            name,
+            'ServiceUser':            name,
+            'ServiceGroup':           name,
+            'ServiceDescription':     f'{name} endpoint agent',
+        })
+        spec['OutputFilenameTemplate'] = f'{name}_{{{{ .Version }}}}_{{{{ .Arch }}}}.{"deb" if create == "deb_create" else "rpm"}'
+        return spec
+
+    def build_renamed_linux_package(self, binary, ext, name, output):
+        '''Build one client package (deb or rpm) renamed to name, into output.'''
+        create = 'deb_create' if ext == 'deb' else 'rpm_create'
+        spec   = json.dumps(self.renamed_linux_spec(binary, create, name))
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run([binary, '--config', self.client_config, 'query', '--format', 'json',
+                      '--env', f'Binary={binary}', '--env', f'Output={tmp}',
+                      '--env', f'ConfigPath={self.client_config}', '--env', f'Spec={spec}',
+                      f'SELECT OSPath FROM {create}(exe=Binary, directory_name=Output, '
+                      f'config=read_file(filename=ConfigPath, length=1000000), '
+                      f'package_spec=parse_json(data=Spec))'])
+            built = list(Path(tmp).glob(f'*.{ext}'))
+            if len(built) != 1:
+                raise StepFailed(f'Expected one renamed {ext} package, found {len(built)}.')
+            shutil.move(built[0], output)
+
     def triage_targets(self):
         '''Windows.Triage.Targets is no longer built in; fetch the current definition.'''
         dest = self.artifacts / 'Windows.Triage.Targets.yaml'
@@ -444,6 +488,10 @@ class Bootstrap:
             (standard / f'{prefix}_client_windows_legacy_README.txt').write_text(
                 LEGACY_README.format(files='\n'.join(f'  {name}' for name in legacy)).replace('\n', '\r\n'))
 
+        # Linux: stock velociraptor_client deb/rpm, glibc and musl, into
+        # standard/. With a custom name, an extra set is built into custom/
+        # where the binary, service, paths and package all use that name.
+        name = self.p['linux_client_name']
         for binary, flavour in ((self.bin, ''), (self.bin_musl, 'musl_')):
             for kind, ext in (('debian', 'deb'), ('rpm', 'rpm')):
                 with tempfile.TemporaryDirectory() as tmp:
@@ -452,6 +500,11 @@ class Bootstrap:
                     if len(built) != 1:
                         raise StepFailed(f'Expected one {ext} package, found {len(built)}.')
                     shutil.move(built[0], standard / f'{prefix}_{flavour}client_{kind}_linux_x64.{ext}')
+                if name:
+                    self.log(f'Linux {kind} {flavour}client: custom (renamed to {name})')
+                    custom.mkdir(exist_ok=True)
+                    self.build_renamed_linux_package(
+                        binary, ext, name, custom / f'{name}_{flavour}client_{kind}_linux_x64.{ext}')
 
     def step_permissions(self):
         '''

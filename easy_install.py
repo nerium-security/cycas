@@ -765,6 +765,42 @@ def collect_msi_templates():
         success('MSI templates saved in .env (' + ', '.join(updates) + ').')
 
 
+LINUX_CLIENT_NAME_KEY = 'VELOCIRAPTOR_SERVER_LINUX_CLIENT_NAME'
+LINUX_CLIENT_NAME_RE  = re.compile(r'^[a-z][a-z0-9-]*$')   # a valid deb/rpm package and systemd service name
+
+
+def collect_linux_client_name():
+    '''
+    Ask for a custom name for the Linux (deb/rpm) client packages. When set, an
+    extra set of packages is built where the binary, service, install paths and
+    package name all use it instead of velociraptor_client.
+    '''
+    settings = velociraptor_server_settings()
+    current  = settings.get(LINUX_CLIENT_NAME_KEY.lower(), '')
+    print()
+    info('Linux client packages (deb/rpm) are built as velociraptor_client, in')
+    info(f'{VELO_INSTALLERS_PREFIX}/standard/. With a custom name, an extra set is built in')
+    info(f'{VELO_INSTALLERS_PREFIX}/custom/ with the binary, service and paths renamed to it.')
+    info(f'  Name: {current if current else "none, standard packages only"}')
+    print()
+    if ask('  Change the Linux client name? [y/N]: ').strip().lower() not in ('y', 'yes'):
+        return
+    while True:
+        value = ask('  Linux client name (Enter: keep, -: default): ').strip()
+        if not value:
+            return
+        if value == '-':
+            write_env_values({LINUX_CLIENT_NAME_KEY: ''})
+            success('Linux client name cleared in .env.')
+            return
+        if not LINUX_CLIENT_NAME_RE.match(value):
+            print('  Use lowercase letters, digits and hyphens, starting with a letter, try again.')
+            continue
+        write_env_values({LINUX_CLIENT_NAME_KEY: value})
+        success(f"Linux client name '{value}' saved in .env.")
+        return
+
+
 def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, step_label='9/9',
                                        allowed_ips=None):
     '''
@@ -820,6 +856,7 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
         vm_size = prompt('VM size', default=settings['velociraptor_server_vm_size'])
 
     collect_msi_templates()
+    collect_linux_client_name()
 
     # Fail now on malformed settings rather than halfway through provisioning.
     parse_image_urn(settings['velociraptor_server_image'])
@@ -1000,6 +1037,8 @@ def confirm_plan(run_mode,
         for arch, key in MSI_TEMPLATE_SETTINGS:
             custom = settings.get(key.lower())
             info(f'MSI {arch}      : standard{" + custom, " + redact_url(custom) if custom else ""}')
+        linux_name = settings.get('velociraptor_server_linux_client_name')
+        info(f'Linux deb/rpm: standard{f" + custom ({linux_name})" if linux_name else ""}')
         hunts = 'custom (VELOCIRAPTOR_SERVER_HUNTS_URL)' if settings.get('velociraptor_server_hunts_url') else 'default (hunts.vql)'
         info(f'Hunts        : {hunts}, created paused')
 
@@ -1736,6 +1775,7 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         'writeback_windows':   settings.get('velociraptor_server_writeback_windows', ''),
         'msi_amd64_url':       settings.get('velociraptor_server_msi_amd64_url', ''),
         'msi_x86_url':         settings.get('velociraptor_server_msi_x86_url', ''),
+        'linux_client_name':   settings.get('velociraptor_server_linux_client_name', ''),
         'hunts_url':           settings.get('velociraptor_server_hunts_url', ''),
         'upload_sas_url':      upload_sas,
         'staging_sas_url':     staging_sas,
