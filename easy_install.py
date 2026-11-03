@@ -24,7 +24,7 @@ import time
 import random
 import string
 import zipfile
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from pathlib import Path
 
 from core.manager.azure import AzureManager
@@ -150,9 +150,10 @@ def success(msg):   emit(f'  [OK] {msg}'); logging.info('[OK] %s', msg)
 def error(msg):     emit(f'  [ERROR] {msg}', file=sys.stderr); logging.error(msg); sys.exit(1)
 def rand6():        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
-def ask(prompt_text=''):
+def ask(prompt_text='', log_value=True):
+    '''Read an answer; log_value=False keeps it out of the log file (e.g. SAS URLs).'''
     value = input(prompt_text)
-    logging.info('PROMPT: %r -> %r', prompt_text, value)
+    logging.info('PROMPT: %r -> %r', prompt_text, value if log_value else '<not logged>')
     return value
 
 
@@ -703,6 +704,66 @@ def expected_clients_setting():
     return int(value)
 
 
+MSI_TEMPLATE_SETTINGS = (('x64', 'VELOCIRAPTOR_SERVER_MSI_AMD64_URL'), ('x86', 'VELOCIRAPTOR_SERVER_MSI_X86_URL'))
+MSI_MAGIC             = bytes.fromhex('d0cf11e0a1b11ae1')   # MSI files are OLE compound documents
+
+
+def redact_url(url):
+    '''The URL without its query string, which holds a SAS token.'''
+    return url.split('?', 1)[0] + ('?<token>' if '?' in url else '')
+
+
+def msi_template_problem(url):
+    '''Why url cannot be used as an MSI template, or None when it can.'''
+    if not url.lower().startswith(('https://', 'http://')):
+        return 'is not an http(s) URL'
+    try:
+        # Only the first bytes: enough to recognise an MSI file.
+        with urlopen(Request(url, headers={'Range': 'bytes=0-7'}), timeout=30) as resp:
+            head = resp.read(8)
+    except Exception as e:
+        # Only the type: the message of some errors contains the URL with its token.
+        return f'cannot be downloaded ({getattr(e, "code", None) or type(e).__name__})'
+    return None if head == MSI_MAGIC else 'does not point to an MSI file'
+
+
+def collect_msi_templates():
+    '''
+    Ask for custom MSI templates (e.g. a SAS URL to a central blob) and store
+    them in .env, where the server setup reads them on every run.
+    '''
+    settings = velociraptor_server_settings()
+    print()
+    info('Windows client installers (MSI) are built from an MSI template: by default the')
+    info('Velociraptor release MSI , or your own template from a URL, such as a SAS URL.')
+    for arch, key in MSI_TEMPLATE_SETTINGS:
+        current = settings.get(key.lower(), '')
+        default = 'Velociraptor release MSI' if arch == 'x64' else 'none, the release has no x86 MSI'
+        info(f'  {arch}: {redact_url(current) if current else default}')
+    print()
+    if ask('  Change the MSI templates? [y/N]: ').strip().lower() not in ('y', 'yes'):
+        return
+
+    updates = {}
+    for arch, key in MSI_TEMPLATE_SETTINGS:
+        while True:
+            value = ask(f'  MSI template URL {arch} (Enter: keep, -: default): ', log_value=False).strip()
+            if not value:
+                break
+            if value == '-':
+                updates[key] = ''
+                break
+            problem = msi_template_problem(value)
+            if problem:
+                print(f'  This URL {problem}, try again.')
+                continue
+            updates[key] = value
+            break
+    if updates:
+        write_env_values(updates)
+        success('MSI templates saved in .env (' + ', '.join(updates) + ').')
+
+
 def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, step_label='9/9',
                                        allowed_ips=None):
     '''
@@ -756,6 +817,8 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
                 continue
             break
         vm_size = prompt('VM size', default=settings['velociraptor_server_vm_size'])
+
+    collect_msi_templates()
 
     # Fail now on malformed settings rather than halfway through provisioning.
     parse_image_urn(settings['velociraptor_server_image'])
@@ -933,8 +996,9 @@ def confirm_plan(run_mode,
         info(f'GUI and SSH  : {", ".join(velo_server["allowed_ips"])}')
         info(f'Users        : {velo_server["admin_user"]} (administrator)'
              + ''.join(f', {name} ({role})' for name, role, _ in velociraptor_users_setting()))
-        for arch, key in (('x64', 'velociraptor_server_msi_amd64_url'), ('x86', 'velociraptor_server_msi_x86_url')):
-            info(f'MSI {arch}      : {"custom (" + key.upper() + ")" if settings.get(key) else "default (Velociraptor release)"}')
+        for arch, key in MSI_TEMPLATE_SETTINGS:
+            custom = settings.get(key.lower())
+            info(f'MSI {arch}      : {"custom, " + redact_url(custom) if custom else "default (Velociraptor release)"}')
         hunts = 'custom (VELOCIRAPTOR_SERVER_HUNTS_URL)' if settings.get('velociraptor_server_hunts_url') else 'default (hunts.vql)'
         info(f'Hunts        : {hunts}, created paused')
 
