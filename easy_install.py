@@ -272,6 +272,25 @@ def ensure_env_file():
         info('Created .env from .env_example' if ENV_EXAMPLE.exists() else 'Created empty .env')
 
 
+def reset_env_file(previous_rg=None):
+    '''
+    Start a new session from a clean .env (a copy of .env_example), so nothing
+    from an earlier install, such as SAS URLs or another deployment's
+    endpoints, ends up in this one. The old .env is kept as
+    .env.<resource group>.<timestamp> (ignored by git).
+    '''
+    if not ENV_FILE.exists():
+        ensure_env_file()
+        return
+    example = ENV_EXAMPLE.read_text() if ENV_EXAMPLE.exists() else ''
+    if ENV_FILE.read_text() != example:
+        label  = re.sub(r'[^A-Za-z0-9._-]+', '-', previous_rg).strip('-') if previous_rg else 'backup'
+        backup = ENV_FILE.with_name(f'.env.{label}.{time.strftime("%Y%m%d-%H%M%S")}')
+        ENV_FILE.rename(backup)
+        info(f'Previous .env moved to {backup.name}; this session starts from .env_example.')
+    ENV_FILE.write_text(example)
+
+
 def write_env_values(values):
     '''Update .env in place. Not thread-safe: provisioning tasks return their
     values instead, and the main thread writes them once a phase is done.'''
@@ -1955,6 +1974,7 @@ def main():
     print()
 
     saved = load_state()
+    previous_rg = None   # resource group of a saved session that is not resumed
     if saved:
         run_mode = saved.get('run_mode', 'azurefunction')
     else:
@@ -2040,11 +2060,13 @@ def main():
                 webapp_mode = webapp_app = webapp_allowed_ips = None
                 velo_server = None
         else:
+            previous_rg = saved['resource_group']
             clear_state()
             saved = None
             run_mode = 'azurefunction'
 
     if not saved:
+        reset_env_file(previous_rg)
         subscription_id = azure.select_subscription()
 
         setup_mode = collect_setup_mode()
