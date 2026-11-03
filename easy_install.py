@@ -734,11 +734,12 @@ def collect_msi_templates():
     '''
     settings = velociraptor_server_settings()
     print()
-    info('Windows client installers (MSI) are built from an MSI template: by default the')
-    info('Velociraptor release MSI , or your own template from a URL, such as a SAS URL.')
+    info('Windows client installers (MSI) are built from the Velociraptor release MSI, in')
+    info(f'{VELO_INSTALLERS_PREFIX}/standard/. With your own (obfuscated) template from a URL,')
+    info(f'such as a SAS URL, an extra installer is built in {VELO_INSTALLERS_PREFIX}/custom/.')
     for arch, key in MSI_TEMPLATE_SETTINGS:
         current = settings.get(key.lower(), '')
-        default = 'Velociraptor release MSI' if arch == 'x64' else 'none, the release has no x86 MSI'
+        default = 'none, standard installer only'
         info(f'  {arch}: {redact_url(current) if current else default}')
     print()
     if ask('  Change the MSI templates? [y/N]: ').strip().lower() not in ('y', 'yes'):
@@ -998,7 +999,7 @@ def confirm_plan(run_mode,
              + ''.join(f', {name} ({role})' for name, role, _ in velociraptor_users_setting()))
         for arch, key in MSI_TEMPLATE_SETTINGS:
             custom = settings.get(key.lower())
-            info(f'MSI {arch}      : {"custom, " + redact_url(custom) if custom else "default (Velociraptor release)"}')
+            info(f'MSI {arch}      : standard{" + custom, " + redact_url(custom) if custom else ""}')
         hunts = 'custom (VELOCIRAPTOR_SERVER_HUNTS_URL)' if settings.get('velociraptor_server_hunts_url') else 'default (hunts.vql)'
         info(f'Hunts        : {hunts}, created paused')
 
@@ -1764,7 +1765,7 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
     for name in result.get('uploaded', []):
         url, expiry = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
                                                  BINARIES_CONTAINER, name, expiry_days=DOWNLOAD_SAS_VALID_DAYS)
-        info(f'{name.rsplit("/", 1)[1]} (link expires {expiry:%Y-%m-%d}):')
+        info(f'{name.split("/", 1)[1]} (link expires {expiry:%Y-%m-%d}):')
         info(f'  {url}')
 
     step('Backing up server and client config to Key Vault...')

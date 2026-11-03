@@ -272,6 +272,12 @@ class Bootstrap:
         '''URL of another asset from the same Velociraptor release.'''
         return self.p['velociraptor_url'].rsplit('/', 1)[0] + '/' + name
 
+    def repack_msi(self, template_url, output):
+        with tempfile.TemporaryDirectory() as tmp:
+            template = Path(tmp) / 'template.msi'
+            self.download(template_url, template)
+            self.run([self.bin, 'config', 'repack', '--msi', template, self.client_config, output])
+
     def triage_targets(self):
         '''Windows.Triage.Targets is no longer built in; fetch the current definition.'''
         dest = self.artifacts / 'Windows.Triage.Targets.yaml'
@@ -396,25 +402,28 @@ class Bootstrap:
     def step_client_packages(self):
         prefix = self.p['package_prefix']
         for old in self.packages.iterdir():
-            old.unlink()
+            shutil.rmtree(old) if old.is_dir() else old.unlink()
+        # Everything built from the Velociraptor release goes to standard/,
+        # the MSIs built from a custom (obfuscated) template to custom/.
+        standard, custom = self.packages / 'standard', self.packages / 'custom'
+        standard.mkdir()
 
         for arch, key, release_name in (
             ('x64', 'msi_amd64_url', f'velociraptor-v{self.version}-windows-amd64.msi'),
             ('x86', 'msi_x86_url',   f'velociraptor-v{self.version}-windows-386.msi'),
         ):
-            custom = self.p[key]
-            url    = custom or self.release_url(release_name)
-            # Releases from 0.77 no longer include a 32-bit MSI; without a
-            # custom template there is then nothing to build the x86 installer from.
-            if not custom and not self.url_exists(url):
-                self.log(f'MSI template {arch}: none in the {self.version} release, skipping the {arch} installer.')
-                continue
-            self.log(f'MSI template {arch}: {"custom" if custom else "default (Velociraptor release)"}')
-            with tempfile.TemporaryDirectory() as tmp:
-                template = Path(tmp) / 'template.msi'
-                self.download(url, template)
-                self.run([self.bin, 'config', 'repack', '--msi', template, self.client_config,
-                          self.packages / f'{prefix}_client_windows_install_{arch}.msi'])
+            # Releases from 0.77 no longer include a 32-bit MSI; the standard
+            # x86 installer is then skipped.
+            url = self.release_url(release_name)
+            if self.url_exists(url):
+                self.log(f'MSI {arch}: standard (Velociraptor release template)')
+                self.repack_msi(url, standard / f'{prefix}_client_windows_install_{arch}.msi')
+            else:
+                self.log(f'MSI {arch}: no template in the {self.version} release, skipping the standard {arch} installer.')
+            if self.p[key]:
+                self.log(f'MSI {arch}: custom (obfuscated template)')
+                custom.mkdir(exist_ok=True)
+                self.repack_msi(self.p[key], custom / f'{prefix}_client_windows_install_{arch}_custom.msi')
 
         # The legacy builds (Windows 7/8, Server 2008 R2/2012, and the only
         # 32-bit build from 0.77) have no MSI: the client config is repacked
@@ -428,11 +437,11 @@ class Bootstrap:
             with tempfile.TemporaryDirectory() as tmp:
                 template = Path(tmp) / 'template.exe'
                 self.download(url, template)
-                output = self.packages / f'{prefix}_client_windows_install_{arch}_legacy.exe'
+                output = standard / f'{prefix}_client_windows_install_{arch}_legacy.exe'
                 self.run([self.bin, 'config', 'repack', '--exe', template, self.client_config, output])
                 legacy.append(output.name)
         if legacy:
-            (self.packages / f'{prefix}_client_windows_legacy_README.txt').write_text(
+            (standard / f'{prefix}_client_windows_legacy_README.txt').write_text(
                 LEGACY_README.format(files='\n'.join(f'  {name}' for name in legacy)).replace('\n', '\r\n'))
 
         for binary, flavour in ((self.bin, ''), (self.bin_musl, 'musl_')):
@@ -442,7 +451,7 @@ class Bootstrap:
                     built = list(Path(tmp).glob(f'*.{ext}'))
                     if len(built) != 1:
                         raise StepFailed(f'Expected one {ext} package, found {len(built)}.')
-                    shutil.move(built[0], self.packages / f'{prefix}_{flavour}client_{kind}_linux_x64.{ext}')
+                    shutil.move(built[0], standard / f'{prefix}_{flavour}client_{kind}_linux_x64.{ext}')
 
     def step_permissions(self):
         '''
@@ -614,8 +623,8 @@ class Bootstrap:
             return
         base, _, token = sas.partition('?')
         uploaded = []
-        for path in sorted(self.packages.iterdir()):
-            name = f'{self.p["installers_prefix"]}/{path.name}'
+        for path in sorted(p for p in self.packages.rglob('*') if p.is_file()):
+            name = f'{self.p["installers_prefix"]}/{path.relative_to(self.packages).as_posix()}'
             self.log(f'Uploading {name}')
             self.upload(path, f'{base}/{urllib.parse.quote(name)}?{token}')
             uploaded.append(name)
