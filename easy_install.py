@@ -2343,12 +2343,12 @@ def main():
 
     # The build folder only ever holds the collectors of the latest build.
     build = ROOT / 'build' / 'collector'
-    collectors = sorted(build.glob('datastore/Collector_*')) + sorted(build.glob('legacy/Collector_*'))
+    collectors = sorted(build.glob('*/datastore/OfflineCollector_*')) + sorted(build.glob('legacy/OfflineCollector_*'))
     if collectors:
         print()
-        info(f'Offline collector — {collectors[0]}')
-        for legacy in collectors[1:]:
-            info(f'  Legacy    — {legacy}')
+        info('Offline collectors')
+        for collector in collectors:
+            info(f'  {collector.name} — {collector}')
         if keyvault_name:
             info(f"  ZIP password — Key Vault '{keyvault_name}', secret "
                  f"'{keyvault_password_location or KEYVAULT_PASSWORD_LOCATION}' (Cycas uses it to open the ZIPs)")

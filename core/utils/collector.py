@@ -35,7 +35,7 @@ TRIAGE_TARGETS_URL = 'https://triage.velocidex.com/artifacts/Windows.Triage.Targ
 # 'template' is the built executable's name; 'purpose' labels the download.
 COLLECTOR_PLATFORMS = {
     'Windows': {
-        'template': 'Cycas-Collector-Windows',
+        'template': 'OfflineCollector_Windows-amd64.exe',
         'purpose':  'Windows 10/11, Server 2016 and later (64-bit)',
         'artifacts': {
             'Windows.Triage.Targets':          {'HighLevelTargets': '["_KapeTriage"]'},
@@ -49,7 +49,7 @@ COLLECTOR_PLATFORMS = {
         },
     },
     'Linux': {
-        'template': 'Cycas-Collector-Linux',
+        'template': 'OfflineCollector_Linux',
         'purpose':  'Linux (64-bit / amd64, statically linked)',
         'artifacts': {
             'Linux.Sys.Pslist':              {},   # running processes
@@ -65,7 +65,7 @@ COLLECTOR_PLATFORMS = {
         },
     },
     'MacOS': {
-        'template': 'Cycas-Collector-MacOS',
+        'template': 'OfflineCollector_MacOS',
         # Velociraptor does not self-contain the (notarized) macOS binary: this
         # is a config package, run with the official darwin binary from the
         # Velociraptor GitHub releases:  <binary> -- --embedded_config <file>
@@ -243,7 +243,7 @@ def build_legacy_collectors(binary, collector, velociraptor_url, build_dir):
             except Exception as e:
                 raise CollectorBuildError(f'Could not download {name}.gz: {e}') from None
 
-            output = out_dir / f'Collector_{name}'
+            output = out_dir / f'OfflineCollector_{build[0].upper()}{build[1:]}.exe'   # e.g. _Windows-amd64-legacy.exe
             result = subprocess.run([str(binary), 'config', 'repack', '--exe', str(template), str(config), str(output)],
                                     capture_output=True, text=True)
             if result.returncode != 0 or not output.exists():
