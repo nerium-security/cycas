@@ -9,6 +9,17 @@ Requirements:
     - pip install -e . (install cycas package)
     - az login (Azure CLI, used for authentication)
     - Contributor access on the target resource group
+
+Unattended mode (for CI, e.g. GitHub Actions):
+    Run with --unattended, or set CYCAS_UNATTENDED=1. The wizard then never
+    reads stdin: every prompt is answered from CYCAS_UNATTENDED_ANSWERS, a JSON
+    object of prompt-substring -> answer (or CYCAS_UNATTENDED_ANSWERS_FILE, a
+    path to one). An empty answer accepts the default / finishes / skips, so
+    only required selections need an entry; a required prompt with no answer
+    fails fast, naming the prompt to add. Secrets come from the environment,
+    not the answer map: CYCAS_ZIP_PASSWORD for the Key Vault ZIP password.
+    Authentication still uses DefaultAzureCredential, which picks up the
+    session established by `azure/login` (OIDC) in CI.
 '''
 
 import base64
@@ -152,8 +163,72 @@ def success(msg):   emit(f'  [OK] {msg}'); logging.info('[OK] %s', msg)
 def error(msg):     emit(f'  [ERROR] {msg}', file=sys.stderr); logging.error(msg); sys.exit(1)
 def rand6():        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
+# --- Unattended mode -------------------------------------------------------
+# When CYCAS_UNATTENDED is set (or --unattended is passed), the wizard never
+# reads from stdin. Every ask() is answered from a pre-supplied map instead,
+# so the installer can run headless in CI. Most prompts accept an empty answer
+# as "use the default / finish / skip", so only the required selections
+# (region, resource group, SKUs, ...) need an entry. A required prompt that
+# rejects the empty answer and re-asks itself would loop forever with no stdin,
+# so we detect the immediate re-ask and fail fast, naming the prompt to add.
+UNATTENDED = os.environ.get('CYCAS_UNATTENDED', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+def _normalize_prompt(text):
+    return ' '.join(text.strip().lower().split())
+
+def _load_unattended_answers():
+    '''Answers for unattended mode, keyed by a normalized substring of the
+    prompt. Loaded from CYCAS_UNATTENDED_ANSWERS (inline JSON object) or
+    CYCAS_UNATTENDED_ANSWERS_FILE (path to a JSON object).'''
+    raw = os.environ.get('CYCAS_UNATTENDED_ANSWERS', '').strip()
+    if not raw:
+        path = os.environ.get('CYCAS_UNATTENDED_ANSWERS_FILE', '').strip()
+        if path:
+            raw = Path(path).read_text()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        error(f'CYCAS_UNATTENDED_ANSWERS is not valid JSON: {exc}')
+    if not isinstance(data, dict):
+        error('CYCAS_UNATTENDED_ANSWERS must be a JSON object of prompt -> answer.')
+    return {_normalize_prompt(k): str(v) for k, v in data.items()}
+
+_UNATTENDED_ANSWERS = _load_unattended_answers() if UNATTENDED else {}
+_unattended_last_unseeded = None   # last prompt answered with '' because nothing matched
+
+def _unattended_answer(prompt_text):
+    '''Resolve an answer for prompt_text without stdin. Return a configured
+    answer if one matches (exact normalized key, or a key that is a substring
+    of the prompt), else '' to accept the default. If the same prompt is asked
+    twice running with no match, it is looping on a required value: fail fast.'''
+    global _unattended_last_unseeded
+    norm = _normalize_prompt(prompt_text)
+    if norm in _UNATTENDED_ANSWERS:
+        _unattended_last_unseeded = None
+        return _UNATTENDED_ANSWERS[norm]
+    for key, value in _UNATTENDED_ANSWERS.items():
+        if key and key in norm:
+            _unattended_last_unseeded = None
+            return value
+    if norm and norm == _unattended_last_unseeded:
+        error('Unattended mode: no answer for required prompt '
+              f'{prompt_text.strip()!r}, and the empty default was rejected. '
+              'Add it to CYCAS_UNATTENDED_ANSWERS.')
+    _unattended_last_unseeded = norm
+    return ''
+
+def unattended_secret(env_key):
+    '''A secret answer in unattended mode, taken from the named env var.'''
+    return os.environ.get(env_key, '')
+
 def ask(prompt_text='', log_value=True):
     '''Read an answer; log_value=False keeps it out of the log file (e.g. SAS URLs).'''
+    if UNATTENDED:
+        value = _unattended_answer(prompt_text)
+        logging.info('PROMPT (unattended): %r -> %r', prompt_text, value if log_value else '<not logged>')
+        return value
     value = input(prompt_text)
     logging.info('PROMPT: %r -> %r', prompt_text, value if log_value else '<not logged>')
     return value
@@ -541,7 +616,8 @@ def collect_keyvault_config(resource_group, step_label='7/7'):
     kv_default = rg_slug[:24 - len(kv_suffix)] + kv_suffix
     keyvault_name     = prompt('Key Vault name', default=kv_default)
     password_location = prompt('Location for the ZIP password in Key Vault', default=KEYVAULT_PASSWORD_LOCATION)
-    zip_password      = getpass.getpass('  ZIP password to store in Key Vault: ')
+    zip_password      = (unattended_secret('CYCAS_ZIP_PASSWORD') if UNATTENDED
+                         else getpass.getpass('  ZIP password to store in Key Vault: '))
 
     return keyvault_name, password_location, zip_password
 
@@ -2376,6 +2452,12 @@ def main():
 
 
 if __name__ == '__main__':
+    # --unattended is an alias for CYCAS_UNATTENDED=1; honour it before main()
+    # runs so the answer map (loaded at import from the env) is in effect.
+    if '--unattended' in sys.argv[1:] and not UNATTENDED:
+        os.environ['CYCAS_UNATTENDED'] = '1'
+        UNATTENDED = True
+        _UNATTENDED_ANSWERS = _load_unattended_answers()
     try:
         main()
     except Exception:
