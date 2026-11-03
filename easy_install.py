@@ -37,7 +37,8 @@ from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 from core.manager.webapp import WebappManager
 from core.manager.vm import VmManager, ScriptFailed, parse_image_urn
 from core.utils.postprocess import download_velociraptor, get_velociraptor_version
-from core.utils.collector import build_offline_collector, build_legacy_collectors, CollectorBuildError
+from core.utils.collector import (build_offline_collector, build_legacy_collectors,
+                                   CollectorBuildError, COLLECTOR_PLATFORMS)
 from core.utils.taskrunner import current_task, emit, run_tasks
 
 ROOT        = Path(__file__).parent
@@ -694,6 +695,21 @@ def collector_legacy_setting():
     '''VELOCIRAPTOR_COLLECTOR_LEGACY, default true.'''
     value = read_env_defaults(ENV_FILE).get('velociraptor_collector_legacy', 'true')
     return value.strip().lower() not in ('false', 'no', 'n', '0')
+
+
+def collector_platforms_setting():
+    '''VELOCIRAPTOR_COLLECTOR_PLATFORMS: which offline collectors to build,
+    default all three. Tokens map to the COLLECTOR_PLATFORMS keys.'''
+    raw   = read_env_defaults(ENV_FILE).get('velociraptor_collector_platforms', 'windows,linux,macos')
+    alias = {'windows': 'Windows', 'win': 'Windows',
+             'linux': 'Linux',
+             'macos': 'MacOS', 'mac': 'MacOS', 'osx': 'MacOS', 'darwin': 'MacOS'}
+    result = []
+    for token in raw.replace(',', ' ').split():
+        os_name = alias.get(token.strip().lower())
+        if os_name and os_name not in result:
+            result.append(os_name)
+    return result or ['Windows']
 
 
 def expected_clients_setting():
@@ -1884,29 +1900,34 @@ def provision_collector(credential, subscription_id, resource_group,
         return
     success(f'Using {velo_binary}.')
 
-    step('Building offline collector (triage data and live data)...')
-    try:
-        collector = build_offline_collector(velo_binary, ROOT / 'build' / 'collector', sas_url, password)
-    except CollectorBuildError as e:
-        info(f'Collector build failed: {e}')
-        info('Re-run easy_install.py to try again.')
-        return
-
-    success(f'Collector built: {collector}')
-    info('Run it on a Windows endpoint to collect Windows.Triage.Targets and')
-    info(f'uploads the encrypted result to: {blob_uri}/{container}')
-    info(f'The SAS URL embedded in the collector expires {expiry:%Y-%m-%d}.')
-    collectors = [(collector, 'Windows 10/11, Server 2016 and later (64-bit)')]
-
-    if collector_legacy_setting():
-        step('Building legacy collectors (older and 32-bit Windows)...')
+    collectors = []
+    for os_name in collector_platforms_setting():
+        step(f'Building {os_name} offline collector (triage data and live data)...')
         try:
-            collectors += build_legacy_collectors(velo_binary, collector, velo_url, ROOT / 'build' / 'collector')
-            success('Legacy collectors built.')
+            collector = build_offline_collector(velo_binary, ROOT / 'build' / 'collector', sas_url, password, os_name)
         except CollectorBuildError as e:
-            # The regular collector is ready, so carry on without them.
-            info(f'Legacy collector build failed: {e}')
+            # Carry on with the other platforms; a re-run retries this one.
+            info(f'{os_name} collector build failed: {e}')
             info('Re-run easy_install.py to try again.')
+            continue
+        success(f'{os_name} collector built: {collector}')
+        collectors.append((collector, COLLECTOR_PLATFORMS[os_name]['purpose']))
+
+        # Windows also gets the legacy variants (older and 32-bit Windows).
+        if os_name == 'Windows' and collector_legacy_setting():
+            step('Building legacy collectors (older and 32-bit Windows)...')
+            try:
+                collectors += build_legacy_collectors(velo_binary, collector, velo_url, ROOT / 'build' / 'collector')
+                success('Legacy collectors built.')
+            except CollectorBuildError as e:
+                info(f'Legacy collector build failed: {e}')
+                info('Re-run easy_install.py to try again.')
+
+    if not collectors:
+        info('No offline collectors were built.')
+        return
+    info(f'Collectors upload the encrypted result to: {blob_uri}/{container}')
+    info(f'The SAS URL embedded in the collectors expires {expiry:%Y-%m-%d}.')
 
     step(f"Uploading collector binaries to '{BINARIES_CONTAINER}/{VELO_COLLECTORS_PREFIX}/'...")
     blob.authenticate()
@@ -1950,7 +1971,7 @@ def main():
         print('    - Two Azure Function Apps (watcher + processor)')
         print('    - (Optional) Key Vault for ZIP password storage')
         print('    - (Optional) Velociraptor server VM with a static IP, client installers and hunts')
-    print('    - Offline Velociraptor collector (Windows.Triage.Targets -> input container)')
+    print('    - Offline Velociraptor collectors for Windows, Linux and macOS (-> input container)')
     print()
     print('  Progress is saved automatically. If the script is interrupted,')
     print('  re-run it and choose to resume the saved session.')

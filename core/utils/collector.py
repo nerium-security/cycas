@@ -1,10 +1,13 @@
 '''
-Build the Cycas offline collector: a stand-alone Windows executable that
-collects triage data and live data, and uploads the encrypted result straight
-to the Cycas input container via a write-only SAS URL.
+Build the Cycas offline collectors: stand-alone Windows and Linux executables,
+and a macOS collector package, that collect triage data and live data and
+upload the encrypted result straight to the Cycas input container via a
+write-only SAS URL. (macOS is run with the official Velociraptor darwin binary:
+`<binary> -- --embedded_config <package>`; Apple notarization means Velociraptor
+does not self-contain the darwin binary.)
 
 Shared by easy_install.py and scripts/standalone/build_collector.py, so both
-build the same collector.
+build the same collectors.
 '''
 
 import gzip
@@ -20,20 +23,65 @@ from urllib.request import urlopen
 
 TRIAGE_TARGETS_URL = 'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip'
 
-# The live data and its settings match the hunts on the Velociraptor server
-# (velociraptor/server/hunts.vql): hashes and certificate info where the
+# The Windows live data and its settings match the hunts on the Velociraptor
+# server (velociraptor/server/hunts.vql): hashes and certificate info where the
 # artifact offers them, potentially unstable Windows APIs disabled, and no
 # executables (no process dumps, no task commands). Unlike the server, an
 # offline collector cannot run separate hunts, so it collects everything.
-COLLECTOR_ARTIFACTS = {
-    'Windows.Triage.Targets':          {'HighLevelTargets': '["_KapeTriage"]'},
-    'Windows.System.Pslist':           {'DISABLE_DANGEROUS_API_CALLS': 'Y'},
-    'Windows.Network.NetstatEnriched': {'ProcessNameRegex': '.', 'DumpProcess': 'N', 'KillProcess': 'N',
-                                        'DISABLE_DANGEROUS_API_CALLS': 'Y'},
-    'Windows.System.Services':         {'Calculate_hashes': 'Y', 'CertificateInfo': 'Y',
-                                        'DISABLE_DANGEROUS_API_CALLS': 'Y'},
-    'Windows.System.DNSCache':         {},
-    'Windows.System.TaskScheduler':    {'AlsoUpload': 'N', 'UploadCommands': 'N'},
+#
+# The Linux and MacOS sets are a starting point for triage and live state and
+# should get the same DFIR review the Windows set had before being relied on.
+# Each artifact maps to its parameters ({} keeps the artifact's defaults).
+# 'template' is the built executable's name; 'purpose' labels the download.
+COLLECTOR_PLATFORMS = {
+    'Windows': {
+        'template': 'Cycas-Collector-Windows',
+        'purpose':  'Windows 10/11, Server 2016 and later (64-bit)',
+        'artifacts': {
+            'Windows.Triage.Targets':          {'HighLevelTargets': '["_KapeTriage"]'},
+            'Windows.System.Pslist':           {'DISABLE_DANGEROUS_API_CALLS': 'Y'},
+            'Windows.Network.NetstatEnriched': {'ProcessNameRegex': '.', 'DumpProcess': 'N', 'KillProcess': 'N',
+                                                'DISABLE_DANGEROUS_API_CALLS': 'Y'},
+            'Windows.System.Services':         {'Calculate_hashes': 'Y', 'CertificateInfo': 'Y',
+                                                'DISABLE_DANGEROUS_API_CALLS': 'Y'},
+            'Windows.System.DNSCache':         {},
+            'Windows.System.TaskScheduler':    {'AlsoUpload': 'N', 'UploadCommands': 'N'},
+        },
+    },
+    'Linux': {
+        'template': 'Cycas-Collector-Linux',
+        'purpose':  'Linux (64-bit / amd64, statically linked)',
+        'artifacts': {
+            'Linux.Sys.Pslist':              {},   # running processes
+            'Linux.Network.NetstatEnriched': {},   # network connections
+            'Linux.Sys.Services':            {},   # systemd services
+            'Linux.Sys.Crontab':             {},   # cron persistence
+            'Linux.Sys.BashHistory':         {},   # shell history
+            'Linux.Ssh.AuthorizedKeys':      {},   # SSH access / persistence
+            'Linux.Sys.SUID':                {},   # setuid binaries
+            'Linux.Sys.Users':               {},   # local accounts
+            'Linux.Proc.Modules':            {},   # loaded kernel modules
+            'Linux.Syslog.SSHLogin':         {},   # SSH login events
+        },
+    },
+    'MacOS': {
+        'template': 'Cycas-Collector-MacOS',
+        # Velociraptor does not self-contain the (notarized) macOS binary: this
+        # is a config package, run with the official darwin binary from the
+        # Velociraptor GitHub releases:  <binary> -- --embedded_config <file>
+        'purpose':  'macOS (config package; run with the official Velociraptor darwin binary)',
+        'artifacts': {
+            'MacOS.Sys.Pslist':               {},   # running processes
+            'MacOS.Network.Netstat':          {},   # network connections
+            'MacOS.Detection.Autoruns':       {},   # launch agents/daemons, cron, login items
+            'MacOS.Detection.InstallHistory': {},   # package install history
+            'MacOS.System.Packages':          {},   # installed packages
+            'MacOS.System.TCC':               {},   # privacy (TCC) permissions
+            'MacOS.System.QuarantineEvents':  {},   # downloaded-file provenance
+            'MacOS.System.Users':             {},   # local accounts
+            'MacOS.Applications.MRU':         {},   # recently used items
+        },
+    },
 }
 
 
@@ -55,11 +103,12 @@ def _yaml_str(value):
     return json.dumps(str(value))
 
 
-def write_collector_spec(spec_path, sas_url, password):
-    '''Write a velociraptor `collector` spec for COLLECTOR_ARTIFACTS that uploads
-    the password-encrypted result via the SAS URL.'''
+def write_collector_spec(spec_path, os_name, sas_url, password):
+    '''Write a velociraptor `collector` spec for os_name's artifact set that
+    uploads the password-encrypted result via the SAS URL.'''
+    platform  = COLLECTOR_PLATFORMS[os_name]
     artifacts = []
-    for name, params in COLLECTOR_ARTIFACTS.items():
+    for name, params in platform['artifacts'].items():
         if params:
             artifacts.append(f'  {name}:')
             artifacts += [f'    {key}: {_yaml_str(value)}' for key, value in params.items()]
@@ -68,7 +117,7 @@ def write_collector_spec(spec_path, sas_url, password):
     nl = '\n'
 
     spec_path.parent.mkdir(parents=True, exist_ok=True)
-    spec_path.write_text(f'''OS: Windows
+    spec_path.write_text(f'''OS: {os_name}
 
 Artifacts:
 {nl.join(artifacts)}
@@ -88,6 +137,7 @@ OptAdmin: true
 OptLevel: 4
 OptConcurrency: 2
 OptFormat: "jsonl"
+OptCollectorTemplate: {_yaml_str(platform['template'])}
 OptFilenameTemplate: "Triage-%FQDN%-%TIMESTAMP%"
 OptProgressTimeout: 1800
 OptTimeout: 0
@@ -104,38 +154,47 @@ def download_triage_targets(dest_dir):
         zf.extractall(dest_dir)
 
 
-def build_offline_collector(binary, build_dir, sas_url, password):
+def build_offline_collector(binary, build_dir, sas_url, password, os_name='Windows'):
     '''
-    Build the offline collector in build_dir and return the path of the
-    executable that was just built.
+    Build the offline collector for os_name ('Windows', 'Linux' or 'MacOS') and
+    return the path of the executable that was just built.
 
-    The datastore folder is emptied first: velociraptor writes the collector
-    there under a name that only contains its version, so an older build would
-    otherwise be mistaken for this one.
+    Each OS builds in its own datastore under build_dir, so the collectors do
+    not overwrite each other. The datastore is emptied first: velociraptor names
+    the collector after OptCollectorTemplate, so a stale build would otherwise
+    be mistaken for this one.
 
     Raises:
         CollectorBuildError: When a step fails; the message says which.
     '''
-    build_dir = Path(build_dir)
+    if os_name not in COLLECTOR_PLATFORMS:
+        raise CollectorBuildError(f'Unknown collector OS {os_name!r}.')
+    platform  = COLLECTOR_PLATFORMS[os_name]
+    build_dir = Path(build_dir) / os_name.lower()
     datastore = build_dir / 'datastore'
     spec_path = build_dir / 'spec.yaml'
     shutil.rmtree(datastore, ignore_errors=True)
 
-    try:
-        download_triage_targets(datastore / 'artifact_definitions' / 'Windows' / 'Triage')
-    except Exception as e:
-        raise CollectorBuildError(f'Could not download Windows.Triage.Targets: {e}') from None
+    # Only Windows needs the external Windows.Triage.Targets definition; the
+    # Linux and MacOS artifacts ship with the Velociraptor binary.
+    if os_name == 'Windows':
+        try:
+            download_triage_targets(datastore / 'artifact_definitions' / 'Windows' / 'Triage')
+        except Exception as e:
+            raise CollectorBuildError(f'Could not download Windows.Triage.Targets: {e}') from None
+    else:
+        datastore.mkdir(parents=True, exist_ok=True)
 
-    write_collector_spec(spec_path, sas_url, password)
+    write_collector_spec(spec_path, os_name, sas_url, password)
 
     result = subprocess.run([str(binary), 'collector', '--datastore', str(datastore), str(spec_path)],
                             capture_output=True, text=True)
     if result.returncode != 0:
         raise CollectorBuildError((result.stderr.strip().splitlines() or ['Unknown error.'])[-1])
 
-    built = sorted(datastore.glob('Collector_*'))
+    built = [p for p in datastore.glob(platform['template'] + '*') if p.is_file()]
     if len(built) != 1:
-        raise CollectorBuildError(f'Expected one collector in {datastore}, found {len(built)}.')
+        raise CollectorBuildError(f'Expected one {os_name} collector in {datastore}, found {len(built)}.')
     return built[0]
 
 
