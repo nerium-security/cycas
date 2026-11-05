@@ -849,22 +849,22 @@ def collect_msi_templates():
     info('Windows client installers (MSI) are built from the Velociraptor release MSI, in')
     info(f'{VELO_INSTALLERS_PREFIX}/standard/. With your own (obfuscated) template from a URL,')
     info(f'such as a SAS URL, an extra installer is built in {VELO_INSTALLERS_PREFIX}/obfuscated/.')
+    info('Current templates:')
     for arch, key in MSI_TEMPLATE_SETTINGS:
         current = settings.get(key.lower(), '')
-        default = 'none, standard installer only'
-        info(f'  {arch}: {redact_url(current) if current else default}')
+        info(f'  {arch}: {redact_url(current) if current else "not set (standard MSI only)"}')
     print()
     if ask('  Change the MSI templates? [y/N]: ').strip().lower() not in ('y', 'yes'):
         return
 
     updates = {}
     for arch, key in MSI_TEMPLATE_SETTINGS:
+        current       = settings.get(key.lower(), '')
+        default_label = redact_url(current) if current else 'standard installer'
         while True:
-            value = ask(f'  MSI template URL {arch} (Enter: keep, -: default): ', log_value=False).strip()
+            value = ask(f'  {arch} MSI template [{default_label}] — Enter to keep, or paste a custom MSI URL: ',
+                        log_value=False).strip()
             if not value:
-                break
-            if value == '-':
-                updates[key] = ''
                 break
             problem = msi_template_problem(value)
             if problem:
@@ -874,7 +874,7 @@ def collect_msi_templates():
             break
     if updates:
         write_env_values(updates)
-        success('MSI templates saved in .env (' + ', '.join(updates) + ').')
+        success('MSI templates selected')
 
 
 LINUX_CLIENT_NAME_KEY = 'VELOCIRAPTOR_SERVER_LINUX_CLIENT_NAME'
@@ -892,18 +892,15 @@ def collect_linux_client_name():
     print()
     info('Linux client packages (deb/rpm) are built as velociraptor_client, in')
     info(f'{VELO_INSTALLERS_PREFIX}/standard/. With a custom name, an extra set is built in')
-    info(f'{VELO_INSTALLERS_PREFIX}/custom/ with the binary, service and paths renamed to it.')
-    info(f'  Name: {current if current else "none, standard packages only"}')
+    info(f'{VELO_INSTALLERS_PREFIX}/obfuscated/ with the binary, service and paths renamed to it.')
+    info(f'Current name: {current if current else "not set (standard packages only)"}')
     print()
     if ask('  Change the Linux client name? [y/N]: ').strip().lower() not in ('y', 'yes'):
         return
+    default_name = current or 'velociraptor_client'
     while True:
-        value = ask('  Linux client name (Enter: keep, -: default): ').strip()
+        value = ask(f'  Linux client name [{default_name}] — Enter to keep, or type a custom name: ').strip()
         if not value:
-            return
-        if value == '-':
-            write_env_values({LINUX_CLIENT_NAME_KEY: ''})
-            success('Linux client name cleared in .env.')
             return
         if not LINUX_CLIENT_NAME_RE.match(value):
             print('  Use lowercase letters, digits and hyphens, starting with a letter, try again.')
@@ -932,7 +929,6 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
     info('Deploys a Velociraptor server on an Ubuntu VM with a static IP. It builds client')
     info('installers, creates default hunts (paused), and sends finished collections to')
     info('the input container, so they are ingested into ADX.')
-    info(f'Settings: VELOCIRAPTOR_SERVER_* in .env. Default hunts: {VELO_SERVER_DIR / "hunts.vql"}')
     print()
     answer = ask('  Deploy a Velociraptor server? [Y/n]: ').strip().lower()
     if answer in ('n', 'no'):
@@ -1005,7 +1001,7 @@ def velo_resource_prefix(velo):
 
 def collect_setup_mode():
     section('Setup Mode')
-    print('  1) Easy     - sensible defaults [recommended]')
+    print('  1) Easy     - Defaults [recommended]')
     print('  2) Advanced - Allows you to configure more granual settings, like names for Azure resources.')
     print()
     while True:
@@ -1142,7 +1138,7 @@ def confirm_plan(run_mode,
         info(f'VM           : {velo_resource_prefix(velo_server)}-vm  ({velo_server["vm_size"]}, {velo_server["image"]}, '
              f'{velo_server["os_disk_gb"]} GB)')
         info(f'Version      : {version.group(1) if version else settings.get("velociraptor_url", "?")}')
-        info(f'Endpoints    : {expected_clients_setting()} expected (VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS)')
+        info(f'Endpoints    : {expected_clients_setting()}')
         info(f'GUI and SSH  : {", ".join(velo_server["allowed_ips"])}')
         info(f'Users        : {velo_server["admin_user"]} (administrator)'
              + ''.join(f', {name} ({role})' for name, role, _ in velociraptor_users_setting()))
