@@ -5,33 +5,10 @@ forensic data you collect with [Velociraptor](https://github.com/Velocidex/veloc
 into a queryable [Azure Data Explorer (ADX)](https://azure.microsoft.com/nl-nl/products/data-explorer)
 database. It is built by the incident responders at Nerium, for incident responders.
 
-A single command spins up the entire platform in Azure in about 15 minutes. 
-The work of provisioning a cloud forensic platform is done for you, including 
-ready-to-deploy Velociraptor client installers for Windows, Linux and macOS. 
-Every engagement starts on a fresh environment of its own.
-
-## Combining Mass data collection with live response
-
-At Nerium we believe in preserving evidence at the start of an engagement, not
-when the investigation happens to need it. Cycas is built around a mass
-collection of triage packages from every endpoint in scope, as early as
-possible:
-
-- **Evidence is volatile.** Artifacts are overwritten all the time. Capture them
-  too late and the context you need for the attacker timeline may be gone.
-- **You can always go back to the original evidence.** The raw files are kept,
-  so you can re-parse them with a new tool, answer a question nobody asked on
-  day one, or back up a finding with the source data.
-- **Recovery does not have to wait.** Once a host is collected, it can be
-  reimaged or restored while the investigation continues on the preserved data.
-
-And if you missed something during the mass collection (say IIS logs) the
-Velociraptor server lets you collect it yourself, without asking the
-client to run another collection and waiting on the results. 
-
-The same goes for dealing with a live attacker: you can hunt across connected 
-endpoints in real time as the situation develops. Everything you gather this 
-way flows into the same ADX database as the mass collection.
+With every engagement you spin up a fresh environment. A single command spins 
+up the entire platform in Azure in about 15 minutes. The work of provisioning a 
+cloud forensic platform is done for you, including  ready-to-deploy Velociraptor
+client installers for Windows, Linux and macOS. 
 
 ## Compute that scales with the incident
 
@@ -42,12 +19,21 @@ compute follows the size of the case:
   (Flex Consumption), which fan out across many instances under load - Cycas
   comfortably processes 500+ triage packages concurrently - and scale back to
   nothing when the queue is empty.
-- **Analytics are sized per engagement.** The ADX cluster is chosen to match the
-  case: a small cluster for a handful of hosts, a larger one for an estate-wide
-  response.
 - **Pay-per-use, disposable.** No up-front SIEM licence. A whole engagement can
   live in a single resource group and be deleted when it is closed - you pay for
-  what the incident actually needed.
+  what the incident actually needs.
+
+## Collect triage at scale with one hunt
+
+Cycas provisions your Velociraptor server with a prepared hunt that collects a
+full triage package (containing raw forensic artefacts) from every in-scope endpoint. 
+Each endpoint zips its collection and uploads it **directly to Blob Storage, bypassing 
+the Velociraptor server** - so collection scales past the server's  limit to hundreds 
+of hosts at once. Cycas then picks up each package and ingests it into ADX automatically.
+
+Launch it from the Velociraptor GUI and the evidence flows in on its own - see
+[Start a mass collection](https://cycas.readthedocs.io/en/latest/guides/masscollection.html)
+in the docs.
 
 ## One command, a full forensic platform
 
