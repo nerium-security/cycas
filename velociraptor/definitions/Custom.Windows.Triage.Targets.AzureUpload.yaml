@@ -5,7 +5,7 @@ description: |
   Meaning the results are not uploaded to the Velociraptor server.
 
   In a Cycas deployment the Velociraptor server is set up by easy_install.py:
-  Windows.Triage.Targets and this artifact are imported, and hunt HUN006 uses
+  Windows.Triage.Targets and this artifact are imported, and hunt HUNT007 uses
   them with the SAS URL and ZIP password already filled in. CollectLiveData
   stays off there, because separate hunts collect the live data: turning it on
   as well would put that data in ADX twice.

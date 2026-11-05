@@ -29,11 +29,13 @@ It concurrently processes the data (ZIP files collected to Blob storage or SFTP)
    :hidden:
    :caption: Guides
 
-   /guides/collectingtriagedata
+   /guides/masscollection
+
+   /guides/analyse-results-adx
+
+   /guides/velociraptor-client-obfuscation
 
    /guides/postprocessingraw
-
-   /guides/velociraptor-server-to-adx
 
 .. toctree::
    :maxdepth: 2
