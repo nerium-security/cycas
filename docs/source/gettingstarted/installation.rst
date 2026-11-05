@@ -91,7 +91,10 @@ What gets created
 - Input source configuration (Blob, SAS, and/or SFTP)
 - Two Azure Function Apps (watcher and processor)
 - Application Insights for monitoring
-- (Optional) Key Vault for storing offline ZIP collection password
+- Key Vault for storing offline ZIP collection password
+- Web app VM running the status dashboard
+- Velociraptor server VM with a static IP, client installers and hunts
+- Offline Velociraptor collectors for Windows, Linux and macOS (uploaded to the input container)
 
 Steps
 ~~~~~
@@ -106,9 +109,9 @@ Steps
 
       python easy_install.py
 
-   The wizard guides you through seven steps and saves progress automatically.
-   If it is interrupted during provisioning, re-run it and choose to resume
-   the saved session.
+   The wizard guides you through nine steps in Azure Functions mode (five in
+   local mode) and saves progress automatically. If it is interrupted during
+   provisioning, re-run it and choose to resume the saved session.
 
 Resuming a failed install
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
