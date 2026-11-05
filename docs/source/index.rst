@@ -13,11 +13,6 @@ client installers and prepared hunts, offline collectors, and a status dashboard
 
 New here? Start with :doc:`/gettingstarted/installation`.
 
-.. figure:: /_static/images/overview_cycas.png
-   :alt: Cycas architecture overview
-   :align: center
-   :target: /_static/images/overview_cycas.png
-
 .. toctree::
    :maxdepth: 2
    :hidden:
@@ -44,6 +39,8 @@ New here? Start with :doc:`/gettingstarted/installation`.
    :maxdepth: 2
    :hidden:
    :caption: Reference
+
+   /reference/architecture-azure
 
    /reference/pipelineinternals
 

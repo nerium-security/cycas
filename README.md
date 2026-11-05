@@ -72,18 +72,6 @@ Connection strings, role assignments, managed identities and secrets are all
 configured automatically, and progress is saved so an interrupted run can
 resume.
 
-## Features
-
-- Ingests triage packages from Azure Blob Storage, SFTP, or a local folder.
-- Processes 500+ triage packages concurrently using Azure Functions.
-- Post-processes raw Velociraptor artifacts (MFT, EVTX, and more) before
-  ingesting them into ADX.
-- Automatic ADX schema inference - no hand-maintained table definitions, schemas
-  extend themselves as new fields appear.
-- Tags every record with the hostname it came from.
-- Pay-per-use Azure resources: no expensive SIEM licence, and a whole engagement
-  can live in a disposable resource group.
-
 ## Dashboard
 
 Cycas includes a dashboard so you can track ingestion status at a
