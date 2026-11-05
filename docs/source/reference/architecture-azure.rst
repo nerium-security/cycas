@@ -7,4 +7,6 @@ through it.
 .. figure:: /_static/images/cycas_architecture_azure.png
    :alt: Cycas architecture in Azure
    :align: center
-   :target: /_static/images/cycas_architecture_azure.png
+   :target: ../_static/images/cycas_architecture_azure.png
+
+Click the diagram to open it full size.
