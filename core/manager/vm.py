@@ -354,10 +354,18 @@ class VmManager:
             stdout, stderr = _split_script_output(str(e))
             raise ScriptFailed(str(e), stdout, stderr) from None
 
-        view = self._arm_get(path, _COMPUTE_API, params={'$expand': 'instanceView'}) or {}
-        for status in view.get('properties', {}).get('instanceView', {}).get('substatuses', []):
+        view          = self._arm_get(path, _COMPUTE_API, params={'$expand': 'instanceView'}) or {}
+        instance_view = view.get('properties', {}).get('instanceView', {})
+        # The Windows extension reports stdout as a substatus; the Linux one
+        # (CustomScript 2.x) puts "Enable succeeded: [stdout] ... [stderr] ..."
+        # in the message of its single status.
+        for status in instance_view.get('substatuses') or []:
             if '/StdOut/' in status.get('code', ''):
                 return status.get('message', '')
+        for status in instance_view.get('statuses') or []:
+            message = status.get('message', '')
+            if '[stdout]' in message:
+                return _split_script_output(message)[0]
         return ''
 
 

@@ -1908,7 +1908,12 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         raise RuntimeError(f'{e} (full log on the VM: {VELO_REMOTE_LOG})') from None
 
     result_line = next((l for l in reversed(output.splitlines()) if 'CYCAS_BOOTSTRAP_RESULT ' in l), None)
-    result      = json.loads(result_line.split('CYCAS_BOOTSTRAP_RESULT ', 1)[1]) if result_line else {}
+    if not result_line:
+        # Without it there are no package links and no config backup, so do
+        # not report success.
+        raise RuntimeError('bootstrap.py finished but its CYCAS_BOOTSTRAP_RESULT line was not found '
+                           f'in the extension output (full log on the VM: {VELO_REMOTE_LOG}).')
+    result      = json.loads(result_line.split('CYCAS_BOOTSTRAP_RESULT ', 1)[1])
     gui_url     = result.get('gui_url', f'https://{velo["fqdn"]}/')
     success(f'Velociraptor {result.get("version", "")} server ready: {gui_url}')
     for name in result.get('uploaded', []):
