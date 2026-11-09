@@ -300,6 +300,7 @@ class Bootstrap:
         self.bin_musl      = self.work / 'bin' / f'velociraptor-v{self.version}-musl'
         self.config        = self.work / 'config' / 'server.config.yaml'
         self.client_config = self.work / 'config' / 'client.config.yaml'
+        self.obf_client_config = self.work / 'config' / 'client.config.obfuscated.yaml'
         self.artifacts     = self.work / 'artifacts'
         self.packages      = self.work / 'packages'
         self.state         = self.work / 'state'
@@ -510,11 +511,11 @@ class Bootstrap:
             }],
         })
 
-    def repack_msi(self, template_url, output):
+    def repack_msi(self, template_url, output, config=None):
         with tempfile.TemporaryDirectory() as tmp:
             template = Path(tmp) / 'template.msi'
             self.download(template_url, template)
-            self.run([self.bin, 'config', 'repack', '--msi', template, self.client_config, output])
+            self.run([self.bin, 'config', 'repack', '--msi', template, config or self.client_config, output])
 
     def renamed_linux_spec(self, binary, create, name):
         '''
@@ -680,6 +681,23 @@ class Bootstrap:
                 raise StepFailed('writeback_windows not found in the generated client config.')
         self.write_private(self.client_config, config)
 
+        # The obfuscated MSI must not ship a config that names Velociraptor: the
+        # client writes its writeback (client id + private key) to writeback_windows
+        # on every endpoint, so the default $ProgramFiles\Velociraptor\... path would
+        # reveal the tool. Build a separate config whose writeback is named after the
+        # obfuscated prefix, and repack only the obfuscated MSI from it. The prefix is
+        # the install folder name in the operator's WiX source, so this path lands in
+        # the install directory. Only built when an obfuscated MSI is actually made.
+        if self.p['msi_amd64_url'] or self.p['msi_x86_url']:
+            prefix    = self.p['obfuscated_msi_prefix']
+            writeback = f'$ProgramFiles\\{prefix}\\{prefix}.writeback.yaml'
+            obf, count = re.subn(r'^(\s*writeback_windows:).*$',
+                                 lambda m: f'{m.group(1)} {json.dumps(writeback)}',
+                                 config, flags=re.MULTILINE)
+            if count != 1:
+                raise StepFailed(f'writeback_windows: expected one match in the client config, found {count}.')
+            self.write_private(self.obf_client_config, obf)
+
     def step_client_packages(self):
         prefix = self.p['package_prefix']
         for old in self.packages.iterdir():
@@ -704,7 +722,9 @@ class Bootstrap:
             if self.p[key]:
                 self.log(f'MSI {arch}: custom (obfuscated template)')
                 obfuscated.mkdir(exist_ok=True)
-                self.repack_msi(self.p[key], obfuscated / f'{self.p["obfuscated_msi_prefix"]}_client_windows_install_{arch}.msi')
+                self.repack_msi(self.p[key],
+                                obfuscated / f'{self.p["obfuscated_msi_prefix"]}_client_windows_install_{arch}.msi',
+                                config=self.obf_client_config)
 
         # The legacy builds (Windows 7/8, Server 2008 R2/2012, and the only
         # 32-bit build from 0.77) have no MSI: the client config is repacked

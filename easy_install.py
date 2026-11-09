@@ -818,6 +818,8 @@ def expected_clients_setting():
 
 MSI_TEMPLATE_SETTINGS = (('x64', 'VELOCIRAPTOR_SERVER_MSI_AMD64_URL'), ('x86', 'VELOCIRAPTOR_SERVER_MSI_X86_URL'))
 MSI_MAGIC             = bytes.fromhex('d0cf11e0a1b11ae1')   # MSI files are OLE compound documents
+OBFUSCATED_PREFIX_KEY = 'VELOCIRAPTOR_SERVER_OBFUSCATED_MSI_PREFIX'
+OBFUSCATED_PREFIX_RE  = re.compile(r'^[A-Za-z][A-Za-z0-9_-]*$')   # valid Windows install-folder and service name
 
 
 def redact_url(url):
@@ -872,6 +874,24 @@ def collect_msi_templates():
                 continue
             updates[key] = value
             break
+
+    # The obfuscated prefix names the output MSI, the Windows install folder and
+    # the writeback file on the endpoint. It must equal the install-folder Name in
+    # the <Directory> element of the operator's WiX source, so the writeback path
+    # the server repacks into the MSI lands in the install directory. Only asked
+    # when an obfuscated template is configured.
+    configured = any(updates.get(key) or settings.get(key.lower()) for _, key in MSI_TEMPLATE_SETTINGS)
+    if configured:
+        current = settings.get(OBFUSCATED_PREFIX_KEY.lower(), 'Brokerplugin') or 'Brokerplugin'
+        while True:
+            value = ask(f'  Obfuscated client name [{current}] — must match the install-folder Name in your '
+                        'WiX <Directory> element; names the MSI, install folder and writeback file: ').strip()
+            value = value or current
+            if OBFUSCATED_PREFIX_RE.match(value):
+                updates[OBFUSCATED_PREFIX_KEY] = value
+                break
+            print('  Use letters, digits, hyphen or underscore, starting with a letter.')
+
     if updates:
         write_env_values(updates)
         success('MSI templates selected')

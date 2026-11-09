@@ -143,6 +143,17 @@ host, prepare an input folder containing:
 - a ``client.config.yaml`` placeholder (the Cycas installer re-injects the real
   client config later - see below).
 
+.. important::
+
+   The installer re-injects a client config whose Windows writeback file is
+   placed in ``$ProgramFiles\<prefix>\<prefix>.writeback.yaml``, where
+   ``<prefix>`` is the *Obfuscated client name* you enter during
+   ``easy_install.py``. Set that name to the **install-folder** ``Name`` of the
+   ``<Directory>`` element in your WiX source (the folder created under
+   ``Program Files``), so the writeback file lands in the install directory. If
+   they differ the client still runs, but its writeback is written to a separate
+   ``<prefix>`` folder instead of next to the binary.
+
 Compile the MSI with ``candle`` and ``light``:
 
 .. code-block:: bat
