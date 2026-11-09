@@ -1,34 +1,75 @@
 # Cycas
 
-Cycas is a Digital Forensics & Incident Response (DFIR) pipeline that ingests data from [Velociraptor](https://github.com/Velocidex/velociraptor) into [Azure Data Explorer (ADX)](https://azure.microsoft.com/nl-nl/products/data-explorer). It's built by incident responders at Nerium on the principle *"Collect first, analyse later"*.
+Cycas is a Digital Forensics & Incident Response (DFIR) platform that turns the
+forensic data you collect with [Velociraptor](https://github.com/Velocidex/velociraptor)
+into a queryable [Azure Data Explorer (ADX)](https://azure.microsoft.com/nl-nl/products/data-explorer)
+database. It is built by the incident responders at Nerium, for incident responders.
 
-![Structured data in Azure Data Explorer](docs/source/_static/images/adx-results.png)
+With every engagement you spin up a fresh environment. A single command spins 
+up the entire platform in Azure in about 15 minutes. The work of provisioning a 
+cloud forensic platform is done for you, including  ready-to-deploy Velociraptor
+client installers for Windows, Linux and macOS. 
 
-# What Cycas ingests
+## Compute that scales with the incident
 
-Cycas takes in two kinds of data originating from Velociraptor, and both end up in the same ADX cluster, queryable together:
+An incident can mean five endpoints or five thousand. Cycas is designed so the
+compute follows the size of the case:
 
-- **Raw forensic artifacts, preserved at scale.** Triage packages are uploaded directly to Blob Storage or SFTP - straight from the endpoint, not routed through the Velociraptor server. Cycas post-processes these artifacts with Velociraptor before ingestion.
-- **Results of Velociraptor hunts initiated from the server.** `Server.Utils.BackupAzure` ships hunt flow outputs to Blob Storage; Cycas picks them up automatically and ingests them the same way.
+- **Ingestion scales out horizontally.** The processing runs on Azure Functions
+  (Flex Consumption), which fan out across many instances under load - Cycas
+  comfortably processes 500+ triage packages concurrently - and scale back to
+  nothing when the queue is empty.
+- **Pay-per-use, disposable.** No up-front SIEM licence. A whole engagement can
+  live in a single resource group and be deleted when it is closed - you pay for
+  what the incident actually needs.
 
-## Features
+## Collect triage at scale with one hunt
 
-- Ingests triage packages from Azure Blob Storage, SFTP, or a local folder.
-- *It's built for scale!* It easily processes 500+ triage packages concurrently using Azure Functions.
-- Post-process raw Velociraptor artifacts (MFT, EVTX etc) before ingesting them into ADX.
-- Automatic ADX schema inference. No hand-maintained table definitions, schemas extend themselves as new fields appear.
-- Tags every record with the hostname it came from.
-- Pay-per-use Azure resources. ADX pricing means no expensive SIEM licence up front, and a whole engagement can live in a disposable resource group.
+Cycas provisions your Velociraptor server with a prepared hunt that collects a
+full triage package (containing raw forensic artefacts) from every in-scope endpoint. 
+Each endpoint zips its collection and uploads it **directly to Blob Storage, bypassing 
+the Velociraptor server** - so collection scales past the server's  limit to hundreds 
+of hosts at once. Cycas then picks up each package and ingests it into ADX automatically.
+
+Launch it from the Velociraptor GUI and the evidence flows in on its own - see
+[Start a mass collection](https://cycas.readthedocs.io/en/latest/guides/masscollection.html)
+in the docs.
+
+## One command, a full forensic platform
+
+`python easy_install.py` provisions and connects everything Cycas needs. Behind
+the scenes it sets up:
+
+- An **ADX cluster and database**, sized to the engagement.
+- A **storage account** - the blob input container, a processing queue, and a
+  status table.
+- **Two Azure Functions** (a watcher and a processor) on a plan that scales out
+  horizontally, with Application Insights for monitoring.
+- A **Key Vault** for the collection ZIP password and service
+  credentials.
+- A **Velociraptor server** on a VM with a static IP, with
+  **prebuilt client installers** (standard and obfuscated Windows MSIs, Linux
+  deb/rpm, macOS) and a set of **prepared hunts** ready to launch.
+- A **status dashboard**.
+- **Offline Velociraptor collectors** for Windows, Linux and macOS, uploaded to
+  the input container.
+
+Connection strings, role assignments, managed identities and secrets are all
+configured automatically, and progress is saved so an interrupted run can
+resume.
 
 ## Dashboard
 
-Cycas includes an optional dashboard so you can track ingestion status at a glance.
+Cycas includes a dashboard so you can track ingestion status at a
+glance.
 
 ![Ingestion Dashboard](docs/source/_static/images/webapp_status.png)
 
 ## Getting started
 
-We've made it easy to get started. Find the instruction in our documentation to run `easy_install.py`: [Getting Started](https://cycas.readthedocs.io/en/latest/gettingstarted/installation.html#prerequisites)
+We've made it easy to get started. Find the instructions in our documentation to
+run `easy_install.py`: [Getting Started](https://cycas.readthedocs.io/en/latest/gettingstarted/installation.html)
 
 ## License
+
 See LICENSE for details.

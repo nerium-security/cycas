@@ -1,81 +1,95 @@
-Usage
-=====
+First Steps
+===========
 
-Once Cycas is installed and configured (see :doc:`installation`), usage
-comes down to two things: getting a triage package into the pipeline,
-and tracking it as it moves through processing.
+Once Cycas is installed (see :doc:`installation`), ``easy_install.py`` has
+provisioned a working environment for you: a Velociraptor server, the Cycas
+ingestion pipeline, and the status dashboard. This page walks through your
+first steps - logging in to the Velociraptor server and the dashboard, and
+confirming that ingestion is wired up.
+
+Once you are set up, see the guides for
+:doc:`starting a mass collection </guides/masscollection>` and
+:doc:`analysing the results in ADX </guides/analyse-results-adx>`.
 
 .. contents:: On this page
    :local:
    :depth: 2
 
 
-Upload triage package
-----------------------
+Log in to the Velociraptor server
+----------------------------------
 
-Cycas is intended to run on Azure Functions to benefit from horizontal
-scaling, which allows for processing multiple ZIPs simultaneously.
-
-Once you've completed the installation, upload a ZIP file containing 
-the endpoint data collected with Velociraptor. If the configured input source 
-is ``blob``, upload the ZIP file to the ``triage-input`` container as shown below.
-
-.. image:: /_static/images/runningatscale_uploadblob.png
-
-The watcher function picks up the new ZIP and queues it for processing.
-
-
-**Optional: Running locally**
-
-Cycas can also run as a standalone script, for example on a (powerful)
-forensic workstation, without deploying Azure Functions. There is no upload
-step. The pipeline pulls ZIPs directly from whichever input source is
-enabled in ``.env`` (``localfolder``, ``blob``, ``sas``, or ``sftp``).
-
-.. code-block:: bash
-
-   python scripts/pipeline/zip2adx.py
-
-The script processes every matching ZIP it finds at the configured source
-and exits when done. Run it again to pick up any new files.
-
-
-Track progress
---------------
-
-Cycas ships a web dashboard that gives a live, readable view of the 
-processing status, without needing the Azure Portal. The pipeline 
-works without the dashboard so it's optional to run it, but it makes
-it easy to track status.
-
-When the setup was launched with ``easy_install.py``, it shows you how to 
-run the dashboard: 
+The installer deploys a Velociraptor server on a VM with a static IP. Its URL
+is shown in the summary printed at the end of ``easy_install.py``:
 
 .. image:: /_static/images/setup-finalised.png
 
-.. code-block:: bash
+Open ``https://<your-server>/`` in a browser. Access to the GUI is restricted
+to the IP ranges you allowed during installation.
 
-   python3 gunicorn --bind=0.0.0.0:4040 --timeout 600 webapp.app:app
+**Credentials**
 
-The dashboard is available at ``http://0.0.0.0:4040``.
+- **Username:** ``admin`` (plus any extra users you configured).
+- **Password:** generated during installation and stored as the Azure Key Vault
+  secret ``velociraptor-server-admin-password``.
+
+Retrieve it from the Azure Portal: open the Key Vault created by the installer
+(its name is in the install summary), go to **Secrets**, and read
+``velociraptor-server-admin-password``.
+
+.. image:: /_static/images/keyvault-secret.png
+
+**Prepared hunts**
+
+The server comes preconfigured with a set of hunts (``HUNT001``-``HUNT007``) that
+collect live data and forensic triage. They are **created paused** - start them
+from the GUI once you start deploying the Velociraptor clients.
+
+.. image:: /_static/images/velociraptor_hunts.png
+
+Ingestion into ADX is already configured
+-----------------------------------------
+
+You do not need to wire up ingestion yourself. The Velociraptor server deployed
+by ``easy_install.py`` is set up to push results into Azure Data Explorer
+through Cycas automatically:
+
+- **Hunt results** - ``Server.Utils.BackupAzure`` ships each finished hunt flow
+  to Blob Storage, where Cycas picks it up and ingests it into ADX.
+- **Triage packages** - the ``Custom.Windows.Triage.Targets.AzureUpload``
+  artifact is imported with the Cycas input container's SAS URL and ZIP password
+  already filled in, so collections upload straight to Cycas.
+
+In both cases the data lands in the same ADX cluster, queryable together with
+KQL.
+
+Log in to the dashboard
+-----------------------
+
+Cycas ships a web dashboard that gives a live, readable view of the ingestion
+status without needing the Azure Portal. If you deployed it on a VM, its URL
+(HTTPS with Let's Encrypt, limited to your allowed IPs) is in the install
+summary; open ``https://<your-dashboard>/``.
+
+**Credentials**
+
+- **Username:** ``cycas``.
+- **Password:** the Azure Key Vault secret ``cycas-webapp-password``, retrieved
+  the same way as the Velociraptor password above.
 
 .. image:: /_static/images/webapp_status.png
 
+The dashboard shows each ZIP's filename, extracted hostname, status, source,
+size and elapsed duration, and lets you filter, search, and retry failed or
+stuck runs directly from the page.
 
-It shows each ZIP's filename, extracted hostname, status, source, size, and
-elapsed duration, and lets you filter or search entries and retry failed or
-stuck runs directly from the page. 
+.. note::
 
-**Optional: Tracking status without dasbhoard**
+   If you did not deploy the dashboard VM, you can run the dashboard locally
+   instead:
 
-The dasbhoard simply reads the Azure Storage Account table 
-which contains the actual status of each ZIP, which is tracked
-as an entry in the table ``statusupdate`` You can inspect progress 
-directly using the Azure Portal's storage browser:
+   .. code-block:: bash
 
-.. image:: /_static/images/runningatscale_statustracking.png
+      gunicorn --bind=0.0.0.0:4040 --timeout 600 webapp.app:app
 
-To force a ZIP to be reprocessed, delete its entry from the table - it will
-be picked up again as if it were new.
-
-.. image:: /_static/images/runningatscale_deleteentry.png
+   It is then available at ``http://localhost:4040``.

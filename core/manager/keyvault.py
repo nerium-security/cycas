@@ -138,10 +138,9 @@ class KeyvaultManager:
             except Exception as e:
                 if attempt == retries:
                     raise
-                log.warning(
-                    f"Secret upload attempt {attempt}/{retries} failed "
-                    f"(RBAC propagation?), retrying in {delay}s: {str(e).splitlines()[0]}"
-                )
+                log.info(f'Secret upload attempt {attempt}/{retries} failed: {str(e).splitlines()[0]}')
+                log.info(f'Waiting for Key Vault access (role assignment is propagating), '
+                         f'attempt {attempt}/{retries}...', extra={'status': True})
                 time.sleep(delay)
 
     def authenticate(self, credential, verify_enabled):
@@ -233,10 +232,9 @@ class KeyvaultManager:
                 return None
             except HttpResponseError as e:
                 if e.status_code == 403 and attempt < retries:
-                    log.warning(
-                        f"Secret read attempt {attempt}/{retries} forbidden "
-                        f"(RBAC propagation?), retrying in {delay}s: {str(e).splitlines()[0]}"
-                    )
+                    log.info(f'Secret read attempt {attempt}/{retries} forbidden: {str(e).splitlines()[0]}')
+                    log.info(f'Waiting for Key Vault access (role assignment is propagating), '
+                             f'attempt {attempt}/{retries}...', extra={'status': True})
                     time.sleep(delay)
                     continue
                 log.error(f'Failed to retrieve secret "{secret_name}": {e}')

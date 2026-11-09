@@ -31,8 +31,11 @@ import base64
 import grp
 import gzip
 import hashlib
+import io
 import json
 import os
+import plistlib
+import posixpath
 import pwd
 import re
 import shlex
@@ -41,9 +44,11 @@ import socket
 import ssl
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import traceback
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -58,10 +63,14 @@ DEFAULTS = {
     'users':               [],           # extra GUI users: [{name, role, password}]
     'msi_amd64_url':       '',   # empty: the MSI from the Velociraptor release
     'msi_x86_url':         '',
+    'linux_client_name':   '',   # empty: stock velociraptor_client deb/rpm only; set: also build packages renamed to this
+    'obfuscated_msi_prefix': 'Brokerplugin',   # name prefix for the obfuscated MSI (built from msi_*_url)
     'hunts_url':           '',   # empty: hunts.vql from files_dir
     'writeback_windows':   '',   # empty: keep the Velociraptor default
     'triage_targets_url':  'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip',
-    'upload_sas_url':      '',   # container SAS with write access; empty: no upload
+    'upload_sas_url':      '',   # container SAS with write access for the client packages; empty: no upload
+    'installers_prefix':   'Velociraptor-ClientInstallers',
+    'staging_sas_url':     '',   # container SAS with write access for the config backup; empty: no backup
     'upload_prefix':       'velociraptor-server',
     'backup_sas_url':      '',   # container SAS for Server.Utils.BackupAzure; empty: not set up
     'backup_zip_password': '',
@@ -116,6 +125,142 @@ Uninstall
 '''
 
 
+# The macOS client package holds the release executables unchanged, so their
+# code signature stays valid (repacking the config into them would break it),
+# next to client.config.yaml, with install/uninstall scripts. Placeholders:
+# @NAME@, filled in by fill().
+
+MACOS_INSTALL_SH = '''#!/bin/sh
+# Install the Velociraptor client as the launchd service @SERVICE@.
+# Run: sudo ./install.sh
+set -e
+cd "$(dirname "$0")"
+if [ "$(id -u)" != 0 ]; then
+  echo "Run with sudo: sudo ./install.sh" >&2
+  exit 1
+fi
+case "$(uname -m)" in
+  arm64)  binary=velociraptor-arm64 ;;
+  x86_64) binary=velociraptor-amd64 ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+# Downloaded with a browser, the files are quarantined and blocked.
+xattr -d com.apple.quarantine "$binary" client.config.yaml 2>/dev/null || true
+chmod 755 "$binary"
+# On a re-run, replace the running service.
+if [ -f "@PLIST@" ]; then
+  launchctl unload -w "@PLIST@" 2>/dev/null || true
+fi
+"./$binary" service install --config client.config.yaml -v
+# Velociraptor copies the config world-readable; only root needs it.
+chown root:wheel "@CONFIG_PATH@"
+chmod 600 "@CONFIG_PATH@"
+echo "Installed. Check with: sudo launchctl print system/@SERVICE@"
+'''
+
+MACOS_UNINSTALL_SH = '''#!/bin/sh
+# Remove the Velociraptor client. Run: sudo ./uninstall.sh [--purge]
+#   without --purge the client identity (writeback) is kept, so a
+#   reinstall shows up as the same client; --purge removes it as well.
+if [ "$(id -u)" != 0 ]; then
+  echo "Run with sudo: sudo ./uninstall.sh" >&2
+  exit 1
+fi
+launchctl unload -w "@PLIST@" 2>/dev/null || true
+rm -f "@PLIST@" "@INSTALL_PATH@" "@CONFIG_PATH@"
+if [ "$1" = "--purge" ]; then
+  rm -f "@WRITEBACK@"
+fi
+echo "Velociraptor client removed."
+'''
+
+MACOS_README = '''Velociraptor macOS client
+=========================
+
+Velociraptor @VERSION@, connects to @SERVER_URL@
+
+  @PREFIX@_client_macos.tar.gz                    the client, Apple Silicon and Intel
+  @PREFIX@_client_macos_FullDiskAccess.mobileconfig  Full Disk Access profile for MDM
+
+Velociraptor publishes no .pkg for macOS. The archive holds the release
+executables (signed by Velocidex, Apple team UL6CGN7MAL, unchanged) for
+Apple Silicon and Intel, the client configuration, and install scripts that
+use Velociraptor's own service installer. install.sh picks the executable
+that matches the Mac.
+
+Install
+-------
+On the Mac, in Terminal:
+
+  tar xzf @PREFIX@_client_macos.tar.gz
+  cd velociraptor-client
+  sudo ./install.sh
+
+This copies the executable to @INSTALL_PATH@ and the config to
+@CONFIG_PATH@ (readable by root only), and installs and starts
+the launchd service @SERVICE@ (@PLIST@).
+The Mac shows up in the Velociraptor GUI within a minute.
+
+If macOS still blocks the executable: System Settings > Privacy & Security,
+click "Allow Anyway", and run install.sh again.
+
+For MDM (Jamf, Intune, ...): deploy the extracted folder and run install.sh
+as root from a script/policy.
+
+Full Disk Access
+----------------
+Without Full Disk Access, macOS (10.14 and later) hides protected files and
+folders from the client, and many artifacts return little or nothing.
+Grant it with the Privacy Preferences Policy Control (PPPC) profile
+@PREFIX@_client_macos_FullDiskAccess.mobileconfig, deployed through MDM to
+the same Macs. macOS only accepts this kind of profile from an MDM; it
+cannot be installed by double-clicking it.
+
+The profile allows SystemPolicyAllFiles for @INSTALL_PATH@ when it is
+signed by Velocidex (team UL6CGN7MAL). It does not require a signing
+identifier: the release builds are not all signed with the same one.
+
+Check: run the MacOS.System.TCC artifact on the Mac. Empty output means no
+Full Disk Access. System Settings may show velociraptor as disabled under
+Full Disk Access even when the MDM profile grants it.
+
+Check
+-----
+  sudo launchctl print system/@SERVICE@
+  ps -eaf | grep velociraptor
+
+Upgrade
+-------
+Upgrade clients from the GUI with a hunt for Admin.Client.Upgrade.MacOS,
+rather than running install.sh again.
+
+Uninstall
+---------
+  sudo ./uninstall.sh           keeps the client identity, a reinstall shows
+                                up as the same client in the GUI
+  sudo ./uninstall.sh --purge   also removes the client identity
+                                (@WRITEBACK@)
+
+Velociraptor's service installer bypasses a package manager, which is why
+uninstall.sh removes the installed files itself.
+'''
+
+# Velocidex's Apple Developer ID team. The docs' code requirement also checks
+# identifier "com.velocidex.velociraptor", but the release builds are signed
+# with other identifiers (0.77.3: "a.out" and "velociraptor-v0"), so it would
+# never match: only the Developer ID chain and the team are required.
+VELOCIDEX_TEAM_ID = 'UL6CGN7MAL'
+MACOS_CODE_REQUIREMENT = (
+    'anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ '
+    'and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ '
+    f'and certificate leaf[subject.OU] = "{VELOCIDEX_TEAM_ID}"')
+
+
+def fill(template, **values):
+    '''Replace each @NAME@ in template by values['name'].'''
+    return re.sub(r'@([A-Z_]+)@', lambda m: str(values[m.group(1).lower()]), template)
+
+
 class StepFailed(Exception):
     pass
 
@@ -155,6 +300,7 @@ class Bootstrap:
         self.bin_musl      = self.work / 'bin' / f'velociraptor-v{self.version}-musl'
         self.config        = self.work / 'config' / 'server.config.yaml'
         self.client_config = self.work / 'config' / 'client.config.yaml'
+        self.obf_client_config = self.work / 'config' / 'client.config.obfuscated.yaml'
         self.artifacts     = self.work / 'artifacts'
         self.packages      = self.work / 'packages'
         self.state         = self.work / 'state'
@@ -269,6 +415,150 @@ class Bootstrap:
     def release_url(self, name):
         '''URL of another asset from the same Velociraptor release.'''
         return self.p['velociraptor_url'].rsplit('/', 1)[0] + '/' + name
+
+    def macos_values(self, prefix):
+        '''Placeholder values for the macOS scripts and README, from the client config.'''
+        client = json.loads(self.run([self.bin, '--config', self.client_config,
+                                      'config', 'show', '--json']).stdout)['Client']
+        mac    = client['darwin_installer']
+        return {
+            'version':      self.version,
+            'server_url':   f'https://{self.p["dns"]}/',
+            'prefix':       prefix,
+            'service':      mac['service_name'],
+            'install_path': mac['install_path'],
+            # Velociraptor's service installer copies the config next to the
+            # executable, with the extension replaced by .config.yaml.
+            'config_path':  posixpath.splitext(mac['install_path'])[0] + '.config.yaml',
+            'plist':        f'/Library/LaunchDaemons/{mac["service_name"]}.plist',
+            'writeback':    client['writeback_darwin'],
+        }
+
+    def release_binaries(self, tmp, builds):
+        '''Download release executables {build: file name} into tmp; None when
+        one of them is not in this release.'''
+        paths = {}
+        for build, name in builds.items():
+            url = self.release_url(f'velociraptor-v{self.version}-{build}.gz')
+            if not self.url_exists(url):
+                return None
+            paths[build] = Path(tmp) / name
+            self.download(url, paths[build])
+        return paths
+
+    def build_macos_package(self, standard, prefix):
+        '''
+        macOS has no installer package: a tar.gz with the signed release
+        executables for Apple Silicon and Intel, client.config.yaml and
+        install/uninstall scripts, plus a Full Disk Access (PPPC) profile
+        for MDM. The README goes inside and next to the archive.
+        '''
+        mac = self.macos_values(prefix)
+        with tempfile.TemporaryDirectory() as tmp:
+            binaries = self.release_binaries(tmp, {'darwin-arm64': 'velociraptor-arm64',
+                                                   'darwin-amd64': 'velociraptor-amd64'})
+            if not binaries:
+                self.log(f'macOS client: not in the {self.version} release, skipping it.')
+                return
+            readme = fill(MACOS_README, **mac)
+            files  = [(binaries['darwin-arm64'].read_bytes(), 'velociraptor-arm64', 0o755),
+                      (binaries['darwin-amd64'].read_bytes(), 'velociraptor-amd64', 0o755),
+                      (self.client_config.read_bytes(),     'client.config.yaml', 0o600),
+                      (fill(MACOS_INSTALL_SH, **mac).encode(),   'install.sh', 0o755),
+                      (fill(MACOS_UNINSTALL_SH, **mac).encode(), 'uninstall.sh', 0o755),
+                      (readme.encode(),                     'README.txt', 0o644)]
+            output = standard / f'{prefix}_client_macos.tar.gz'
+            with tarfile.open(output, 'w:gz') as tf:
+                for data, name, mode in files:
+                    info = tarfile.TarInfo(f'velociraptor-client/{name}')
+                    info.size, info.mode, info.mtime = len(data), mode, int(time.time())
+                    info.uname = info.gname = 'root'
+                    tf.addfile(info, io.BytesIO(data))
+        (standard / f'{prefix}_client_macos_README.txt').write_text(readme)
+        (standard / f'{prefix}_client_macos_FullDiskAccess.mobileconfig').write_bytes(self.macos_fda_profile(mac))
+        self.log(f'macOS client: {output.name}')
+
+    def macos_fda_profile(self, mac):
+        '''
+        A PPPC configuration profile granting the client Full Disk Access
+        (SystemPolicyAllFiles). The UUIDs derive from the server name, so a
+        re-run produces the same profile and an MDM updates it in place.
+        '''
+        ident = f'app.velociraptor.cycas.fda.{self.p["dns"]}'
+        uid   = lambda suffix: str(uuid.uuid5(uuid.NAMESPACE_DNS, f'{ident}.{suffix}')).upper()
+        return plistlib.dumps({
+            'PayloadType':         'Configuration',
+            'PayloadVersion':      1,
+            'PayloadIdentifier':   ident,
+            'PayloadUUID':         uid('profile'),
+            'PayloadDisplayName':  'Velociraptor Full Disk Access',
+            'PayloadDescription':  f'Full Disk Access for the Velociraptor client ({mac["install_path"]}).',
+            'PayloadScope':        'System',
+            'PayloadContent': [{
+                'PayloadType':        'com.apple.TCC.configuration-profile-policy',
+                'PayloadVersion':     1,
+                'PayloadIdentifier':  f'{ident}.tcc',
+                'PayloadUUID':        uid('tcc'),
+                'PayloadDisplayName': 'Velociraptor Full Disk Access',
+                'Services': {'SystemPolicyAllFiles': [{
+                    'Identifier':      mac['install_path'],
+                    'IdentifierType':  'path',
+                    'CodeRequirement': MACOS_CODE_REQUIREMENT,
+                    'StaticCode':      False,
+                    'Authorization':   'Allow',
+                    'Comment':         'Velociraptor client',
+                }]},
+            }],
+        })
+
+    def repack_msi(self, template_url, output, config=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            template = Path(tmp) / 'template.msi'
+            self.download(template_url, template)
+            self.run([self.bin, 'config', 'repack', '--msi', template, config or self.client_config, output])
+
+    def renamed_linux_spec(self, binary, create, name):
+        '''
+        The default <create> (deb_create/rpm_create) client package spec with
+        every "velociraptor_client" name replaced by name: the installed binary,
+        the systemd and SysV service, the config path, the service user and
+        group, and the package filename. The paths inside the spec are templated
+        off these Expansion fields, so renaming the fields renames everything.
+        '''
+        result = self.run([binary, '--config', self.client_config, 'query', '--format', 'json',
+                           f'SELECT Spec FROM {create}(show_spec=TRUE)'])
+        rows = parse_json_arrays(result.stdout)
+        if not rows or not rows[0].get('Spec'):
+            raise StepFailed(f'{create} show_spec returned no spec.')
+        spec = rows[0]['Spec']
+        spec['Expansion'].update({
+            'Name':                   name,
+            'ConfigPath':             f'/etc/{name}/client.config.yaml',
+            'VelociraptorBinaryPath': f'/usr/local/bin/{name}',
+            'SystemdServiceFile':     f'{name}.service',
+            'SysvService':            name,
+            'ServiceUser':            name,
+            'ServiceGroup':           name,
+            'ServiceDescription':     f'{name} endpoint agent',
+        })
+        spec['OutputFilenameTemplate'] = f'{name}_{{{{ .Version }}}}_{{{{ .Arch }}}}.{"deb" if create == "deb_create" else "rpm"}'
+        return spec
+
+    def build_renamed_linux_package(self, binary, ext, name, output):
+        '''Build one client package (deb or rpm) renamed to name, into output.'''
+        create = 'deb_create' if ext == 'deb' else 'rpm_create'
+        spec   = json.dumps(self.renamed_linux_spec(binary, create, name))
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run([binary, '--config', self.client_config, 'query', '--format', 'json',
+                      '--env', f'Binary={binary}', '--env', f'Output={tmp}',
+                      '--env', f'ConfigPath={self.client_config}', '--env', f'Spec={spec}',
+                      f'SELECT OSPath FROM {create}(exe=Binary, directory_name=Output, '
+                      f'config=read_file(filename=ConfigPath, length=1000000), '
+                      f'package_spec=parse_json(data=Spec))'])
+            built = list(Path(tmp).glob(f'*.{ext}'))
+            if len(built) != 1:
+                raise StepFailed(f'Expected one renamed {ext} package, found {len(built)}.')
+            shutil.move(built[0], output)
 
     def triage_targets(self):
         '''Windows.Triage.Targets is no longer built in; fetch the current definition.'''
@@ -391,28 +681,50 @@ class Bootstrap:
                 raise StepFailed('writeback_windows not found in the generated client config.')
         self.write_private(self.client_config, config)
 
+        # The obfuscated MSI must not ship a config that names Velociraptor: the
+        # client writes its writeback (client id + private key) to writeback_windows
+        # on every endpoint, so the default $ProgramFiles\Velociraptor\... path would
+        # reveal the tool. Build a separate config whose writeback is named after the
+        # obfuscated prefix, and repack only the obfuscated MSI from it. The prefix is
+        # the install folder name in the operator's WiX source, so this path lands in
+        # the install directory. Only built when an obfuscated MSI is actually made.
+        if self.p['msi_amd64_url'] or self.p['msi_x86_url']:
+            prefix    = self.p['obfuscated_msi_prefix']
+            writeback = f'$ProgramFiles\\{prefix}\\{prefix}.writeback.yaml'
+            obf, count = re.subn(r'^(\s*writeback_windows:).*$',
+                                 lambda m: f'{m.group(1)} {json.dumps(writeback)}',
+                                 config, flags=re.MULTILINE)
+            if count != 1:
+                raise StepFailed(f'writeback_windows: expected one match in the client config, found {count}.')
+            self.write_private(self.obf_client_config, obf)
+
     def step_client_packages(self):
         prefix = self.p['package_prefix']
         for old in self.packages.iterdir():
-            old.unlink()
+            shutil.rmtree(old) if old.is_dir() else old.unlink()
+        # Everything built from the Velociraptor release goes to standard/,
+        # the MSIs built from a custom (obfuscated) template to obfuscated/.
+        standard, obfuscated = self.packages / 'standard', self.packages / 'obfuscated'
+        standard.mkdir()
 
         for arch, key, release_name in (
             ('x64', 'msi_amd64_url', f'velociraptor-v{self.version}-windows-amd64.msi'),
             ('x86', 'msi_x86_url',   f'velociraptor-v{self.version}-windows-386.msi'),
         ):
-            custom = self.p[key]
-            url    = custom or self.release_url(release_name)
-            # Releases from 0.77 no longer include a 32-bit MSI; without a
-            # custom template there is then nothing to build the x86 installer from.
-            if not custom and not self.url_exists(url):
-                self.log(f'MSI template {arch}: none in the {self.version} release, skipping the {arch} installer.')
-                continue
-            self.log(f'MSI template {arch}: {"custom" if custom else "default (Velociraptor release)"}')
-            with tempfile.TemporaryDirectory() as tmp:
-                template = Path(tmp) / 'template.msi'
-                self.download(url, template)
-                self.run([self.bin, 'config', 'repack', '--msi', template, self.client_config,
-                          self.packages / f'{prefix}_client_windows_install_{arch}.msi'])
+            # Releases from 0.77 no longer include a 32-bit MSI; the standard
+            # x86 installer is then skipped.
+            url = self.release_url(release_name)
+            if self.url_exists(url):
+                self.log(f'MSI {arch}: standard (Velociraptor release template)')
+                self.repack_msi(url, standard / f'{prefix}_client_windows_install_{arch}.msi')
+            else:
+                self.log(f'MSI {arch}: no template in the {self.version} release, skipping the standard {arch} installer.')
+            if self.p[key]:
+                self.log(f'MSI {arch}: custom (obfuscated template)')
+                obfuscated.mkdir(exist_ok=True)
+                self.repack_msi(self.p[key],
+                                obfuscated / f'{self.p["obfuscated_msi_prefix"]}_client_windows_install_{arch}.msi',
+                                config=self.obf_client_config)
 
         # The legacy builds (Windows 7/8, Server 2008 R2/2012, and the only
         # 32-bit build from 0.77) have no MSI: the client config is repacked
@@ -426,13 +738,20 @@ class Bootstrap:
             with tempfile.TemporaryDirectory() as tmp:
                 template = Path(tmp) / 'template.exe'
                 self.download(url, template)
-                output = self.packages / f'{prefix}_client_windows_install_{arch}_legacy.exe'
+                output = standard / f'{prefix}_client_windows_install_{arch}_legacy.exe'
                 self.run([self.bin, 'config', 'repack', '--exe', template, self.client_config, output])
                 legacy.append(output.name)
         if legacy:
-            (self.packages / f'{prefix}_client_windows_legacy_README.txt').write_text(
+            (standard / f'{prefix}_client_windows_legacy_README.txt').write_text(
                 LEGACY_README.format(files='\n'.join(f'  {name}' for name in legacy)).replace('\n', '\r\n'))
 
+        self.build_macos_package(standard, prefix)
+
+
+        # Linux: stock velociraptor_client deb/rpm, glibc and musl, into
+        # standard/. With a custom name, an extra set is built into obfuscated/
+        # where the binary, service, paths and package all use that name.
+        name = self.p['linux_client_name']
         for binary, flavour in ((self.bin, ''), (self.bin_musl, 'musl_')):
             for kind, ext in (('debian', 'deb'), ('rpm', 'rpm')):
                 with tempfile.TemporaryDirectory() as tmp:
@@ -440,7 +759,12 @@ class Bootstrap:
                     built = list(Path(tmp).glob(f'*.{ext}'))
                     if len(built) != 1:
                         raise StepFailed(f'Expected one {ext} package, found {len(built)}.')
-                    shutil.move(built[0], self.packages / f'{prefix}_{flavour}client_{kind}_linux_x64.{ext}')
+                    shutil.move(built[0], standard / f'{prefix}_{flavour}client_{kind}_linux_x64.{ext}')
+                if name:
+                    self.log(f'Linux {kind} {flavour}client: custom (renamed to {name})')
+                    obfuscated.mkdir(exist_ok=True)
+                    self.build_renamed_linux_package(
+                        binary, ext, name, obfuscated / f'{name}_{flavour}client_{kind}_linux_x64.{ext}')
 
     def step_permissions(self):
         '''
@@ -612,8 +936,8 @@ class Bootstrap:
             return
         base, _, token = sas.partition('?')
         uploaded = []
-        for path in sorted(self.packages.iterdir()):
-            name = f'{self.p["upload_prefix"]}/ClientInstallationPackages/{path.name}'
+        for path in sorted(p for p in self.packages.rglob('*') if p.is_file()):
+            name = f'{self.p["installers_prefix"]}/{path.relative_to(self.packages).as_posix()}'
             self.log(f'Uploading {name}')
             self.upload(path, f'{base}/{urllib.parse.quote(name)}?{token}')
             uploaded.append(name)
@@ -626,9 +950,9 @@ class Bootstrap:
         write to Key Vault itself, and the extension output is too short to
         carry them back.
         '''
-        sas = self.p['upload_sas_url']
+        sas = self.p['staging_sas_url']
         if not sas:
-            self.log('No upload_sas_url, configs are not backed up.')
+            self.log('No staging_sas_url, configs are not backed up.')
             return
         base, _, token = sas.partition('?')
         staged = []

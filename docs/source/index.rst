@@ -1,19 +1,17 @@
-.. cycas documentation master file, created by
-   sphinx-quickstart on Thu Apr  9 10:43:16 2026.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+Cycas
+=====
 
-cycas documentation
-===================
+Cycas is a Digital Forensics & Incident Response (DFIR) platform that turns
+forensic data collected with `Velociraptor <https://github.com/Velocidex/velociraptor>`_
+into a queryable `Azure Data Explorer (ADX) <https://azure.microsoft.com/products/data-explorer>`_
+database. It is built by the incident responders at Nerium, for incident responders.
 
-Cycas is a Digital Forensics & Incident Response (DFIR) pipeline for post-processing and ingesting forensic artifacts collected with `Velociraptor <https://github.com/Velocidex/velociraptor>`_. into `Azure Data Explorer (ADX) <https://azure.microsoft.com/nl-nl/products/data-explorer>`_. It handles raw artifacts like MFT, EVTX, Amcache, Prefetch, and many others, converting them to CSV/JSON/JSONL before ingesting them into ADX for analysis with Kusto Query Langue (KQL).
+A single command provisions the whole platform in Azure - an ADX cluster,
+horizontally scaling Azure Functions, a Velociraptor server with ready-to-deploy
+client installers and prepared hunts, offline collectors, and a status dashboard
+- so you can focus on the investigation instead of the infrastructure.
 
-It concurrently processes the data (ZIP files collected to Blob storage or SFTP) at scale using Azure Functions that run horizontally. 
-
-.. figure:: /_static/images/overview_cycas.png
-   :alt: Ingestion Dashboard
-   :align: center
-   :target: /_static/images/overview_cycas.png
+New here? Start with :doc:`/gettingstarted/installation`.
 
 .. toctree::
    :maxdepth: 2
@@ -29,16 +27,20 @@ It concurrently processes the data (ZIP files collected to Blob storage or SFTP)
    :hidden:
    :caption: Guides
 
-   /guides/collectingtriagedata
+   /guides/masscollection
+
+   /guides/analyse-results-adx
+
+   /guides/velociraptor-client-obfuscation
 
    /guides/postprocessingraw
-
-   /guides/velociraptor-server-to-adx
 
 .. toctree::
    :maxdepth: 2
    :hidden:
    :caption: Reference
+
+   /reference/architecture-azure
 
    /reference/pipelineinternals
 

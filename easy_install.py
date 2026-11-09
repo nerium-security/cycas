@@ -9,6 +9,17 @@ Requirements:
     - pip install -e . (install cycas package)
     - az login (Azure CLI, used for authentication)
     - Contributor access on the target resource group
+
+Unattended mode (for CI, e.g. GitHub Actions):
+    Run with --unattended, or set CYCAS_UNATTENDED=1. The wizard then never
+    reads stdin: every prompt is answered from CYCAS_UNATTENDED_ANSWERS, a JSON
+    object of prompt-substring -> answer (or CYCAS_UNATTENDED_ANSWERS_FILE, a
+    path to one). An empty answer accepts the default / finishes / skips, so
+    only required selections need an entry; a required prompt with no answer
+    fails fast, naming the prompt to add. Secrets come from the environment,
+    not the answer map: CYCAS_ZIP_PASSWORD for the Key Vault ZIP password.
+    Authentication still uses DefaultAzureCredential, which picks up the
+    session established by `azure/login` (OIDC) in CI.
 '''
 
 import base64
@@ -24,7 +35,7 @@ import time
 import random
 import string
 import zipfile
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from pathlib import Path
 
 from core.manager.azure import AzureManager
@@ -37,7 +48,8 @@ from core.manager.keyvault import KeyvaultManager, ROLE_SECRETS_OFFICER
 from core.manager.webapp import WebappManager
 from core.manager.vm import VmManager, ScriptFailed, parse_image_urn
 from core.utils.postprocess import download_velociraptor, get_velociraptor_version
-from core.utils.collector import build_offline_collector, build_legacy_collectors, CollectorBuildError
+from core.utils.collector import (build_offline_collector, build_legacy_collectors,
+                                   CollectorBuildError, COLLECTOR_PLATFORMS)
 from core.utils.taskrunner import current_task, emit, run_tasks
 
 ROOT        = Path(__file__).parent
@@ -50,13 +62,18 @@ LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / f'setup_{time.strftime("%Y%m%d_%H%M%S")}.log'
 
 class _ConsoleHandler(logging.Handler):
-    '''Show warnings on the console. Records logged from a provisioning task
-    go to the task status display rather than straight to the terminal.'''
+    '''Show warnings on the console, and info records logged with
+    extra={'status': True} as progress (e.g. waiting for role propagation).
+    Records logged from a provisioning task go to the task status display
+    rather than straight to the terminal.'''
     def emit(self, record):
-        emit(self.format(record), file=sys.stderr, warning=True)
+        if record.levelno >= logging.WARNING:
+            emit(self.format(record), file=sys.stderr, warning=True)
+        elif getattr(record, 'status', False):
+            emit(self.format(record))
 
 _console_handler = _ConsoleHandler()
-_console_handler.setLevel(logging.WARNING)
+_console_handler.setLevel(logging.INFO)
 _console_handler.setFormatter(logging.Formatter('%(message)s'))
 
 _file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
@@ -72,7 +89,8 @@ _file_log.propagate = False
 
 COLLECTOR_SAS_VALID_DAYS = 90
 DOWNLOAD_SAS_VALID_DAYS  = 30   # read-only links to the collector and client packages
-BINARIES_CONTAINER  = 'binaries'
+BINARIES_CONTAINER  = 'binaries'   # downloads: collectors and client installers
+STAGING_CONTAINER   = 'staging'    # internal: VM setup files and configs on their way to Key Vault
 KEYVAULT_PASSWORD_LOCATION = 'velociraptor-collection-password'
 KEYVAULT_SAS_LOCATION      = 'collector-sas-url'
 
@@ -82,7 +100,9 @@ VELO_SERVER_FILES        = [VELO_SERVER_DIR / name for name in ('bootstrap.py', 
 VELO_SERVER_FILES       += [ROOT / 'velociraptor' / 'definitions' / 'Server.Utils.BackupAzure.yaml',
                             ROOT / 'velociraptor' / 'definitions' / 'Custom.Windows.Triage.Targets.AzureUpload.yaml',
                             ROOT / 'velociraptor' / 'definitions' / 'Server.Monitor.Autolabeling.Clients.yaml']
-VELO_BLOB_PREFIX         = 'velociraptor-server'                              # in BINARIES_CONTAINER
+VELO_BLOB_PREFIX         = 'velociraptor-server'                              # in STAGING_CONTAINER
+VELO_INSTALLERS_PREFIX   = 'Velociraptor-ClientInstallers'                    # in BINARIES_CONTAINER
+VELO_COLLECTORS_PREFIX   = 'Velociraptor-OfflineCollectors'                   # in BINARIES_CONTAINER
 VELO_VM_ADMIN            = 'cycas'
 VELO_REMOTE_LOG          = '/opt/cycas-velociraptor/bootstrap.log'
 KEYVAULT_VELO_PASSWORD   = 'velociraptor-server-admin-password'
@@ -90,7 +110,7 @@ KEYVAULT_WEBAPP_PASSWORD = 'cycas-webapp-password'   # must match WEBAPP_PASSWOR
 WEBAPP_USERNAME          = 'cycas'
 KEYVAULT_WEBAPP_SSH_KEY    = 'cycas-webapp-ssh-private-key'
 KEYVAULT_WEBAPP_SSH_PUBKEY = 'cycas-webapp-ssh-public-key'
-WEBAPP_BLOB_PREFIX       = 'webapp'                                          # in BINARIES_CONTAINER
+WEBAPP_BLOB_PREFIX       = 'webapp'                                          # in STAGING_CONTAINER
 # Not the 10.42.0.0/24 of the Velociraptor server's VNet, so the two can be peered later.
 WEBAPP_VNET_PREFIX       = '10.43.0.0/24'
 WEBAPP_STAGE_IGNORE      = ('__pycache__', '.venv', '.git', '.vscode', 'test', '*.pyc', '.env')
@@ -113,6 +133,7 @@ VELO_SETTINGS_DEFAULTS   = {
     'velociraptor_server_expected_clients':  '1000',
     'velociraptor_server_admin_user':        'admin',
     'velociraptor_server_package_prefix':    'Velociraptor',
+    'velociraptor_server_obfuscated_msi_prefix': 'Brokerplugin',
     'velociraptor_server_api_name':          'cycas_api',
     'velociraptor_server_download_password': 'infected',
 }
@@ -142,9 +163,74 @@ def success(msg):   emit(f'  [OK] {msg}'); logging.info('[OK] %s', msg)
 def error(msg):     emit(f'  [ERROR] {msg}', file=sys.stderr); logging.error(msg); sys.exit(1)
 def rand6():        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
-def ask(prompt_text=''):
+# --- Unattended mode -------------------------------------------------------
+# When CYCAS_UNATTENDED is set (or --unattended is passed), the wizard never
+# reads from stdin. Every ask() is answered from a pre-supplied map instead,
+# so the installer can run headless in CI. Most prompts accept an empty answer
+# as "use the default / finish / skip", so only the required selections
+# (region, resource group, SKUs, ...) need an entry. A required prompt that
+# rejects the empty answer and re-asks itself would loop forever with no stdin,
+# so we detect the immediate re-ask and fail fast, naming the prompt to add.
+UNATTENDED = os.environ.get('CYCAS_UNATTENDED', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+def _normalize_prompt(text):
+    return ' '.join(text.strip().lower().split())
+
+def _load_unattended_answers():
+    '''Answers for unattended mode, keyed by a normalized substring of the
+    prompt. Loaded from CYCAS_UNATTENDED_ANSWERS (inline JSON object) or
+    CYCAS_UNATTENDED_ANSWERS_FILE (path to a JSON object).'''
+    raw = os.environ.get('CYCAS_UNATTENDED_ANSWERS', '').strip()
+    if not raw:
+        path = os.environ.get('CYCAS_UNATTENDED_ANSWERS_FILE', '').strip()
+        if path:
+            raw = Path(path).read_text()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        error(f'CYCAS_UNATTENDED_ANSWERS is not valid JSON: {exc}')
+    if not isinstance(data, dict):
+        error('CYCAS_UNATTENDED_ANSWERS must be a JSON object of prompt -> answer.')
+    return {_normalize_prompt(k): str(v) for k, v in data.items()}
+
+_UNATTENDED_ANSWERS = _load_unattended_answers() if UNATTENDED else {}
+_unattended_last_unseeded = None   # last prompt answered with '' because nothing matched
+
+def _unattended_answer(prompt_text):
+    '''Resolve an answer for prompt_text without stdin. Return a configured
+    answer if one matches (exact normalized key, or a key that is a substring
+    of the prompt), else '' to accept the default. If the same prompt is asked
+    twice running with no match, it is looping on a required value: fail fast.'''
+    global _unattended_last_unseeded
+    norm = _normalize_prompt(prompt_text)
+    if norm in _UNATTENDED_ANSWERS:
+        _unattended_last_unseeded = None
+        return _UNATTENDED_ANSWERS[norm]
+    for key, value in _UNATTENDED_ANSWERS.items():
+        if key and key in norm:
+            _unattended_last_unseeded = None
+            return value
+    if norm and norm == _unattended_last_unseeded:
+        error('Unattended mode: no answer for required prompt '
+              f'{prompt_text.strip()!r}, and the empty default was rejected. '
+              'Add it to CYCAS_UNATTENDED_ANSWERS.')
+    _unattended_last_unseeded = norm
+    return ''
+
+def unattended_secret(env_key):
+    '''A secret answer in unattended mode, taken from the named env var.'''
+    return os.environ.get(env_key, '')
+
+def ask(prompt_text='', log_value=True):
+    '''Read an answer; log_value=False keeps it out of the log file (e.g. SAS URLs).'''
+    if UNATTENDED:
+        value = _unattended_answer(prompt_text)
+        logging.info('PROMPT (unattended): %r -> %r', prompt_text, value if log_value else '<not logged>')
+        return value
     value = input(prompt_text)
-    logging.info('PROMPT: %r -> %r', prompt_text, value)
+    logging.info('PROMPT: %r -> %r', prompt_text, value if log_value else '<not logged>')
     return value
 
 
@@ -260,6 +346,25 @@ def ensure_env_file():
     if not ENV_FILE.exists():
         ENV_FILE.write_text(ENV_EXAMPLE.read_text() if ENV_EXAMPLE.exists() else '')
         info('Created .env from .env_example' if ENV_EXAMPLE.exists() else 'Created empty .env')
+
+
+def reset_env_file(previous_rg=None):
+    '''
+    Start a new session from a clean .env (a copy of .env_example), so nothing
+    from an earlier install, such as SAS URLs or another deployment's
+    endpoints, ends up in this one. The old .env is kept as
+    .env.<resource group>.<timestamp> (ignored by git).
+    '''
+    if not ENV_FILE.exists():
+        ensure_env_file()
+        return
+    example = ENV_EXAMPLE.read_text() if ENV_EXAMPLE.exists() else ''
+    if ENV_FILE.read_text() != example:
+        label  = re.sub(r'[^A-Za-z0-9._-]+', '-', previous_rg).strip('-') if previous_rg else 'backup'
+        backup = ENV_FILE.with_name(f'.env.{label}.{time.strftime("%Y%m%d-%H%M%S")}')
+        ENV_FILE.rename(backup)
+        info(f'Previous .env moved to {backup.name}; this session starts from .env_example.')
+    ENV_FILE.write_text(example)
 
 
 def write_env_values(values):
@@ -511,7 +616,8 @@ def collect_keyvault_config(resource_group, step_label='7/7'):
     kv_default = rg_slug[:24 - len(kv_suffix)] + kv_suffix
     keyvault_name     = prompt('Key Vault name', default=kv_default)
     password_location = prompt('Location for the ZIP password in Key Vault', default=KEYVAULT_PASSWORD_LOCATION)
-    zip_password      = getpass.getpass('  ZIP password to store in Key Vault: ')
+    zip_password      = (unattended_secret('CYCAS_ZIP_PASSWORD') if UNATTENDED
+                         else getpass.getpass('  ZIP password to store in Key Vault: '))
 
     return keyvault_name, password_location, zip_password
 
@@ -687,12 +793,141 @@ def collector_legacy_setting():
     return value.strip().lower() not in ('false', 'no', 'n', '0')
 
 
+def collector_platforms_setting():
+    '''VELOCIRAPTOR_COLLECTOR_PLATFORMS: which offline collectors to build,
+    default all three. Tokens map to the COLLECTOR_PLATFORMS keys.'''
+    raw   = read_env_defaults(ENV_FILE).get('velociraptor_collector_platforms', 'windows,linux,macos')
+    alias = {'windows': 'Windows', 'win': 'Windows',
+             'linux': 'Linux',
+             'macos': 'MacOS', 'mac': 'MacOS', 'osx': 'MacOS', 'darwin': 'MacOS'}
+    result = []
+    for token in raw.replace(',', ' ').split():
+        os_name = alias.get(token.strip().lower())
+        if os_name and os_name not in result:
+            result.append(os_name)
+    return result or ['Windows']
+
+
 def expected_clients_setting():
     '''VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS as a positive integer.'''
     value = velociraptor_server_settings()['velociraptor_server_expected_clients']
     if not value.isdigit() or int(value) < 1:
         raise ValueError(f"VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS must be a positive number, got '{value}'.")
     return int(value)
+
+
+MSI_TEMPLATE_SETTINGS = (('x64', 'VELOCIRAPTOR_SERVER_MSI_AMD64_URL'), ('x86', 'VELOCIRAPTOR_SERVER_MSI_X86_URL'))
+MSI_MAGIC             = bytes.fromhex('d0cf11e0a1b11ae1')   # MSI files are OLE compound documents
+OBFUSCATED_PREFIX_KEY = 'VELOCIRAPTOR_SERVER_OBFUSCATED_MSI_PREFIX'
+OBFUSCATED_PREFIX_RE  = re.compile(r'^[A-Za-z][A-Za-z0-9_-]*$')   # valid Windows install-folder and service name
+
+
+def redact_url(url):
+    '''The URL without its query string, which holds a SAS token.'''
+    return url.split('?', 1)[0] + ('?<token>' if '?' in url else '')
+
+
+def msi_template_problem(url):
+    '''Why url cannot be used as an MSI template, or None when it can.'''
+    if not url.lower().startswith(('https://', 'http://')):
+        return 'is not an http(s) URL'
+    try:
+        # Only the first bytes: enough to recognise an MSI file.
+        with urlopen(Request(url, headers={'Range': 'bytes=0-7'}), timeout=30) as resp:
+            head = resp.read(8)
+    except Exception as e:
+        # Only the type: the message of some errors contains the URL with its token.
+        return f'cannot be downloaded ({getattr(e, "code", None) or type(e).__name__})'
+    return None if head == MSI_MAGIC else 'does not point to an MSI file'
+
+
+def collect_msi_templates():
+    '''
+    Ask for custom MSI templates (e.g. a SAS URL to a central blob) and store
+    them in .env, where the server setup reads them on every run.
+    '''
+    settings = velociraptor_server_settings()
+    print()
+    info('Windows client installers (MSI) are built from the Velociraptor release MSI, in')
+    info(f'{VELO_INSTALLERS_PREFIX}/standard/. With your own (obfuscated) template from a URL,')
+    info(f'such as a SAS URL, an extra installer is built in {VELO_INSTALLERS_PREFIX}/obfuscated/.')
+    info('Current templates:')
+    for arch, key in MSI_TEMPLATE_SETTINGS:
+        current = settings.get(key.lower(), '')
+        info(f'  {arch}: {redact_url(current) if current else "not set (standard MSI only)"}')
+    print()
+    if ask('  Change the MSI templates? [y/N]: ').strip().lower() not in ('y', 'yes'):
+        return
+
+    updates = {}
+    for arch, key in MSI_TEMPLATE_SETTINGS:
+        current       = settings.get(key.lower(), '')
+        default_label = redact_url(current) if current else 'standard installer'
+        while True:
+            value = ask(f'  {arch} MSI template [{default_label}] — Enter to keep, or paste a custom MSI URL: ',
+                        log_value=False).strip()
+            if not value:
+                break
+            problem = msi_template_problem(value)
+            if problem:
+                print(f'  This URL {problem}, try again.')
+                continue
+            updates[key] = value
+            break
+
+    # The obfuscated prefix names the output MSI, the Windows install folder and
+    # the writeback file on the endpoint. It must equal the install-folder Name in
+    # the <Directory> element of the operator's WiX source, so the writeback path
+    # the server repacks into the MSI lands in the install directory. Only asked
+    # when an obfuscated template is configured.
+    configured = any(updates.get(key) or settings.get(key.lower()) for _, key in MSI_TEMPLATE_SETTINGS)
+    if configured:
+        current = settings.get(OBFUSCATED_PREFIX_KEY.lower(), 'Brokerplugin') or 'Brokerplugin'
+        while True:
+            value = ask(f'  Obfuscated client name [{current}] — must match the install-folder Name in your '
+                        'WiX <Directory> element; names the MSI, install folder and writeback file: ').strip()
+            value = value or current
+            if OBFUSCATED_PREFIX_RE.match(value):
+                updates[OBFUSCATED_PREFIX_KEY] = value
+                break
+            print('  Use letters, digits, hyphen or underscore, starting with a letter.')
+
+    if updates:
+        write_env_values(updates)
+        success('MSI templates selected')
+
+
+LINUX_CLIENT_NAME_KEY = 'VELOCIRAPTOR_SERVER_LINUX_CLIENT_NAME'
+LINUX_CLIENT_NAME_RE  = re.compile(r'^[a-z][a-z0-9-]*$')   # a valid deb/rpm package and systemd service name
+
+
+def collect_linux_client_name():
+    '''
+    Ask for a custom name for the Linux (deb/rpm) client packages. When set, an
+    extra set of packages is built where the binary, service, install paths and
+    package name all use it instead of velociraptor_client.
+    '''
+    settings = velociraptor_server_settings()
+    current  = settings.get(LINUX_CLIENT_NAME_KEY.lower(), '')
+    print()
+    info('Linux client packages (deb/rpm) are built as velociraptor_client, in')
+    info(f'{VELO_INSTALLERS_PREFIX}/standard/. With a custom name, an extra set is built in')
+    info(f'{VELO_INSTALLERS_PREFIX}/obfuscated/ with the binary, service and paths renamed to it.')
+    info(f'Current name: {current if current else "not set (standard packages only)"}')
+    print()
+    if ask('  Change the Linux client name? [y/N]: ').strip().lower() not in ('y', 'yes'):
+        return
+    default_name = current or 'velociraptor_client'
+    while True:
+        value = ask(f'  Linux client name [{default_name}] — Enter to keep, or type a custom name: ').strip()
+        if not value:
+            return
+        if not LINUX_CLIENT_NAME_RE.match(value):
+            print('  Use lowercase letters, digits and hyphens, starting with a letter, try again.')
+            continue
+        write_env_values({LINUX_CLIENT_NAME_KEY: value})
+        success(f"Linux client name '{value}' saved in .env.")
+        return
 
 
 def collect_velociraptor_server_config(vms, resource_group, location, setup_mode, step_label='9/9',
@@ -714,7 +949,6 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
     info('Deploys a Velociraptor server on an Ubuntu VM with a static IP. It builds client')
     info('installers, creates default hunts (paused), and sends finished collections to')
     info('the input container, so they are ingested into ADX.')
-    info(f'Settings: VELOCIRAPTOR_SERVER_* in .env. Default hunts: {VELO_SERVER_DIR / "hunts.vql"}')
     print()
     answer = ask('  Deploy a Velociraptor server? [Y/n]: ').strip().lower()
     if answer in ('n', 'no'):
@@ -748,6 +982,9 @@ def collect_velociraptor_server_config(vms, resource_group, location, setup_mode
                 continue
             break
         vm_size = prompt('VM size', default=settings['velociraptor_server_vm_size'])
+
+    collect_msi_templates()
+    collect_linux_client_name()
 
     # Fail now on malformed settings rather than halfway through provisioning.
     parse_image_urn(settings['velociraptor_server_image'])
@@ -784,7 +1021,7 @@ def velo_resource_prefix(velo):
 
 def collect_setup_mode():
     section('Setup Mode')
-    print('  1) Easy     - sensible defaults [recommended]')
+    print('  1) Easy     - Defaults [recommended]')
     print('  2) Advanced - Allows you to configure more granual settings, like names for Azure resources.')
     print()
     while True:
@@ -921,12 +1158,15 @@ def confirm_plan(run_mode,
         info(f'VM           : {velo_resource_prefix(velo_server)}-vm  ({velo_server["vm_size"]}, {velo_server["image"]}, '
              f'{velo_server["os_disk_gb"]} GB)')
         info(f'Version      : {version.group(1) if version else settings.get("velociraptor_url", "?")}')
-        info(f'Endpoints    : {expected_clients_setting()} expected (VELOCIRAPTOR_SERVER_EXPECTED_CLIENTS)')
+        info(f'Endpoints    : {expected_clients_setting()}')
         info(f'GUI and SSH  : {", ".join(velo_server["allowed_ips"])}')
         info(f'Users        : {velo_server["admin_user"]} (administrator)'
              + ''.join(f', {name} ({role})' for name, role, _ in velociraptor_users_setting()))
-        for arch, key in (('x64', 'velociraptor_server_msi_amd64_url'), ('x86', 'velociraptor_server_msi_x86_url')):
-            info(f'MSI {arch}      : {"custom (" + key.upper() + ")" if settings.get(key) else "default (Velociraptor release)"}')
+        for arch, key in MSI_TEMPLATE_SETTINGS:
+            custom = settings.get(key.lower())
+            info(f'MSI {arch}      : standard{" + custom, " + redact_url(custom) if custom else ""}')
+        linux_name = settings.get('velociraptor_server_linux_client_name')
+        info(f'Linux deb/rpm: standard{f" + custom ({linux_name})" if linux_name else ""}')
         hunts = 'custom (VELOCIRAPTOR_SERVER_HUNTS_URL)' if settings.get('velociraptor_server_hunts_url') else 'default (hunts.vql)'
         info(f'Hunts        : {hunts}, created paused')
 
@@ -1028,6 +1268,10 @@ def provision_storage(credential, subscription_id,
     step(f"Ensuring blob container '{BINARIES_CONTAINER}' exists...")
     blob_mgr.create_container(BINARIES_CONTAINER)
     success(f"Container '{BINARIES_CONTAINER}' ready.")
+
+    step(f"Ensuring blob container '{STAGING_CONTAINER}' exists...")
+    blob_mgr.create_container(STAGING_CONTAINER)
+    success(f"Container '{STAGING_CONTAINER}' ready.")
 
     step(f"Uploading initial velociraptor_artifacts.json to '{config_container}' container...")
     import json as _json
@@ -1475,9 +1719,9 @@ def run_webapp_bootstrap(credential, subscription_id, resource_group, location, 
         for path in files:
             blob_name = f'{WEBAPP_BLOB_PREFIX}/{path.name}'
             with open(path, 'rb') as f:
-                blob.get_client(BINARIES_CONTAINER, blob_name).upload_blob(f, overwrite=True)
+                blob.get_client(STAGING_CONTAINER, blob_name).upload_blob(f, overwrite=True)
             url, _ = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
-                                                BINARIES_CONTAINER, blob_name, expiry_days=1)
+                                                STAGING_CONTAINER, blob_name, expiry_days=1)
             file_uris.append(url)
 
     params  = {'fqdn': vm['fqdn'], 'app_zip': 'app.zip', 'env': env, 'steps': steps}
@@ -1622,7 +1866,7 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
     blob.authenticate()
     blob.switch_to_account_key(subscription_id, resource_group, account_name)
 
-    step(f"Uploading server files to '{BINARIES_CONTAINER}/{VELO_BLOB_PREFIX}/bootstrap/'...")
+    step(f"Uploading server files to '{STAGING_CONTAINER}/{VELO_BLOB_PREFIX}/bootstrap/'...")
     file_uris = []
     # The extension downloads every file into one directory, where bootstrap.py reads them by name.
     for path in VELO_SERVER_FILES:
@@ -1630,15 +1874,17 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         # Not BlobManager.upload_file: it only logs failures, and a missing
         # file would surface much later as a download error on the VM.
         with open(path, 'rb') as f:
-            blob.get_client(BINARIES_CONTAINER, blob_name).upload_blob(f, overwrite=True)
+            blob.get_client(STAGING_CONTAINER, blob_name).upload_blob(f, overwrite=True)
         url, _ = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
-                                            BINARIES_CONTAINER, blob_name, expiry_days=1)
+                                            STAGING_CONTAINER, blob_name, expiry_days=1)
         file_uris.append(url)
     success(f'{len(file_uris)} file(s) uploaded.')
 
-    step('Generating SAS URLs for package upload and collection backup...')
+    step('Generating SAS URLs for package upload, config staging and collection backup...')
     upload_sas, _ = blob.generate_container_sas_url(subscription_id, resource_group, account_name,
                                                     BINARIES_CONTAINER, expiry_days=1)
+    staging_sas, _ = blob.generate_container_sas_url(subscription_id, resource_group, account_name,
+                                                     STAGING_CONTAINER, expiry_days=1)
     backup_sas, backup_expiry = blob.generate_container_sas_url(subscription_id, resource_group, account_name,
                                                                 input_container, expiry_days=COLLECTOR_SAS_VALID_DAYS)
     success(f'SAS URLs ready (collection backup expires {backup_expiry:%Y-%m-%d}).')
@@ -1657,9 +1903,13 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         'writeback_windows':   settings.get('velociraptor_server_writeback_windows', ''),
         'msi_amd64_url':       settings.get('velociraptor_server_msi_amd64_url', ''),
         'msi_x86_url':         settings.get('velociraptor_server_msi_x86_url', ''),
+        'linux_client_name':   settings.get('velociraptor_server_linux_client_name', ''),
+        'obfuscated_msi_prefix': settings.get('velociraptor_server_obfuscated_msi_prefix', 'Brokerplugin'),
         'hunts_url':           settings.get('velociraptor_server_hunts_url', ''),
         'upload_sas_url':      upload_sas,
+        'staging_sas_url':     staging_sas,
         'upload_prefix':       VELO_BLOB_PREFIX,
+        'installers_prefix':   VELO_INSTALLERS_PREFIX,
         'backup_sas_url':      backup_sas,
         'backup_zip_password': zip_password,
     }
@@ -1678,27 +1928,32 @@ def setup_velociraptor_server(credential, subscription_id, resource_group, locat
         raise RuntimeError(f'{e} (full log on the VM: {VELO_REMOTE_LOG})') from None
 
     result_line = next((l for l in reversed(output.splitlines()) if 'CYCAS_BOOTSTRAP_RESULT ' in l), None)
-    result      = json.loads(result_line.split('CYCAS_BOOTSTRAP_RESULT ', 1)[1]) if result_line else {}
+    if not result_line:
+        # Without it there are no package links and no config backup, so do
+        # not report success.
+        raise RuntimeError('bootstrap.py finished but its CYCAS_BOOTSTRAP_RESULT line was not found '
+                           f'in the extension output (full log on the VM: {VELO_REMOTE_LOG}).')
+    result      = json.loads(result_line.split('CYCAS_BOOTSTRAP_RESULT ', 1)[1])
     gui_url     = result.get('gui_url', f'https://{velo["fqdn"]}/')
     success(f'Velociraptor {result.get("version", "")} server ready: {gui_url}')
     for name in result.get('uploaded', []):
         url, expiry = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
                                                  BINARIES_CONTAINER, name, expiry_days=DOWNLOAD_SAS_VALID_DAYS)
-        info(f'{name.rsplit("/", 1)[1]} (link expires {expiry:%Y-%m-%d}):')
+        info(f'{name.split("/", 1)[1]} (link expires {expiry:%Y-%m-%d}):')
         info(f'  {url}')
 
     step('Backing up server and client config to Key Vault...')
     for name in result.get('config_backup', []):
         secret_name = KEYVAULT_VELO_CONFIGS[name.rsplit('/', 1)[1]]
-        text        = blob.read_text(BINARIES_CONTAINER, name)
+        text        = blob.read_text(STAGING_CONTAINER, name)
         if text is None:
-            raise RuntimeError(f"Staged config '{BINARIES_CONTAINER}/{name}' not found.")
+            raise RuntimeError(f"Staged config '{STAGING_CONTAINER}/{name}' not found.")
         if len(text.encode()) > KEYVAULT_MAX_SECRET_SIZE:
             # Left in the blob, so it is not lost.
-            info(f"'{name}' exceeds the Key Vault secret size limit, kept in '{BINARIES_CONTAINER}/{name}'.")
+            info(f"'{name}' exceeds the Key Vault secret size limit, kept in '{STAGING_CONTAINER}/{name}'.")
             continue
         kv.set_secret(secret_name, text)
-        blob.delete(BINARIES_CONTAINER, name)
+        blob.delete(STAGING_CONTAINER, name)
         info(f"'{name.rsplit('/', 1)[1]}' in Key Vault secret '{secret_name}'.")
     success('Config backup done.')
 
@@ -1763,39 +2018,45 @@ def provision_collector(credential, subscription_id, resource_group,
         return
     success(f'Using {velo_binary}.')
 
-    step('Building offline collector (triage data and live data)...')
-    try:
-        collector = build_offline_collector(velo_binary, ROOT / 'build' / 'collector', sas_url, password)
-    except CollectorBuildError as e:
-        info(f'Collector build failed: {e}')
-        info('Re-run easy_install.py to try again.')
-        return
-
-    success(f'Collector built: {collector}')
-    info('Run it on a Windows endpoint to collect Windows.Triage.Targets and')
-    info(f'uploads the encrypted result to: {blob_uri}/{container}')
-    info(f'The SAS URL embedded in the collector expires {expiry:%Y-%m-%d}.')
-    collectors = [(collector, 'Windows 10/11, Server 2016 and later (64-bit)')]
-
-    if collector_legacy_setting():
-        step('Building legacy collectors (older and 32-bit Windows)...')
+    collectors = []
+    for os_name in collector_platforms_setting():
+        step(f'Building {os_name} offline collector (triage data and live data)...')
         try:
-            collectors += build_legacy_collectors(velo_binary, collector, velo_url, ROOT / 'build' / 'collector')
-            success('Legacy collectors built.')
+            collector = build_offline_collector(velo_binary, ROOT / 'build' / 'collector', sas_url, password, os_name)
         except CollectorBuildError as e:
-            # The regular collector is ready, so carry on without them.
-            info(f'Legacy collector build failed: {e}')
+            # Carry on with the other platforms; a re-run retries this one.
+            info(f'{os_name} collector build failed: {e}')
             info('Re-run easy_install.py to try again.')
+            continue
+        success(f'{os_name} collector built: {collector}')
+        collectors.append((collector, COLLECTOR_PLATFORMS[os_name]['purpose']))
 
-    step(f"Uploading collector binaries to '{BINARIES_CONTAINER}' container...")
+        # Windows also gets the legacy variants (older and 32-bit Windows).
+        if os_name == 'Windows' and collector_legacy_setting():
+            step('Building legacy collectors (older and 32-bit Windows)...')
+            try:
+                collectors += build_legacy_collectors(velo_binary, collector, velo_url, ROOT / 'build' / 'collector')
+                success('Legacy collectors built.')
+            except CollectorBuildError as e:
+                info(f'Legacy collector build failed: {e}')
+                info('Re-run easy_install.py to try again.')
+
+    if not collectors:
+        info('No offline collectors were built.')
+        return
+    info(f'Collectors upload the encrypted result to: {blob_uri}/{container}')
+    info(f'The SAS URL embedded in the collectors expires {expiry:%Y-%m-%d}.')
+
+    step(f"Uploading collector binaries to '{BINARIES_CONTAINER}/{VELO_COLLECTORS_PREFIX}/'...")
     blob.authenticate()
     blob.switch_to_account_key(subscription_id, resource_group, account_name)
     for path, purpose in collectors:
-        blob.upload_file(BINARIES_CONTAINER, path.name, path)
-    success(f'Collectors available in: {blob_uri}/{BINARIES_CONTAINER}/')
+        blob.upload_file(BINARIES_CONTAINER, f'{VELO_COLLECTORS_PREFIX}/{path.name}', path)
+    success(f'Collectors available in: {blob_uri}/{BINARIES_CONTAINER}/{VELO_COLLECTORS_PREFIX}/')
     for path, purpose in collectors:
         url, link_expiry = blob.generate_blob_sas_url(subscription_id, resource_group, account_name,
-                                                      BINARIES_CONTAINER, path.name, expiry_days=DOWNLOAD_SAS_VALID_DAYS)
+                                                      BINARIES_CONTAINER, f'{VELO_COLLECTORS_PREFIX}/{path.name}',
+                                                      expiry_days=DOWNLOAD_SAS_VALID_DAYS)
         info(f'{path.name} — {purpose}')
         info(f'  Download link (expires {link_expiry:%Y-%m-%d}): {url}')
 
@@ -1812,6 +2073,7 @@ def main():
     print()
 
     saved = load_state()
+    previous_rg = None   # resource group of a saved session that is not resumed
     if saved:
         run_mode = saved.get('run_mode', 'azurefunction')
     else:
@@ -1828,7 +2090,7 @@ def main():
         print('    - Two Azure Function Apps (watcher + processor)')
         print('    - (Optional) Key Vault for ZIP password storage')
         print('    - (Optional) Velociraptor server VM with a static IP, client installers and hunts')
-    print('    - Offline Velociraptor collector (Windows.Triage.Targets -> input container)')
+    print('    - Offline Velociraptor collectors for Windows, Linux and macOS (-> input container)')
     print()
     print('  Progress is saved automatically. If the script is interrupted,')
     print('  re-run it and choose to resume the saved session.')
@@ -1897,11 +2159,13 @@ def main():
                 webapp_mode = webapp_app = webapp_allowed_ips = None
                 velo_server = None
         else:
+            previous_rg = saved['resource_group']
             clear_state()
             saved = None
             run_mode = 'azurefunction'
 
     if not saved:
+        reset_env_file(previous_rg)
         subscription_id = azure.select_subscription()
 
         setup_mode = collect_setup_mode()
@@ -2163,7 +2427,7 @@ def main():
         info(f"  Login   — user {WEBAPP_USERNAME}, password in Key Vault '{keyvault_name}', "
                  f"secret '{KEYVAULT_WEBAPP_PASSWORD}'")
     if velo_server:
-        packages = f'https://{account_name}.blob.core.windows.net/{BINARIES_CONTAINER}/{VELO_BLOB_PREFIX}/'
+        installers = f'https://{account_name}.blob.core.windows.net/{BINARIES_CONTAINER}/{VELO_INSTALLERS_PREFIX}/'
         print()
         info('Velociraptor server:')
         info(f'  GUI      — https://{velo_server["fqdn"]}/  (user: {velo_server["admin_user"]})')
@@ -2171,22 +2435,19 @@ def main():
         for name, role, secret_name in velociraptor_users_setting():
             info(f"  User     — {name} ({role}), password in secret '{secret_name}'")
         info(f'  Access   — GUI and SSH restricted to: {", ".join(velo_server["allowed_ips"])}')
-        info(f'  Packages — {packages}ClientInstallationPackages/')
-        info('             *_legacy.exe: Windows 7/8, Server 2008 R2/2012 and 32-bit Windows;')
-        info('             install as administrator with: <file>.exe service install')
-        info('             (see *_client_windows_legacy_README.txt next to them)')
+        info(f'  Client installers — {installers}')
         info('  SSH      — az keyvault secret show --vault-name '
              f'{keyvault_name} --name {KEYVAULT_VELO_SSH_KEY} --query value -o tsv > velo_key && chmod 600 velo_key')
         info(f'             ssh -i velo_key {VELO_VM_ADMIN}@{velo_server["fqdn"]}')
 
     # The build folder only ever holds the collectors of the latest build.
     build = ROOT / 'build' / 'collector'
-    collectors = sorted(build.glob('datastore/Collector_*')) + sorted(build.glob('legacy/Collector_*'))
+    collectors = sorted(build.glob('*/datastore/OfflineCollector_*')) + sorted(build.glob('legacy/OfflineCollector_*'))
     if collectors:
         print()
-        info(f'Offline collector — {collectors[0]}')
-        for legacy in collectors[1:]:
-            info(f'  Legacy    — {legacy}')
+        info('Offline collectors')
+        for collector in collectors:
+            info(f'  {collector.name} — {collector}')
         if keyvault_name:
             info(f"  ZIP password — Key Vault '{keyvault_name}', secret "
                  f"'{keyvault_password_location or KEYVAULT_PASSWORD_LOCATION}' (Cycas uses it to open the ZIPs)")
@@ -2212,6 +2473,12 @@ def main():
 
 
 if __name__ == '__main__':
+    # --unattended is an alias for CYCAS_UNATTENDED=1; honour it before main()
+    # runs so the answer map (loaded at import from the env) is in effect.
+    if '--unattended' in sys.argv[1:] and not UNATTENDED:
+        os.environ['CYCAS_UNATTENDED'] = '1'
+        UNATTENDED = True
+        _UNATTENDED_ANSWERS = _load_unattended_answers()
     try:
         main()
     except Exception:

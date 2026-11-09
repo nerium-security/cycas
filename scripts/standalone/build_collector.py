@@ -107,6 +107,19 @@ def get_zip_password(kv):
     return password
 
 
+def collector_platforms():
+    '''VELOCIRAPTOR_COLLECTOR_PLATFORMS: which collectors to build, default all.'''
+    raw   = os.getenv('VELOCIRAPTOR_COLLECTOR_PLATFORMS', 'windows,linux,macos')
+    alias = {'windows': 'Windows', 'win': 'Windows', 'linux': 'Linux',
+             'macos': 'MacOS', 'mac': 'MacOS', 'osx': 'MacOS', 'darwin': 'MacOS'}
+    result = []
+    for token in raw.replace(',', ' ').split():
+        os_name = alias.get(token.strip().lower())
+        if os_name and os_name not in result:
+            result.append(os_name)
+    return result or ['Windows']
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -138,24 +151,27 @@ def main():
         error(f'Velociraptor binary not available at {velo_binary}.')
     success(f'Using {velo_binary}.')
 
-    step('Building offline collector (triage data and live data)...')
-    try:
-        collector = build_offline_collector(velo_binary, BUILD_DIR, sas_url, password)
-    except CollectorBuildError as e:
-        error(str(e))
-
-    success(f'Collector built: {collector}')
-
-    if os.getenv('VELOCIRAPTOR_COLLECTOR_LEGACY', 'true').strip().lower() not in ('false', 'no', 'n', '0'):
-        step('Building legacy collectors (older and 32-bit Windows)...')
+    platforms = collector_platforms()
+    for os_name in platforms:
+        step(f'Building {os_name} offline collector (triage data and live data)...')
         try:
-            for path, purpose in build_legacy_collectors(velo_binary, collector, velo_url, BUILD_DIR):
-                success(f'{path} — {purpose}')
+            collector = build_offline_collector(velo_binary, BUILD_DIR, sas_url, password, os_name)
         except CollectorBuildError as e:
-            info(f'Legacy collector build failed: {e}')
+            info(f'{os_name} collector build failed: {e}')
+            continue
+        success(f'{os_name} collector built: {collector}')
 
-    info('Run it on a Windows endpoint to collect Windows.Triage.Targets and')
-    info('upload the encrypted results via the SAS URL above.')
+        if os_name == 'Windows' and \
+                os.getenv('VELOCIRAPTOR_COLLECTOR_LEGACY', 'true').strip().lower() not in ('false', 'no', 'n', '0'):
+            step('Building legacy collectors (older and 32-bit Windows)...')
+            try:
+                for path, purpose in build_legacy_collectors(velo_binary, collector, velo_url, BUILD_DIR):
+                    success(f'{path} — {purpose}')
+            except CollectorBuildError as e:
+                info(f'Legacy collector build failed: {e}')
+
+    info('Run each collector on the matching OS to collect triage and live data')
+    info('and upload the encrypted results via the SAS URL above.')
 
 
 if __name__ == '__main__':
