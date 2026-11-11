@@ -22,6 +22,22 @@ LET Expires <= now() + 604800  -- 7 days
 -- Windows APIs are disabled (DISABLE_DANGEROUS_API_CALLS) where an artifact
 -- offers that.
 
+-- Sigma detection: runs the Hayabusa ruleset (Velociraptor Sigma Project,
+-- https://sigma.velocidex.com/, imported by bootstrap.py) against the event
+-- logs on each endpoint, so only rule matches leave the endpoint. Critical,
+-- high and medium rules that are stable or experimental; the noisy rules stay
+-- excluded (the artifact's RuleExclusions default). Scanning all logs can take
+-- longer than the default 10 minutes, hence the 1 hour timeout.
+SELECT hunt(
+    description="HUNT008 - Sigma detection with the Hayabusa rules",
+    artifacts="Windows.Hayabusa.Rules",
+    spec=dict(`Windows.Hayabusa.Rules`=dict(
+        RuleLevel="Critical, High, and Medium",
+        RuleStatus="Stable and Experimental")),
+    timeout=3600,
+    pause=TRUE, expires=Expires)
+FROM scope()
+
 -- Mass triage collection: each endpoint collects _KapeTriage, zips it and
 -- uploads it straight to the Cycas input container, bypassing the server
 -- (see the "Collecting triage packages at scale" guide). Review the targets

@@ -68,6 +68,7 @@ DEFAULTS = {
     'hunts_url':           '',   # empty: hunts.vql from files_dir
     'writeback_windows':   '',   # empty: keep the Velociraptor default
     'triage_targets_url':  'https://triage.velocidex.com/artifacts/Windows.Triage.Targets.zip',
+    'sigma_artifacts_url': 'https://sigma.velocidex.com/Velociraptor.Sigma.Artifacts.zip',
     'upload_sas_url':      '',   # container SAS with write access for the client packages; empty: no upload
     'installers_prefix':   'Velociraptor-ClientInstallers',
     'staging_sas_url':     '',   # container SAS with write access for the config backup; empty: no backup
@@ -88,6 +89,11 @@ REQUIRED = ('dns', 'admin_user', 'admin_password', 'gui_allowed_cidrs', 'velocir
 
 BACKUP_ARTIFACT = 'Server.Utils.BackupAzure'
 TRIAGE_UPLOAD_ARTIFACT = 'Custom.Windows.Triage.Targets.AzureUpload'
+# From the Velociraptor Sigma Project bundle (sigma_artifacts_url): the bundle
+# file name for each artifact, in import order (Windows.Hayabusa.Rules imports
+# Windows.Sigma.Base).
+SIGMA_ARTIFACTS = (('Windows.Sigma.Base',     'Windows.Sigma.Base.yaml'),
+                   ('Windows.Hayabusa.Rules', 'Velociraptor.Hayabusa.Rules.yaml'))
 AUTOLABEL_ARTIFACT     = 'Server.Monitor.Autolabeling.Clients'
 
 
@@ -573,6 +579,27 @@ class Bootstrap:
             self._triage_fetched = True
         return dest
 
+    def sigma_artifacts(self):
+        '''
+        The Sigma base and Hayabusa rules artifacts from the Velociraptor Sigma
+        Project (https://sigma.velocidex.com/). Not built in; the bundle is
+        what Server.Import.Extras imports, of which only these are used.
+        '''
+        zip_path = self.artifacts / 'Velociraptor.Sigma.Artifacts.zip'
+        self.download(self.p['sigma_artifacts_url'], zip_path)
+        paths = []
+        with zipfile.ZipFile(zip_path) as zf:
+            members = {posixpath.basename(n): n for n in zf.namelist()}
+            for name, member in SIGMA_ARTIFACTS:
+                if member not in members:
+                    raise StepFailed(f'{member} ({name}) not found in {self.p["sigma_artifacts_url"]}.')
+                dest = self.artifacts / f'{name}.yaml'
+                dest.write_bytes(zf.read(members[member]))
+                dest.chmod(0o644)
+                paths.append(dest)
+        zip_path.unlink()
+        return paths
+
     def wait_for_port(self, address, timeout=120):
         host, port = address.rsplit(':', 1)
         deadline = time.monotonic() + timeout
@@ -873,7 +900,8 @@ class Bootstrap:
 
     def step_artifacts(self):
         # Windows.Triage.Targets first: the triage upload artifact builds on it.
-        paths = [self.triage_targets()]
+        # The Sigma artifacts are for the Hayabusa hunt in hunts.vql.
+        paths = [self.triage_targets(), *self.sigma_artifacts()]
         for name in (BACKUP_ARTIFACT, TRIAGE_UPLOAD_ARTIFACT, AUTOLABEL_ARTIFACT):
             path = self.artifacts / f'{name}.yaml'
             shutil.copy(self.files / f'{name}.yaml', path)

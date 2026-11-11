@@ -41,9 +41,11 @@ Retrieve it from the Azure Portal: open the Key Vault created by the installer
 
 **Prepared hunts**
 
-The server comes preconfigured with a set of hunts (``HUNT001``-``HUNT007``) that
-collect live data and forensic triage. They are **created paused** - start them
-from the GUI once you start deploying the Velociraptor clients.
+The server comes preconfigured with a set of hunts (``HUNT001``-``HUNT008``) that
+collect live data and forensic triage, and run Sigma detection on the endpoints'
+event logs with the `Hayabusa rules <https://sigma.velocidex.com/docs/sigma_in_velociraptor/>`_
+(``HUNT008``). They are **created paused** - start them from the GUI once you
+start deploying the Velociraptor clients.
 
 .. image:: /_static/images/velociraptor_hunts.png
 
